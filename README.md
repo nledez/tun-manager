@@ -148,9 +148,10 @@ coverage to Coveralls on every push and pull request. Tagging `vX.Y.Z` builds
 the darwin archives and cuts a GitHub release.
 
 The suite runs without root and without touching a real tunnel: the WireGuard
-state, the command runner, the network interfaces and the clock are all
-injected. What is left uncovered is what genuinely needs the machine — opening
-the control socket, and `main` itself.
+state, the command runner, the network interfaces, the notification transport
+and the clock are all injected.
+[`docs/coverage-gaps.md`](docs/coverage-gaps.md) lists what is left uncovered
+and why, with the gaps worth closing as a checklist at the top.
 
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.
