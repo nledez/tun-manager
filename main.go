@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"ledez.net/tun-manager/internal/app"
@@ -41,6 +42,7 @@ Usage:
   sudo tun-manager down <name>...     bring tunnels down
   sudo tun-manager down --all         bring every tunnel down
   tun-manager doctor                  check the environment
+  tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
 
 Configuration: ~/.config/tun-manager/config.yaml
@@ -102,6 +104,10 @@ func (e *env) run(args []string) error {
 		// doctor is the one command that must work as a plain user: telling you
 		// that you are not root is part of its job.
 		return e.runDoctor()
+	case "notify":
+		// About the desktop session rather than the tunnels, so it has no more
+		// reason to ask for a password than the notifications themselves do.
+		return e.runNotify()
 	}
 
 	if e.euid != 0 {
@@ -193,6 +199,46 @@ func (e *env) runDoctor() error {
 	}
 	if !cli.AllPassed(checks) {
 		return errors.New("some checks failed")
+	}
+	return nil
+}
+
+// runNotify posts a sample notification and says what carried it, so that
+// whether the icon shows up can be seen rather than assumed.
+func (e *env) runNotify() error {
+	n := e.notifier
+	if n == nil {
+		cfg, u, err := e.config()
+		if err != nil {
+			return err
+		}
+		built := notify.New(u, cfg.Notify)
+		n = &built
+	}
+
+	command, postErr := n.Preview(context.Background())
+
+	// Two different reasons for no icon, and telling them apart is the whole
+	// point of this command.
+	var icon string
+	switch tool := filepath.Base(command); {
+	case !strings.Contains(tool, "terminal-notifier"):
+		icon = "no icon    " + tool + " has no clause for one; install terminal-notifier"
+	case n.Icon == "":
+		icon = "no icon    it could not be written to the cache"
+	default:
+		icon = "icon       " + n.Icon
+	}
+
+	report := fmt.Sprintf("notify: command %s\nnotify: %s\n", command, icon)
+	if postErr == nil {
+		report += "notify: posted\n"
+	}
+	if _, err := io.WriteString(e.out, report); err != nil {
+		return err
+	}
+	if postErr != nil {
+		return fmt.Errorf("post a notification with %s: %w", command, postErr)
 	}
 	return nil
 }

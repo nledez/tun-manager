@@ -679,3 +679,107 @@ func TestABatchReportsThatTheApplicationCouldNotBeBuilt(t *testing.T) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
 	}
 }
+
+func TestNotifyRunsWithoutRoot(t *testing.T) {
+	// Notifications are about the desktop session, not about the tunnels, so
+	// this must not demand a password.
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+	e.build = func() (*app.App, error) { return nil, errors.New("notify must not open anything") }
+	e.notifier = &notify.Notifier{Binary: "/usr/bin/true"}
+
+	if err := e.run([]string{"notify"}); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+}
+
+// fakeNotifierBinary is named after the real tool, because that name is what
+// decides the argument form and whether an icon can be shown.
+func fakeNotifierBinary(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "terminal-notifier")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+func TestNotifyReportsWhatItUsed(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	e.notifier = &notify.Notifier{Binary: fakeNotifierBinary(t), Icon: "/tmp/icon.png"}
+
+	if err := e.run([]string{"notify"}); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+
+	got := output(e)
+	for _, want := range []string{"terminal-notifier", "/tmp/icon.png", "posted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestNotifySaysWhenTheCommandCannotShowAnIcon(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	e.notifier = &notify.Notifier{Binary: "/usr/bin/true", Icon: "/tmp/icon.png"}
+
+	if err := e.run([]string{"notify"}); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+
+	if !strings.Contains(output(e), "no icon") {
+		t.Errorf("output does not say the command cannot show one:\n%s", output(e))
+	}
+	if !strings.Contains(output(e), "terminal-notifier") {
+		t.Errorf("output does not say what to install:\n%s", output(e))
+	}
+}
+
+func TestNotifySaysWhenTheIconCouldNotBeWritten(t *testing.T) {
+	// The command can show one, but there is nothing to show: a different
+	// problem from the one above, and worth telling apart.
+	e := testEnv(t, &fakeRunner{})
+	e.notifier = &notify.Notifier{Binary: fakeNotifierBinary(t)}
+
+	if err := e.run([]string{"notify"}); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+
+	if !strings.Contains(output(e), "no icon") {
+		t.Errorf("output does not mention the missing icon:\n%s", output(e))
+	}
+}
+
+func TestNotifyReportsAFailure(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	e.notifier = &notify.Notifier{Binary: filepath.Join(t.TempDir(), "absent")}
+
+	if err := e.run([]string{"notify"}); err == nil {
+		t.Fatal("notify succeeded with a missing command, want the failure reported")
+	}
+}
+
+func TestNotifyBuildsItsOwnNotifierWhenNoneIsInjected(t *testing.T) {
+	isolatedHome(t)
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+	// Nothing is injected, so it has to resolve the user, the configuration and
+	// the command by itself. The command it finds may not exist on a runner,
+	// which is a failure worth reporting rather than a reason to skip.
+	_ = e.run([]string{"notify"})
+
+	if !strings.Contains(output(e), "command") {
+		t.Errorf("output does not name the command it used:\n%s", output(e))
+	}
+}
+
+func TestNotifyStopsWhenTheConfigurationCannotBeRead(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("unreadable config")
+	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
+
+	if err := e.run([]string{"notify"}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
