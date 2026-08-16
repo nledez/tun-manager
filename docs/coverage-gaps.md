@@ -22,7 +22,8 @@ grep -rn 'NOT TESTED:' --include='*.go' .
 ```
 
 If you add one, add its section here. A marker whose reasoning lives only in a
-commit message is an excuse, not a decision.
+commit message is an excuse, not a decision. The rule, and the rest of the
+conventions, are in [`AGENTS.md`](../AGENTS.md).
 
 ## Deliberately untested
 

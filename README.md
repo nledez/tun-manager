@@ -122,6 +122,11 @@ network, so a tunnel that reaches a LAN you are sometimes sitting on can be
 
 ## Development
 
+[`AGENTS.md`](AGENTS.md) holds the conventions this repository is kept to:
+everything is tested, anything that is not carries a `NOT TESTED:` comment and a
+section in [`docs/coverage-gaps.md`](docs/coverage-gaps.md), fixtures are
+invented, and pushed history is never rewritten.
+
 ```sh
 make                # vet, lint, tests, notices check, build
 make test           # everything, no network and no root needed
