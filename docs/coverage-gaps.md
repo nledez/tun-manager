@@ -74,10 +74,14 @@ Marker: on the package clause in `internal/tools/notices/main.go`.
 Not omissions, and not marked in code. Recorded because coverage counts these
 as done and they are the places a regression would most likely slip through.
 
-**The TUI rendering.** Fifteen assertions, all `strings.Contains` over
-`View()`. They check that a word appears somewhere in the frame — not column
-alignment, not colours, not narrow terminals. There is no golden frame. Widening
-the mark column from two to three would not have broken a single test.
+The TUI rendering used to head this list — fifteen `strings.Contains` over
+`View()`, no golden frame, nothing about alignment, width or colour. It now has
+golden frames in `internal/tui/testdata`, regenerated with
+`go test ./internal/tui/ -update`, plus assertions that every column starts
+where its header does, that no line overflows the terminal at any width, that a
+long value is cut rather than folded, and that the three tunnel states and a
+failed log entry are told apart by colour. Writing them found three real
+defects; see below.
 
 **`wg.ExecRunner`.** Exercised against `/bin/echo`, `/bin/sh`, `/bin/sleep` and
 a missing binary, which proves the argv leaves and the exit status comes back.
@@ -136,14 +140,22 @@ defensive dead code. Two of those claims were simply wrong:
 The lesson is narrow but worth keeping: "cannot be tested" turned out, nearly
 every time, to mean "I have not found the handle yet".
 
-## Two things found by covering the rest
+## Three things found by covering the rest
 
-Neither was a test written around behaviour that already worked.
+None was a test written around behaviour that already worked.
 
 **The cursor hid the selection.** A row is always selected under the cursor, so
 the cursor mark overwrote the tick: pressing space changed nothing on screen
 until you moved away, which reads as a key that does not work. The two marks
 now share a three-wide column.
+
+**The table wrapped on a narrow terminal.** The endpoint column insisted on a
+minimum width, so below about ninety columns a row ran one character past the
+edge and folded onto the next line, taking the whole table out of alignment. The
+footer never truncated at all. Padding was done with lipgloss's `Width`, which
+folds a long value instead of cutting it, turning one row into two. Rows are now
+cut to the terminal, the endpoint column takes what is left down to nothing, and
+the header drops the countdown rather than overflow.
 
 **The root hint was on the wrong branch.** `wgctrl.New` succeeds for any user,
 so "are you root?" sat where it never fired, while the failure a user actually
