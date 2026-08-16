@@ -133,6 +133,16 @@ make notices        # regenerate THIRD-PARTY-NOTICES.txt from the module graph
 make release-check  # runs the release pipeline without publishing
 ```
 
+Cutting a release is one command. It refuses rather than repairs: the branch
+has to be `main`, the tree clean, `main` level with `origin/main`, the tag
+unused on both sides, and `make all` green. Then it tags and pushes, and CI
+does the rest.
+
+```sh
+make release VERSION=0.1.0
+make release VERSION=0.1.0 DRY_RUN=1   # every check, no tag
+```
+
 CI runs the same checks on macOS, the only platform this targets, and publishes
 coverage to Coveralls on every push and pull request. Tagging `vX.Y.Z` builds
 the darwin archives and cuts a GitHub release.

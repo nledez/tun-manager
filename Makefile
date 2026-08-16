@@ -9,7 +9,7 @@ COVERAGE_MIN := 85
 # counting them would only dilute the number this floor guards.
 COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt notices notices-check run install clean release-check
+.PHONY: all build test race cover cover-html vet lint fmt notices notices-check run install clean release release-check
 
 all: vet lint test notices-check build
 
@@ -61,6 +61,14 @@ notices:
 # Fails when a dependency change was not reflected in the notices file.
 notices-check: notices
 	git diff --exit-code -- THIRD-PARTY-NOTICES.txt
+
+# Cuts a release. Pushing the tag is what publishes: CI re-runs the suite on the
+# tagged commit and only then builds the archives and creates the release.
+#
+#   make release VERSION=0.1.0
+#   make release VERSION=0.1.0 DRY_RUN=1   # every check, no tag
+release:
+	@scripts/release.sh $(VERSION)
 
 # Runs the release pipeline without publishing anything.
 release-check:
