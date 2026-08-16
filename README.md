@@ -1,21 +1,36 @@
+<div align="center">
+
+<img src="assets/tun-manager.png" alt="" width="140">
+
 # tun-manager
+
+**Watch and drive the WireGuard tunnels of a macOS laptop, from one binary.**
+
+Handshake age, transferred bytes, latency, and which network you are on.
 
 [![CI](https://github.com/nledez/tun-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/nledez/tun-manager/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/nledez/tun-manager/badge.svg?branch=main)](https://coveralls.io/github/nledez/tun-manager?branch=main)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 
-A TUI and CLI for the WireGuard tunnels of a macOS laptop. One binary that
-drives them and shows what is actually going on: handshake age, transferred
-bytes, latency, and which network you are on.
+</div>
 
 ```
  tun-manager  ctx: office (en0 198.51.100.42)                       next ⟳ 4m12s
  ───────────────────────────────────────────────────────────────────────────────
-   NAME          GRP    STATE   HANDSHAKE  RX / TX        PING   ENDPOINT
- ▸ alpha         needed ● up    12s        1.2M / 840K    18ms   192.0.2.10:51820
-   bravo         needed ● up    3m41s      220K / 96K     31ms   198.51.100.20:51821
-   charlie       extra  ○ down                                   gateway.example:51824
+    NAME          GRP    STATE   HANDSHAKE  RX / TX        PING   ENDPOINT
+ ▸✓ alpha         needed ● up    12s        1.2M / 840K    18ms   192.0.2.10:51820
+    bravo         needed ● stale 9m04s      2.3M / 961K    ×      198.51.100.20:51821
+    charlie       extra  ○ down                                   gateway.example:51824
+    delta         —      ○ down                                   198.51.100.30:51822
  ───────────────────────────────────────────────────────────────────────────────
  r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
+```
+
+While a batch runs, the header counts it off and a spinner turns, so a slow
+`wg-quick` is never mistaken for a hung program:
+
+```
+ tun-manager  ctx: office (en0 198.51.100.42)                     ⠙ working 3/8
 ```
 
 ## Why root
@@ -32,6 +47,13 @@ prompt for one. Two consequences are handled explicitly:
 - `sudo` rewrites `HOME` to `/var/root`, so the configuration file is resolved
   through `SUDO_USER` instead;
 - root has no GUI session, so notifications are posted back as the pre-sudo user.
+
+Notifications carry the icon above when [`terminal-notifier`][tn] is installed
+(`brew install terminal-notifier`); AppleScript's `display notification` has no
+clause for an icon, so without it they fall back to `osascript` and whatever
+icon the sender has.
+
+[tn]: https://github.com/julienXX/terminal-notifier
 
 ## Install
 
