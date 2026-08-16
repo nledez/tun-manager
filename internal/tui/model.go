@@ -49,6 +49,10 @@ type (
 		results []wg.Result
 		err     error
 	}
+	// opDoneMsg closes a batch, once every step of it has reported.
+	opDoneMsg struct{}
+	// heartbeatMsg advances the working indicator while something runs.
+	heartbeatMsg struct{}
 	// tickMsg fires the periodic refresh.
 	tickMsg time.Time
 )
@@ -64,6 +68,9 @@ type Model struct {
 	logs     []LogEntry
 
 	cursor   int
+	opTotal  int
+	opDone   int
+	beat     int
 	width    int
 	height   int
 	showLogs bool
@@ -115,6 +122,17 @@ func (m Model) tick() tea.Cmd {
 	return tea.Tick(m.refreshInterval(), func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// heartbeatInterval is how often the working indicator advances. Fast enough to
+// read as motion, slow enough not to be a busy loop.
+const heartbeatInterval = 120 * time.Millisecond
+
+// heartbeat keeps the frame changing while work runs. A single tunnel is a
+// single step, so the progress count alone would sit still for as long as
+// wg-quick takes, and a frame that never changes reads as a hung program.
+func (m Model) heartbeat() tea.Cmd {
+	return tea.Tick(heartbeatInterval, func(time.Time) tea.Msg { return heartbeatMsg{} })
+}
+
 func (m Model) refresh() tea.Cmd {
 	a := m.app
 	return func() tea.Msg {
@@ -138,7 +156,12 @@ func (m Model) ping() tea.Cmd {
 	}
 }
 
-// operate runs a batch of up/down operations off the UI goroutine.
+// operate runs one step of a batch off the UI goroutine.
+//
+// One step, not the whole batch: a command reports when it returns, and
+// Bubble Tea repaints when a message arrives. A batch that reports once at the
+// end leaves the screen untouched while it runs, and wg-quick is serialised, so
+// that is one frozen frame for as long as every tunnel takes together.
 func (m Model) operate(fn func(context.Context, *app.App) ([]wg.Result, error)) tea.Cmd {
 	a := m.app
 	return func() tea.Msg {
@@ -150,6 +173,26 @@ func (m Model) operate(fn func(context.Context, *app.App) ([]wg.Result, error)) 
 		results, err := fn(ctx, a)
 		return opMsg{results: results, err: err}
 	}
+}
+
+// eachTunnel turns a list of tunnels into one command per tunnel, so each of
+// them reports, and the interface repaints, on its own.
+func (m Model) eachTunnel(names []string, fn func(context.Context, *app.App, string) ([]wg.Result, error)) []tea.Cmd {
+	cmds := make([]tea.Cmd, 0, len(names))
+	for _, name := range names {
+		cmds = append(cmds, m.operate(func(ctx context.Context, a *app.App) ([]wg.Result, error) {
+			return fn(ctx, a, name)
+		}))
+	}
+	return cmds
+}
+
+// groupMembers resolves a group against the network the interface last saw.
+func (m Model) groupMembers(group string) []string {
+	if m.app == nil || m.app.Config == nil {
+		return nil
+	}
+	return m.app.Config.Members(group, m.view.Context.Name)
 }
 
 // stopStartAction tells what the `s` key would do right now: tear everything

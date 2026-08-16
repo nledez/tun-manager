@@ -77,10 +77,12 @@ func (m Model) header() string {
 
 func (m Model) status() string {
 	switch {
+	case m.busy && m.opTotal > 0:
+		return fmt.Sprintf("%s working %d/%d", m.spinner(), m.opDone, m.opTotal)
 	case m.busy:
-		return "working…"
+		return m.spinner() + " working"
 	case m.pinging:
-		return "pinging…"
+		return m.spinner() + " pinging"
 	case m.lastRefresh.IsZero():
 		return "loading…"
 	default:
@@ -90,6 +92,13 @@ func (m Model) status() string {
 		}
 		return "next ⟳ " + next.Round(time.Second).String()
 	}
+}
+
+// spinnerFrames is what tells a slow operation apart from a hung one.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m Model) spinner() string {
+	return spinnerFrames[m.beat%len(spinnerFrames)]
 }
 
 func (m Model) rule() string {

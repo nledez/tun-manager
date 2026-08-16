@@ -258,15 +258,45 @@ func TestOpMsgOpensTheLogPaneOnFailure(t *testing.T) {
 	}
 }
 
-func TestOpMsgClearsTheSelection(t *testing.T) {
+func TestTheSelectionSurvivesUntilTheBatchEnds(t *testing.T) {
+	// A batch is several steps. Clearing on the first would drop the rows the
+	// remaining steps were chosen from.
 	m := loadedModel(threeRows...)
 	m = key(m, " ")
 
 	next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
 	m = next.(Model)
 
+	if len(m.selected) != 1 {
+		t.Errorf("selected = %v, want it kept while the batch runs", m.selected)
+	}
+}
+
+func TestTheSelectionIsClearedWhenTheBatchEnds(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, " ")
+
+	next, _ := m.Update(opDoneMsg{})
+	m = next.(Model)
+
 	if len(m.selected) != 0 {
-		t.Errorf("selected = %v, want it cleared once the operation ran", m.selected)
+		t.Errorf("selected = %v, want it cleared once the batch is done", m.selected)
+	}
+}
+
+func TestABatchCountsItsStepsAsTheyReport(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+
+	for i := 1; i <= 3; i++ {
+		next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
+		m = next.(Model)
+		if m.opDone != i {
+			t.Fatalf("opDone = %d after %d step(s)", m.opDone, i)
+		}
+		if got, want := m.status(), fmt.Sprintf("%s working %d/3", m.spinner(), i); got != want {
+			t.Errorf("status = %q, want %q", got, want)
+		}
 	}
 }
 
@@ -334,17 +364,38 @@ func TestWindowResizeIsRecorded(t *testing.T) {
 	}
 }
 
-func TestKeysAreIgnoredWhileBusy(t *testing.T) {
-	// Firing a second wg-quick batch over a running one is how routing tables
-	// get corrupted.
+func TestReadingTheTableKeepsWorkingWhileBusy(t *testing.T) {
+	// A key that does nothing is indistinguishable from a hung interface, and
+	// moving the cursor or opening the log pane touches nothing on the machine.
 	m := loadedModel(threeRows...)
 	m = key(m, "r")
 
-	before := m.cursor
 	m = key(m, "j")
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want the cursor to move while busy", m.cursor)
+	}
+	if m = key(m, "l"); !m.showLogs {
+		t.Error("the log pane did not open while busy")
+	}
+	if m = key(m, "?"); !m.showHelp {
+		t.Error("the help did not open while busy")
+	}
+	if m = key(m, " "); len(m.selected) != 1 {
+		t.Error("a row could not be selected while busy")
+	}
+}
 
-	if m.cursor != before {
-		t.Errorf("cursor moved while busy: %d -> %d", before, m.cursor)
+func TestStartingWorkIsRefusedWhileBusy(t *testing.T) {
+	// Two batches of wg-quick at once is how a routing table gets corrupted.
+	m := loadedModel(threeRows...)
+	m = key(m, "r")
+	m.opTotal, m.opDone = 0, 0
+
+	for _, k := range []string{"s", "n", "enter", "r", "p"} {
+		next := key(m, k)
+		if next.opTotal != 0 {
+			t.Errorf("%q started a batch of %d while busy", k, next.opTotal)
+		}
 	}
 }
 
@@ -803,13 +854,23 @@ func TestAnUnchangedStateIsNotNotified(t *testing.T) {
 	}
 }
 
-func TestNKeyStartsTheNeededGroup(t *testing.T) {
-	m := loadedModel(threeRows...)
+func TestNKeyStartsOneStepPerTunnelOfTheNeededGroup(t *testing.T) {
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	m.width, m.height = 120, 30
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Down),
+		row("bravo", profile.GroupNeeded, wg.Down),
+	)})
+	m = next.(Model)
 
 	m = key(m, "n")
 
 	if !m.busy {
 		t.Error("busy = false after `n`, want the group being started")
+	}
+	if m.opTotal != 2 {
+		t.Errorf("opTotal = %d, want one step per tunnel of the group", m.opTotal)
 	}
 }
 
@@ -950,5 +1011,62 @@ func TestLogEntriesAreStampedFromTheSameClock(t *testing.T) {
 
 	if got := m.logs[0].At; !got.Equal(at) {
 		t.Errorf("At = %v, want %v", got, at)
+	}
+}
+
+func TestASingleLongStepStillAnimates(t *testing.T) {
+	// One tunnel means one step, so the progress count never moves and the
+	// frame would stay identical for as long as wg-quick takes. Something has
+	// to change on screen or the interface reads as hung.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 1
+
+	first := m.status()
+	next, cmd := m.Update(heartbeatMsg{})
+	m = next.(Model)
+
+	if cmd == nil {
+		t.Error("no command returned, want the heartbeat to schedule the next one")
+	}
+	if m.status() == first {
+		t.Errorf("status is still %q, want the frame to change", first)
+	}
+}
+
+func TestTheHeartbeatStopsWhenTheWorkDoes(t *testing.T) {
+	// A timer that keeps firing on an idle interface wakes the process for
+	// nothing.
+	m := loadedModel(threeRows...)
+
+	_, cmd := m.Update(heartbeatMsg{})
+
+	if cmd != nil {
+		t.Error("the heartbeat rescheduled itself while idle")
+	}
+}
+
+func TestStartingWorkStartsTheHeartbeat(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	m = key(m, "r")
+
+	if !m.busy {
+		t.Fatal("busy = false after `r`")
+	}
+	if _, cmd := m.Update(heartbeatMsg{}); cmd == nil {
+		t.Error("the heartbeat does not run while busy")
+	}
+}
+
+func TestAModelWithoutAnApplicationPlansNothing(t *testing.T) {
+	// New(nil, nil) is how the pure Update tests build a model; asking it for a
+	// group must yield no steps rather than dereference the application.
+	m := New(nil, nil)
+
+	if got := m.groupMembers(profile.GroupNeeded); got != nil {
+		t.Errorf("groupMembers = %v, want none", got)
+	}
+	if steps := m.upGroup(profile.GroupNeeded); len(steps) != 0 {
+		t.Errorf("upGroup planned %d step(s), want none", len(steps))
 	}
 }

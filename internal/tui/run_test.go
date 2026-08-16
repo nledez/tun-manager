@@ -261,7 +261,11 @@ func TestTogglingATunnelThatVanishedIsReported(t *testing.T) {
 	m := New(a, nil)
 	m.view = viewOf(row("ghost", profile.GroupNeeded, wg.Down))
 
-	msg, ok := m.toggleTargets()().(opMsg)
+	steps := m.toggleTargets()
+	if len(steps) != 1 {
+		t.Fatalf("got %d step(s), want one per tunnel", len(steps))
+	}
+	msg, ok := steps[0]().(opMsg)
 	if !ok {
 		t.Fatalf("got %#v, want an opMsg", msg)
 	}
@@ -286,4 +290,52 @@ func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run returned nil after the program crashed, want the failure reported")
 	}
+}
+
+// gatedRunner blocks on every command until the test releases it, so a batch
+// can be observed while it is still half done.
+type gatedRunner struct {
+	mu      sync.Mutex
+	calls   []string
+	started chan string
+	release chan struct{}
+}
+
+func newGatedRunner() *gatedRunner {
+	return &gatedRunner{started: make(chan string, 8), release: make(chan struct{})}
+}
+
+func (r *gatedRunner) Run(_ context.Context, _ string, args ...string) (string, error) {
+	name := args[0] + " " + strings.TrimSuffix(filepath.Base(args[1]), ".conf")
+	r.mu.Lock()
+	r.calls = append(r.calls, name)
+	r.mu.Unlock()
+	r.started <- name
+	<-r.release
+	return "", nil
+}
+
+func TestABatchReportsEachTunnelWhileTheNextIsStillRunning(t *testing.T) {
+	// One message at the end of the whole batch means no repaint while it runs:
+	// wg-quick is serialised, so eight tunnels leave the screen frozen for as
+	// many seconds with no way to tell it apart from a crash.
+	runner := newGatedRunner()
+	a := testApp(t, runner, alphaKey, bravoKey) // both up, so `s` takes both down
+	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	waitFor(t, tm, "alpha")
+
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	// Let the first tunnel finish, and leave the second blocked.
+	<-runner.started
+	runner.release <- struct{}{}
+
+	// The first outcome has to be on screen while the second is still running.
+	waitFor(t, tm, "down alpha: ok")
+
+	<-runner.started
+	close(runner.release)
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }

@@ -1,4 +1,4 @@
-tun-manager  ctx: office (en0 198.51.100.42)                                                                    working…
+tun-manager  ctx: office (en0 198.51.100.42)                                                                next ⟳ 4m12s
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
     NAME          GRP    STATE   HANDSHAKE  RX / TX          PING    ENDPOINT                                           
  ▸  alpha         needed ● up    12s        1.2M / 4.0K      18ms    192.0.2.10:51820                                   
