@@ -253,3 +253,13 @@ overrides:
 		t.Errorf("GroupOf(delta, airport) = %q, want empty", got)
 	}
 }
+
+func TestLoadReportsAReadFailureThatIsNotAMissingFile(t *testing.T) {
+	// A missing file is the normal case and yields the defaults. Anything else
+	// is a real problem and must not be mistaken for one.
+	dir := t.TempDir()
+
+	if _, err := Load(dir); err == nil {
+		t.Fatal("Load succeeded on a directory, want an error")
+	}
+}

@@ -1,7 +1,9 @@
 package wgconf
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -299,5 +301,31 @@ func TestMalformedAllowedIPsAreSkippedWhenInferring(t *testing.T) {
 
 	if tun.CheckIP != "10.20.30.7" {
 		t.Errorf("CheckIP = %q, want the first parsable single host", tun.CheckIP)
+	}
+}
+
+func TestLoadDirRejectsADirectoryNameThatBreaksThePattern(t *testing.T) {
+	// config_dir comes from the user's YAML, so a bracket in it reaches
+	// filepath.Glob as a malformed pattern. This is user input, not dead code.
+	if _, err := LoadDir(filepath.Join(t.TempDir(), "wireguard[")); err == nil {
+		t.Fatal("LoadDir accepted a directory name that breaks the glob, want an error")
+	}
+}
+
+func TestParseFileReportsAReadFailure(t *testing.T) {
+	// A directory opens like a file and fails on the first read, which is the
+	// only way to reach the scanner's error without a fake file system.
+	path := filepath.Join(t.TempDir(), "alpha.conf")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	_, err := ParseFile(path)
+
+	if err == nil {
+		t.Fatal("ParseFile succeeded on an unreadable file, want an error")
+	}
+	if !strings.Contains(err.Error(), "alpha.conf") {
+		t.Errorf("err = %v, want it to name the file", err)
 	}
 }

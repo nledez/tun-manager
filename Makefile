@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COVERAGE := coverage.out
 # Fail the build below this, so coverage cannot quietly rot. Set just under the
 # current figure: a real regression trips it, a rounding change does not.
-COVERAGE_MIN := 95
+COVERAGE_MIN := 99
 # Coverage measures the program that ships. internal/tools holds build-time
 # generators, which `make notices-check` exercises end to end on every run;
 # counting them would only dilute the number this floor guards.

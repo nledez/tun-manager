@@ -600,3 +600,73 @@ func TestViewFallsBackToTheSystemListerAndLocator(t *testing.T) {
 		t.Error("no row, want the configs listed")
 	}
 }
+
+// brokenApp cannot build a view: its config directory holds no tunnel.
+func brokenApp(t *testing.T) *App {
+	t.Helper()
+	cfg := profile.Default()
+	cfg.ConfigDir = t.TempDir()
+	return &App{
+		Config:  cfg,
+		Reader:  upState(),
+		Lister:  away(),
+		Locator: blindLocator{},
+		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}},
+	}
+}
+
+func TestViewFailsWhenTheConfigsCannotBeRead(t *testing.T) {
+	if _, err := brokenApp(t).View(); err == nil {
+		t.Fatal("View succeeded with no tunnel to read, want an error")
+	}
+}
+
+func TestViewFailsOnAnUnusableNetworkRule(t *testing.T) {
+	// The contexts come from the user's YAML, so a malformed CIDR reaches the
+	// detection rather than being caught at load time.
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	a.Config.Contexts = []netctx.Rule{{Name: "office", CIDR: "not-a-cidr"}}
+
+	if _, err := a.View(); err == nil {
+		t.Fatal("View succeeded with a malformed CIDR, want an error")
+	}
+}
+
+func TestUpGroupFailsWhenTheViewDoes(t *testing.T) {
+	runner := &fakeRunner{}
+	a := brokenApp(t)
+	a.Control = &wg.Controller{WgQuick: "wg-quick", Runner: runner}
+
+	if _, err := a.UpGroup(context.Background(), profile.GroupNeeded); err == nil {
+		t.Fatal("UpGroup succeeded on an unreadable configuration, want an error")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("commands = %v, want none: nothing may run on a state nobody could read", runner.actions())
+	}
+}
+
+func TestDownAllFailsWhenTheViewDoes(t *testing.T) {
+	if _, err := brokenApp(t).DownAll(context.Background()); err == nil {
+		t.Fatal("DownAll succeeded on an unreadable configuration, want an error")
+	}
+}
+
+func TestToggleFailsWhenTheViewDoes(t *testing.T) {
+	if _, err := brokenApp(t).Toggle(context.Background(), "alpha"); err == nil {
+		t.Fatal("Toggle succeeded on an unreadable configuration, want an error")
+	}
+}
+
+func TestUpRejectsAnUnknownTunnel(t *testing.T) {
+	// Covered from main_test.go too, but go test only credits the package
+	// under test, and this branch belongs to this one.
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	view, err := a.View()
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+
+	if _, err := a.Up(context.Background(), view, []string{"ghost"}); err == nil {
+		t.Fatal("Up succeeded on an unknown tunnel, want an error")
+	}
+}

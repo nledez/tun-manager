@@ -1,6 +1,6 @@
 # Coverage gaps
 
-What the test suite does not reach, and why. 34 of 896 statements, so 96.2%.
+What the test suite does not reach, and why. 4 of 896 statements, so 99.6%.
 
 Regenerate the numbers with:
 
@@ -13,83 +13,79 @@ go tool cover -html=coverage.out        # per statement, in a browser
 `internal/tools` is excluded from the profile: it holds a build-time generator,
 not shipped code, and `make notices-check` exercises it end to end on every run.
 
-## Open
+## What is left
 
-Nothing. Every gap this file listed has been closed, and seven of the eleven
-packages are at 100%: `format`, `netctx`, `notify`, `privdrop`, `probe`, `tui`
-and `wg`.
+**`main`, 3 statements.** It calls `os.Exit`, so covering it means starting a
+subprocess to confirm that Go can start a program and that a non-zero return
+becomes a non-zero exit. Everything it calls is covered: `newEnv` wires the
+process and `run` dispatches, and both are driven directly.
 
-Two of them were closed by fixing what the missing test exposed rather than by
-writing a test around the existing behaviour:
+**`build`, 1 statement** — the branch wrapping a failure of `wg.NewReader`.
+`NewReader` succeeds for any user on darwin, so that branch guards against a
+platform, or a future wgctrl, where opening the client can fail. Forcing it
+would mean threading an opener through the composition root: a seam inside the
+seam `env` already provides, for one line whose whole job is to be defensive.
 
-- The cursor overwrote the selection mark. Since a row is always selected under
-  the cursor, pressing space changed nothing on screen until you moved away.
-  The two marks now share a three-wide column.
-- The "are you root?" hint sat on `NewReader`, which succeeds for any user.
-  It moved to `Read`, where the root-only sockets are actually reached.
+Every other package is at 100%.
 
-## Root, hardware, GUI
+## What this file used to say
 
-Nothing. This section used to hold fourteen statements.
+It listed three categories of code as out of reach. All three were overstated,
+and recording that is more useful than quietly deleting them.
 
-The three system calls behind them are injected now: an interface for the
-WireGuard client, function fields for `net.Interfaces` and `Interface.Addrs`, a
-configurable binary path for `osascript`. Each is reached through one line that
-does nothing but call out, and that line is itself injected — `wg.opener`
-exists for exactly that reason.
-
+**"Root, hardware, GUI."** Fourteen statements: the WireGuard control sockets,
+`net.Interfaces`, `osascript`. None of them needed a fake daemon or a fake
+window server. Each is reached through one line that does nothing but call out,
+and one line can be injected — an interface for the WireGuard client, function
+fields for the host lookup, a configurable path for the notification command.
 The tests check that tun-manager handles what each returns, which is the
-boundary that matters. Whether the system call works is not this suite's
-business, and pretending to test it would only have tested the mock.
+boundary that matters; whether the system call itself works is not this suite's
+business.
 
-`internal/wg`, `internal/netctx` and `internal/notify` are at 100%, along with
-`internal/format` and `internal/probe`.
+**"Entry point and composition root."** Nineteen statements. Only `main` needed
+a subprocess. `loadConfig`, `build` and `runTUI` are ordinary functions a test
+can call: `privdrop.Current` reads the environment, `profile.Load` returns the
+defaults for a missing file, `wgctrl.New` needs no privilege, and a cancelled
+context makes the interface return at once. They were uncovered because `env`
+injects around them, not because they could not run.
 
-## Entry point and composition root
+**"Dependency errors that cannot be forced."** Sixteen statements, called
+defensive dead code. Two of those claims were simply wrong:
 
-19 statements.
+- `filepath.Glob` "only fails on a malformed pattern, and both are literals" —
+  but the pattern is built from `config_dir`, which comes from the user's YAML.
+  A directory whose name contains `[` yields `syntax error in pattern`. That is
+  user input reaching an error path, not dead code.
+- `bufio.Scanner.Err()` was called unreachable because `ParseFile` takes a path
+  rather than an `io.Reader`. A directory opens like a file and fails on the
+  first read, which reaches it with no fake file system at all.
 
-`main`, `loadConfig`, `build` and the package-level `runTUI` are the wiring
-itself. `build` also calls `wg.NewReader`, so it inherits the section above.
+The lesson is narrow but worth keeping: "cannot be tested" turned out, nearly
+every time, to mean "I have not found the handle yet".
 
-This is what the `env` struct was introduced for: the tests inject `config`,
-`build` and `interactive`, so everything those functions assemble is covered —
-the dispatch, the flag parsing, the mutual exclusions, the root guard, the TUI
-being the default command. What is left is the assembly, and testing it would
-mean spawning a subprocess to confirm that Go can start a program.
+## Two things found by covering the rest
 
-`tui.Run`'s final `return err` belongs here too: it is reached only when the
-Bubble Tea event loop fails without the context being cancelled, and the tests
-run it through `WithoutTerminal`, which succeeds.
+Neither was a test written around behaviour that already worked.
 
-## Dependency errors that cannot be forced
+**The cursor hid the selection.** A row is always selected under the cursor, so
+the cursor mark overwrote the tick: pressing space changed nothing on screen
+until you moved away, which reads as a key that does not work. The two marks
+now share a three-wide column.
 
-16 statements, nearly all `if err != nil { return err }`.
-
-- `app.View` — `wgconf.LoadDir` and `netctx.Detect` failing. The `Reader` error
-  is tested, because that one is injected.
-- `app.UpGroup`, `DownAll`, `Toggle` — their `View()` error path.
-- `filepath.Glob` in `wgconf.LoadDir` and `cli.checkConfigDir` — it only fails
-  on a malformed pattern, and both are literals. Defensive dead code.
-- `bufio.Scanner.Err()` in `wgconf.ParseFile` — a read error partway through a
-  file, while `ParseFile` takes a path rather than an `io.Reader`.
-- `profile.Load` — a read error other than "not exist", such as a permission
-  denial.
-- `main`'s `runDoctor`, `runStatus`, `runUp`, `runDown` and `act` — their error
-  propagation.
-
-Some of these could be reached by making the functions take readers instead of
-paths. That is a design change to serve a metric, and the metric is not the
-point.
+**The root hint was on the wrong branch.** `wgctrl.New` succeeds for any user,
+so "are you root?" sat where it never fired, while the failure a user actually
+meets — `Devices()` reaching the root-only sockets — said only "list wireguard
+devices". The hint moved, and a test now pins that opening the client needs no
+privilege, so a future wgctrl changing that would be caught rather than
+misreported.
 
 ## Two things the number hides
 
 **Cross-package attribution.** By default `go test` only credits the package
-under test. Measured with `-coverpkg` over the whole module, the total moves
-from 96.2% to 96.3%: one case changes, `app.Up`, whose "unknown tunnel" branch
-is covered from `main_test.go`. The rest of this document holds either way.
+under test. Measured with `-coverpkg` over the whole module the total is the
+same 99.6%, now that every branch is covered from the package that owns it.
 
-**Statements, not behaviour.** 96.2% counts statements executed, not outcomes
+**Statements, not behaviour.** 99.6% counts statements executed, not outcomes
 asserted. A line reached by a test that checks nothing counts the same as one
 pinned by three assertions. The floor in the Makefile guards against coverage
 rotting, not against tests that do not test.

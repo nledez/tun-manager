@@ -260,3 +260,17 @@ func TestDoctorFailsOnAnUnreadableConfigDir(t *testing.T) {
 		t.Errorf("config dir check status = %v, want %v", c.Status, Fail)
 	}
 }
+
+func TestDoctorFailsOnAConfigDirThatBreaksThePattern(t *testing.T) {
+	// config_dir is user input; a bracket in it reaches filepath.Glob as a
+	// malformed pattern rather than as a directory that does not exist.
+	cfg, u := healthyEnv(t)
+	cfg.ConfigDir = filepath.Join(t.TempDir(), "wireguard[")
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	c, _ := findCheck(checks, "config dir")
+	if c.Status != Fail {
+		t.Errorf("config dir check status = %v, want %v", c.Status, Fail)
+	}
+}

@@ -506,3 +506,176 @@ func TestDoctorReportsTheVersion(t *testing.T) {
 		t.Errorf("doctor does not report the version:\n%s", output(e))
 	}
 }
+
+// isolatedHome points the configuration lookup at an empty directory, so these
+// tests read the built-in defaults rather than whatever the machine holds.
+func isolatedHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("HOME", home)
+	return home
+}
+
+func TestLoadConfigReadsUnderTheRealUserHome(t *testing.T) {
+	home := isolatedHome(t)
+
+	cfg, u, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	if u.HomeDir != home {
+		t.Errorf("HomeDir = %q, want %q", u.HomeDir, home)
+	}
+	if cfg.Path != filepath.Join(home, ".config", "tun-manager", "config.yaml") {
+		t.Errorf("Path = %q", cfg.Path)
+	}
+	if !cfg.IsDefault {
+		t.Error("IsDefault = false, want the defaults for an empty home")
+	}
+}
+
+func TestLoadConfigReportsAnUnreadableFile(t *testing.T) {
+	home := isolatedHome(t)
+	dir := filepath.Join(home, ".config", "tun-manager")
+	if err := os.MkdirAll(filepath.Join(dir, "config.yaml"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if _, _, err := loadConfig(); err == nil {
+		t.Fatal("loadConfig succeeded on an unreadable configuration, want an error")
+	}
+}
+
+func TestLoadConfigReportsAnUnresolvableSudoUser(t *testing.T) {
+	t.Setenv("SUDO_USER", "nobody-by-that-name")
+
+	if _, _, err := loadConfig(); err == nil {
+		t.Fatal("loadConfig succeeded with an unresolvable SUDO_USER, want an error")
+	}
+}
+
+func TestBuildWiresTheApplicationFromTheConfiguration(t *testing.T) {
+	// build is what the injected env.build stands in for everywhere else, so
+	// nothing else ever runs it.
+	isolatedHome(t)
+
+	a, err := build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() {
+		if r, ok := a.Reader.(*wg.CtrlReader); ok {
+			_ = r.Close()
+		}
+	})
+
+	if a.Reader == nil || a.Pinger == nil || a.Control == nil {
+		t.Fatalf("application incomplete: %+v", a)
+	}
+	if a.Control.WgQuick != a.Config.WgQuick {
+		t.Errorf("controller uses %q, config says %q", a.Control.WgQuick, a.Config.WgQuick)
+	}
+	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != a.Config.RunDir {
+		t.Errorf("locator = %+v, want it to follow run_dir %q", a.Locator, a.Config.RunDir)
+	}
+	// The pre-check that skips a tunnel whose address already answers only
+	// happens if the controller has a pinger.
+	if a.Control.Pinger == nil {
+		t.Error("the controller has no pinger, so up would never skip")
+	}
+}
+
+func TestBuildReportsAConfigurationFailure(t *testing.T) {
+	t.Setenv("SUDO_USER", "nobody-by-that-name")
+
+	if _, err := build(); err == nil {
+		t.Fatal("build succeeded on an unreadable configuration, want an error")
+	}
+}
+
+func TestRunTUIStopsWithItsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- runTUI(ctx, nil, nil) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("err = %v, want a cancellation to read as a clean stop", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runTUI did not return after the context was cancelled")
+	}
+}
+
+// brokenEnv can build an application, but that application cannot read a view.
+func brokenEnv(t *testing.T) *env {
+	t.Helper()
+	e := testEnv(t, &fakeRunner{})
+	e.build = func() (*app.App, error) {
+		cfg := profile.Default()
+		cfg.ConfigDir = t.TempDir() // no *.conf in it
+		return &app.App{
+			Config:  cfg,
+			Reader:  fakeReader{},
+			Locator: blindLocator{},
+			Control: &wg.Controller{WgQuick: "/bin/true", Runner: &fakeRunner{}},
+		}, nil
+	}
+	return e
+}
+
+func TestStatusReportsAViewFailure(t *testing.T) {
+	if err := brokenEnv(t).run([]string{"status"}); err == nil {
+		t.Fatal("status succeeded on an unreadable state, want an error")
+	}
+}
+
+func TestUpReportsAViewFailure(t *testing.T) {
+	if err := brokenEnv(t).run([]string{"up", "alpha"}); err == nil {
+		t.Fatal("up succeeded on an unreadable state, want an error")
+	}
+}
+
+func TestDownReportsAViewFailure(t *testing.T) {
+	if err := brokenEnv(t).run([]string{"down", "alpha"}); err == nil {
+		t.Fatal("down succeeded on an unreadable state, want an error")
+	}
+}
+
+func TestUpGroupReportsAViewFailure(t *testing.T) {
+	// Through act, which is where a batch reports what stopped it.
+	if err := brokenEnv(t).run([]string{"up", "--group", "needed"}); err == nil {
+		t.Fatal("up --group succeeded on an unreadable state, want an error")
+	}
+}
+
+func TestDoctorReportsAWriteFailure(t *testing.T) {
+	// `tun-manager doctor | head` closes the pipe early.
+	e := testEnv(t, &fakeRunner{})
+	e.out = failingWriter{err: errors.New("broken pipe")}
+
+	if err := e.run([]string{"doctor"}); err == nil {
+		t.Fatal("doctor succeeded with a broken output, want the error reported")
+	}
+}
+
+// failingWriter refuses every write, like a closed pipe.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestABatchReportsThatTheApplicationCouldNotBeBuilt(t *testing.T) {
+	// Through act, which every batch goes through, unlike status.
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("no wireguard socket")
+	e.build = func() (*app.App, error) { return nil, boom }
+
+	if err := e.run([]string{"up", "--group", "needed"}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
