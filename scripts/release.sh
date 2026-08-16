@@ -101,8 +101,18 @@ fi
 git tag -a "$tag" -m "tun-manager ${version}"
 git push origin "$tag"
 
-remote=$(git remote get-url origin)
-slug=${remote#*github.com[:/]}
-slug=${slug%.git}
 echo "release: pushed $tag"
-echo "release: https://github.com/${slug}/actions - the release appears once CI is green"
+
+# Only GitHub remotes have an Actions page to point at; anything else gets the
+# plain message rather than a URL assembled out of a path that is not one.
+remote=$(git remote get-url origin)
+case "$remote" in
+*github.com[:/]*)
+	slug=${remote#*github.com[:/]}
+	slug=${slug%.git}
+	echo "release: https://github.com/${slug}/actions - the release appears once CI is green"
+	;;
+*)
+	echo "release: CI builds the release once it is green"
+	;;
+esac
