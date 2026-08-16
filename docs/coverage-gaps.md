@@ -1,6 +1,6 @@
 # Coverage gaps
 
-What the test suite does not reach, and why. 69 of 892 statements, so 92.3%.
+What the test suite does not reach, and why. 56 of 893 statements, so 93.7%.
 
 Regenerate the numbers with:
 
@@ -38,24 +38,37 @@ The gaps worth closing. Everything below this list is deliberate.
 - [ ] `cli.writeTable` — a failing writer. `WriteResults` has this test, using a
       closed pipe; `WriteStatus` does not. 1 statement.
 
-That is 19 statements, which would put the total near 95%.
+That is 19 statements, which would put the total near 96%.
+
+## Closed
+
+- [x] `netctx.System` — the host calls are fields now, so a test can make
+      either fail. The package is at 100%.
+- [x] `notify` — the notification command is a configurable path now, so the
+      tests exercise the real `privdrop.CommandContext` against a script that
+      records its arguments. The package is at 100%.
+- [x] `wg.Read`, `wg.Close` — a `Client` interface stands in for
+      `*wgctrl.Client`. Mocking the client rather than the socket is the right
+      boundary: whether wgctrl works is not this suite's business.
 
 ## Root, hardware, GUI
 
-14 statements that cannot run in a test process.
+One statement: the error branch of `wg.NewReader`, wrapping a failure of
+`wgctrl.New()`.
 
-| Where | Why |
-|---|---|
-| `wg.NewReader`, `Read`, `Close` | They open the UAPI sockets under `/var/run/wireguard`, which are root-only. This is the whole reason the program runs under sudo. |
-| `notify.runner`, default closure | Running it posts a real notification to the desktop session. |
-| `netctx.System`, error branches | `net.Interfaces()` failing, an interface disappearing between the listing and its addresses, an address `netip` refuses. None can be provoked on a real host. |
+`wgctrl.New()` succeeds for any user — it only records where to look — so on
+darwin that branch does not fire. Reaching the root-only sockets under
+`/var/run/wireguard` is `Read`'s problem, which is where the "are you root?"
+hint lives and where a fake client exercises both outcomes. That `NewReader`
+works without privileges is itself pinned by a test, so a future wgctrl that
+changed this would be caught rather than silently reporting the wrong problem.
 
-These are exactly the boundaries `wg.Reader`, `notify.run` and `netctx.Lister`
-exist to isolate. Everything behind them is tested against doubles: the health
-thresholds, the transition diffing, the context rules.
-
-Covering them would mean standing up a fake WireGuard daemon and a fake window
-server, which costs more than it proves.
+This section used to hold fourteen statements. The three system calls behind
+them — the WireGuard client, `net.Interfaces`, and `osascript` — are now
+injected: an interface for the first, function fields for the second, a
+configurable binary path for the third. The tests check that tun-manager
+handles what each returns, which is the boundary that matters; whether the
+system call itself works is not this suite's business.
 
 ## Entry point and composition root
 
@@ -98,10 +111,10 @@ point.
 
 **Cross-package attribution.** By default `go test` only credits the package
 under test. Measured with `-coverpkg` over the whole module, the total moves
-from 92.3% to 92.4%: one case changes, `app.Up`, whose "unknown tunnel" branch
+from 93.7% to 93.8%: one case changes, `app.Up`, whose "unknown tunnel" branch
 is covered from `main_test.go`. The rest of this document holds either way.
 
-**Statements, not behaviour.** 92.3% counts statements executed, not outcomes
+**Statements, not behaviour.** 93.7% counts statements executed, not outcomes
 asserted. A line reached by a test that checks nothing counts the same as one
 pinned by three assertions. The floor in the Makefile guards against coverage
 rotting, not against tests that do not test.

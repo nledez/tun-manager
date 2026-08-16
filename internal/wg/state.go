@@ -136,26 +136,44 @@ type Reader interface {
 	Read() (State, error)
 }
 
-// CtrlReader reads the state through wgctrl.
-type CtrlReader struct {
-	client *wgctrl.Client
+// Client is the part of *wgctrl.Client this package uses.
+//
+// Depending on the behaviour rather than the concrete type is what lets the
+// tests drive the reader without a WireGuard socket. What they check is that
+// tun-manager handles whatever the client returns, not that wgctrl works.
+type Client interface {
+	Devices() ([]*wgtypes.Device, error)
+	Close() error
 }
 
-// NewReader opens the WireGuard control client. It fails when the process
-// cannot reach the UAPI sockets, which in practice means it is not root.
+// CtrlReader reads the state through a WireGuard control client.
+type CtrlReader struct {
+	client Client
+}
+
+// NewReader opens the WireGuard control client.
+//
+// This succeeds for any user: the client only records where to look. Reaching
+// the sockets is Read's problem, and that is where the privilege shows up.
 func NewReader() (*CtrlReader, error) {
 	c, err := wgctrl.New()
 	if err != nil {
-		return nil, fmt.Errorf("open wireguard control socket (are you root?): %w", err)
+		return nil, fmt.Errorf("open the wireguard control client: %w", err)
 	}
-	return &CtrlReader{client: c}, nil
+	return NewReaderFrom(c), nil
 }
+
+// NewReaderFrom wraps a client that is already open.
+func NewReaderFrom(c Client) *CtrlReader { return &CtrlReader{client: c} }
 
 // Read returns the current state of every live device.
 func (r *CtrlReader) Read() (State, error) {
 	devices, err := r.client.Devices()
 	if err != nil {
-		return nil, fmt.Errorf("list wireguard devices: %w", err)
+		// The UAPI sockets under /var/run/wireguard are root-only, so this is
+		// what a user who forgot sudo meets. Say so here rather than at the
+		// client, which opens for anyone.
+		return nil, fmt.Errorf("list wireguard devices (are you root?): %w", err)
 	}
 	return Snapshot(devices), nil
 }

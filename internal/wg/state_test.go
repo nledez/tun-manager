@@ -1,7 +1,9 @@
 package wg
 
 import (
+	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,5 +218,107 @@ func TestResolveMissesWhenTheLocatorNamesADeadInterface(t *testing.T) {
 
 	if _, ok := state.Resolve("alpha", alphaKey, loc); ok {
 		t.Error("Resolve found a peer on an interface that is gone")
+	}
+}
+
+// fakeClient stands in for *wgctrl.Client. The point of these tests is that
+// tun-manager handles what the client returns, not that wgctrl works.
+type fakeClient struct {
+	devices    []*wgtypes.Device
+	devErr     error
+	closeErr   error
+	closeCalls int
+}
+
+func (c *fakeClient) Devices() ([]*wgtypes.Device, error) { return c.devices, c.devErr }
+
+func (c *fakeClient) Close() error {
+	c.closeCalls++
+	return c.closeErr
+}
+
+func TestReadConvertsWhatTheClientReturns(t *testing.T) {
+	client := &fakeClient{devices: []*wgtypes.Device{{
+		Name:  "utun7",
+		Peers: []wgtypes.Peer{{PublicKey: mustKey(t, alphaKey), ReceiveBytes: 42}},
+	}}}
+
+	state, err := NewReaderFrom(client).Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	peer, ok := state.ByDevice("utun7")
+	if !ok {
+		t.Fatalf("utun7 missing from %v", state)
+	}
+	if peer.PublicKey != alphaKey || peer.RxBytes != 42 {
+		t.Errorf("peer = %+v", peer)
+	}
+}
+
+func TestReadOfAnIdleHostIsAnEmptyState(t *testing.T) {
+	state, err := NewReaderFrom(&fakeClient{}).Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if len(state) != 0 {
+		t.Errorf("state = %v, want none", state)
+	}
+}
+
+func TestReadWrapsTheClientErrorAndPointsAtRoot(t *testing.T) {
+	// This is the error a user actually meets: wgctrl.New succeeds for anyone,
+	// and it is listing the devices that hits the root-only sockets.
+	boom := errors.New("dial unix /var/run/wireguard/utun4.sock: connect: permission denied")
+
+	_, err := NewReaderFrom(&fakeClient{devErr: boom}).Read()
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "root") {
+		t.Errorf("err = %q, want it to say what to do about it", err)
+	}
+}
+
+func TestCloseReleasesTheClient(t *testing.T) {
+	client := &fakeClient{}
+
+	if err := NewReaderFrom(client).Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if client.closeCalls != 1 {
+		t.Errorf("Close called %d time(s), want 1", client.closeCalls)
+	}
+}
+
+func TestCloseReportsAFailure(t *testing.T) {
+	boom := errors.New("already closed")
+
+	if err := NewReaderFrom(&fakeClient{closeErr: boom}).Close(); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
+
+func TestReaderSatisfiesTheReaderInterface(t *testing.T) {
+	var _ Reader = NewReaderFrom(&fakeClient{})
+}
+
+func TestNewReaderNeedsNoPrivilege(t *testing.T) {
+	// Opening the client only records where to look, so it works for any user.
+	// Read is where the root-only sockets are reached. If a future wgctrl makes
+	// this fail instead, the program would report the wrong problem, and this
+	// test is what says so.
+	r, err := NewReader()
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	if r.client == nil {
+		t.Error("client is nil")
 	}
 }
