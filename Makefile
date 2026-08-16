@@ -10,9 +10,9 @@ COVERAGE_MIN := 99
 # counting them would only dilute the number this floor guards.
 COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt notices notices-check run install clean release release-check
+.PHONY: all build test race cover cover-html vet lint fmt notices notices-check markers-check run install clean release release-check
 
-all: vet lint test notices-check build
+all: vet lint test notices-check markers-check build
 
 # -trimpath keeps local paths out of the binary, so the same source at the same
 # version produces the same bytes on any machine.
@@ -70,6 +70,18 @@ notices-check: notices
 #   make release VERSION=0.1.0 DRY_RUN=1   # every check, no tag
 release:
 	@scripts/release.sh $(VERSION)
+
+# Every deliberate omission carries a NOT TESTED: marker naming the section of
+# docs/coverage-gaps.md that argues for it. A marker whose reasoning lives only
+# in a commit message is an excuse rather than a decision, so check the section
+# exists.
+markers-check:
+	@grep -rho 'docs/coverage-gaps.md, "[^"]*"' --include='*_test.go' . \
+		| sed 's/.*"\(.*\)"/\1/' | sort -u | while read -r section; do \
+		grep -qF "### $$section" docs/coverage-gaps.md \
+			|| { echo "no \"$$section\" section in docs/coverage-gaps.md"; exit 1; }; \
+	done
+	@echo "every NOT TESTED marker is documented"
 
 # Runs the release pipeline without publishing anything.
 release-check:

@@ -67,6 +67,10 @@ jobs:
           go run ./internal/tools/notices -o THIRD-PARTY-NOTICES.txt ./...
           git diff --exit-code -- THIRD-PARTY-NOTICES.txt
 
+      # Every NOT TESTED marker has to name a section that argues for it.
+      - name: Verify the deliberate omissions are documented
+        run: make markers-check
+
       # Through the Makefile, so the floor CI enforces is the same one a local
       # `make cover` enforces.
       - name: Coverage

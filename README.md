@@ -130,6 +130,7 @@ make lint           # golangci-lint, configured in .golangci.yml
 make cover          # coverage per package, fails below the floor in the Makefile
 make cover-html     # per-statement report in the browser
 make notices        # regenerate THIRD-PARTY-NOTICES.txt from the module graph
+make markers-check  # every NOT TESTED marker names a documented section
 make release-check  # runs the release pipeline without publishing
 ```
 
@@ -151,7 +152,9 @@ The suite runs without root and without touching a real tunnel: the WireGuard
 state, the command runner, the network interfaces, the notification transport
 and the clock are all injected.
 [`docs/coverage-gaps.md`](docs/coverage-gaps.md) lists what is left uncovered
-and why, with the gaps worth closing as a checklist at the top.
+and why. Each deliberate omission carries a `NOT TESTED:` comment where its test
+would have been, naming the section that argues for it; `make markers-check`
+fails when one of those sections is missing.
 
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.

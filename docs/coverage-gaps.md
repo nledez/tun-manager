@@ -10,23 +10,93 @@ go tool cover -func=coverage.out        # per function
 go tool cover -html=coverage.out        # per statement, in a browser
 ```
 
-`internal/tools` is excluded from the profile: it holds a build-time generator,
-not shipped code, and `make notices-check` exercises it end to end on every run.
+Every deliberate omission carries a `NOT TESTED:` comment where its test would
+have been, naming the section below that argues for it. Go has no coverage
+pragma and neither the toolchain nor goveralls honours one, so the marker is a
+convention rather than something a tool enforces. Find them all with:
 
-## What is left
+```sh
+grep -rn 'NOT TESTED:' --include='*_test.go' .
+```
 
-**`main`, 3 statements.** It calls `os.Exit`, so covering it means starting a
-subprocess to confirm that Go can start a program and that a non-zero return
-becomes a non-zero exit. Everything it calls is covered: `newEnv` wires the
-process and `run` dispatches, and both are driven directly.
+If you add one, add its section here. A marker whose reasoning lives only in a
+commit message is an excuse, not a decision.
 
-**`build`, 1 statement** — the branch wrapping a failure of `wg.NewReader`.
-`NewReader` succeeds for any user on darwin, so that branch guards against a
-platform, or a future wgctrl, where opening the client can fail. Forcing it
-would mean threading an opener through the composition root: a seam inside the
-seam `env` already provides, for one line whose whole job is to be defensive.
+## Deliberately untested
 
-Every other package is at 100%.
+### main
+
+`main` calls `os.Exit`, so covering it means starting a subprocess to confirm
+that Go can start a program and that a non-zero return becomes a non-zero exit
+code. Neither is in doubt, and a test that spawns the binary would be slower
+than every other test combined.
+
+Everything `main` reaches is covered: `newEnv` builds the process environment
+and `run` dispatches, both driven directly from `main_test.go`, including the
+root guard, the flag parsing, the mutually exclusive flags and every command.
+
+Marker: `main_test.go`. 3 statements.
+
+### build and the WireGuard client
+
+`build` wraps a failure of `wg.NewReader`. That call succeeds for any user on
+darwin — the client only records where to look, and reaching the root-only
+sockets under `/var/run/wireguard` is `Read`'s problem — so the branch guards
+against a platform, or a future wgctrl, where opening can fail.
+
+Forcing it would mean threading an opener through `build`, which is a seam
+inside the seam `env` already provides, for one line whose whole job is to be
+defensive. `wg.NewReader` itself is covered on both paths in its own package,
+where the opener is injected.
+
+Marker: `main_test.go`. 1 statement.
+
+### The notices generator
+
+`internal/tools/notices` has no unit tests and is excluded from the coverage
+profile. It is a build-time generator: it never ships in the binary, and its
+only output is `THIRD-PARTY-NOTICES.txt`.
+
+`make notices-check` runs it and fails when its output differs from the file in
+the tree, on every `make all` and in CI. That catches a regression, which is
+what matters here, but it is worth being precise about what it does not catch:
+if the generator missed a licence from the start, nothing would notice. The
+file was reviewed once by hand against `go list -deps`; a dependency added
+later is covered only insofar as the generator handles it the same way.
+
+Marker: `internal/tools/notices/doc_test.go`.
+
+## Tested, but shallowly
+
+Not omissions, and not marked in code. Recorded because coverage counts these
+as done and they are the places a regression would most likely slip through.
+
+**The TUI rendering.** Fifteen assertions, all `strings.Contains` over
+`View()`. They check that a word appears somewhere in the frame — not column
+alignment, not colours, not narrow terminals. There is no golden frame. Widening
+the mark column from two to three would not have broken a single test.
+
+**`wg.ExecRunner`.** Exercised against `/bin/echo`, `/bin/sh`, `/bin/sleep` and
+a missing binary, which proves the argv leaves and the exit status comes back.
+Nothing checks that `wg-quick` accepts the command line built for it: the argv
+is asserted against a string written here, not against what `wg-quick` expects.
+
+**The program against a real tunnel.** Nothing brings a tunnel up or down. All
+the logic runs against doubles; that it works for real rests on running
+`sudo tun-manager status` and reading the output.
+
+## Not Go, so not covered at all
+
+`scripts/release.sh` was exercised by hand in a throwaway clone with its own
+origin — tag created and pushed, then refused on a replay, and refused again
+with the tag present locally only. Nothing replays that automatically, so a
+regression in a guard shows up when cutting a release.
+
+`.goreleaser.yaml` is only exercised by `make release-check`, which CI does not
+run. The first real tag is therefore the first time the file runs as it will be
+used. Adding `make release-check` to the `build` job would close that.
+
+`Makefile` and `.github/workflows/ci.yml` test themselves by running.
 
 ## What this file used to say
 
@@ -34,13 +104,10 @@ It listed three categories of code as out of reach. All three were overstated,
 and recording that is more useful than quietly deleting them.
 
 **"Root, hardware, GUI."** Fourteen statements: the WireGuard control sockets,
-`net.Interfaces`, `osascript`. None of them needed a fake daemon or a fake
-window server. Each is reached through one line that does nothing but call out,
-and one line can be injected — an interface for the WireGuard client, function
-fields for the host lookup, a configurable path for the notification command.
-The tests check that tun-manager handles what each returns, which is the
-boundary that matters; whether the system call itself works is not this suite's
-business.
+`net.Interfaces`, `osascript`. None needed a fake daemon or a fake window
+server. Each is reached through one line that does nothing but call out, and one
+line can be injected — an interface for the WireGuard client, function fields
+for the host lookup, a configurable path for the notification command.
 
 **"Entry point and composition root."** Nineteen statements. Only `main` needed
 a subprocess. `loadConfig`, `build` and `runTUI` are ordinary functions a test
