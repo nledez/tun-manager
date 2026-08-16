@@ -13,9 +13,9 @@ jobs:
   verify:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -33,18 +33,18 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # GoReleaser builds the changelog from the commits since the previous
           # tag, so it needs the whole history.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
@@ -53,6 +53,6 @@ jobs:
 
       # Lets anyone verify a downloaded binary was built by this workflow from
       # this commit, with `gh attestation verify`.
-      - uses: actions/attest-build-provenance@v1
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.tar.gz
