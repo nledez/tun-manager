@@ -4,22 +4,28 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COVERAGE := coverage.out
 # Fail the build below this, so coverage cannot quietly rot.
 COVERAGE_MIN := 85
+# Coverage measures the program that ships. internal/tools holds build-time
+# generators, which `make notices-check` exercises end to end on every run;
+# counting them would only dilute the number this floor guards.
+COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt run install clean release-check
+.PHONY: all build test race cover cover-html vet lint fmt notices notices-check run install clean release-check
 
-all: vet test build
+all: vet lint test notices-check build
 
+# -trimpath keeps local paths out of the binary, so the same source at the same
+# version produces the same bytes on any machine.
 build:
-	go build -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN) .
+	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN) .
 
 test:
 	go test ./...
 
 race:
-	go test -race ./...
+	go test -race -count=1 ./...
 
 cover:
-	go test ./... -coverprofile=$(COVERAGE) -covermode=atomic
+	go test $(COVER_PKGS) -coverprofile=$(COVERAGE) -covermode=atomic
 	@go tool cover -func=$(COVERAGE) | tail -1
 	@total=$$(go tool cover -func=$(COVERAGE) | tail -1 | grep -oE '[0-9]+\.[0-9]+'); \
 	if [ $${total%%.*} -lt $(COVERAGE_MIN) ]; then \
@@ -46,6 +52,15 @@ run: build
 
 install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/tun-manager
+
+# The licenses of every module linked into the binary. BSD-3-Clause clause 2
+# and the equivalent clauses of the dependencies require shipping them.
+notices:
+	go run ./internal/tools/notices -o THIRD-PARTY-NOTICES.txt ./...
+
+# Fails when a dependency change was not reflected in the notices file.
+notices-check: notices
+	git diff --exit-code -- THIRD-PARTY-NOTICES.txt
 
 # Runs the release pipeline without publishing anything.
 release-check:

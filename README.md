@@ -123,12 +123,13 @@ network, so a tunnel that reaches a LAN you are sometimes sitting on can be
 ## Development
 
 ```sh
+make                # vet, lint, tests, notices check, build
 make test           # everything, no network and no root needed
 make race
-make vet
 make lint           # golangci-lint, configured in .golangci.yml
 make cover          # coverage per package, fails below the floor in the Makefile
 make cover-html     # per-statement report in the browser
+make notices        # regenerate THIRD-PARTY-NOTICES.txt from the module graph
 make release-check  # runs the release pipeline without publishing
 ```
 
@@ -147,3 +148,8 @@ the log pane redacts anything shaped like a WireGuard key.
 ## License
 
 BSD 3-Clause, see [LICENSE](LICENSE).
+
+The release archives also carry [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt),
+the licenses of every module linked into the binary. It is generated from the
+module graph by `make notices` and CI fails when it is out of date, so a new
+dependency cannot ship without its notice.

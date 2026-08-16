@@ -5,6 +5,8 @@ project_name: tun-manager
 before:
   hooks:
     - go mod tidy
+    # The archives ship this file; regenerate it rather than trust the checkout.
+    - go run ./internal/tools/notices -o THIRD-PARTY-NOTICES.txt ./...
 
 builds:
   - id: tun-manager
@@ -17,6 +19,10 @@ builds:
       - CGO_ENABLED=0
     goos: [darwin]
     goarch: [amd64, arm64]
+    # Keeps the build machine's paths out of the binary, so the same source at
+    # the same version produces the same bytes anywhere.
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -36,7 +42,10 @@ archives:
       {{- if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
     files:
       - README.md
+      # BSD-3-Clause clause 2 requires the notice to travel with the binary,
+      # and so do the licenses of the modules linked into it.
       - LICENSE
+      - THIRD-PARTY-NOTICES.txt
       - configs/config.example.yaml
 
 checksum:
