@@ -145,16 +145,18 @@ make release VERSION=0.1.0 DRY_RUN=1   # every check, no tag
 ```
 
 CI runs the same checks on macOS, the only platform this targets, and publishes
-coverage to Coveralls on every push and pull request. Tagging `vX.Y.Z` builds
-the darwin archives and cuts a GitHub release.
+coverage to Coveralls on every push and pull request. It also runs the release
+pipeline short of publishing, so a broken `.goreleaser.yaml` fails there rather
+than after a tag is pushed. Tagging `vX.Y.Z` runs everything again and cuts a
+GitHub release.
 
 The suite runs without root and without touching a real tunnel: the WireGuard
 state, the command runner, the network interfaces, the notification transport
 and the clock are all injected.
 [`docs/coverage-gaps.md`](docs/coverage-gaps.md) lists what is left uncovered
-and why. Each deliberate omission carries a `NOT TESTED:` comment where its test
-would have been, naming the section that argues for it; `make markers-check`
-fails when one of those sections is missing.
+and why. Each deliberate omission carries a `NOT TESTED:` comment on the code itself,
+naming the section that argues for it; `make markers-check` fails when one of
+those sections is missing.
 
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.

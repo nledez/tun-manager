@@ -10,13 +10,15 @@ go tool cover -func=coverage.out        # per function
 go tool cover -html=coverage.out        # per statement, in a browser
 ```
 
-Every deliberate omission carries a `NOT TESTED:` comment where its test would
-have been, naming the section below that argues for it. Go has no coverage
-pragma and neither the toolchain nor goveralls honours one, so the marker is a
-convention rather than something a tool enforces. Find them all with:
+Every deliberate omission carries a `NOT TESTED:` comment **on the code
+itself**, next to what is not tested, naming the section below that argues for
+it. Whoever reads that code sees why there is no test without going looking for
+one. Go has no coverage pragma, and neither the toolchain nor goveralls honours
+one, so the marker is a convention rather than something a compiler enforces.
+Find them all with:
 
 ```sh
-grep -rn 'NOT TESTED:' --include='*_test.go' .
+grep -rn 'NOT TESTED:' --include='*.go' .
 ```
 
 If you add one, add its section here. A marker whose reasoning lives only in a
@@ -35,7 +37,7 @@ Everything `main` reaches is covered: `newEnv` builds the process environment
 and `run` dispatches, both driven directly from `main_test.go`, including the
 root guard, the flag parsing, the mutually exclusive flags and every command.
 
-Marker: `main_test.go`. 3 statements.
+Marker: on `main` in `main.go`. 3 statements.
 
 ### build and the WireGuard client
 
@@ -49,7 +51,7 @@ inside the seam `env` already provides, for one line whose whole job is to be
 defensive. `wg.NewReader` itself is covered on both paths in its own package,
 where the opener is injected.
 
-Marker: `main_test.go`. 1 statement.
+Marker: on the branch in `build`, in `main.go`. 1 statement.
 
 ### The notices generator
 
@@ -64,7 +66,7 @@ if the generator missed a licence from the start, nothing would notice. The
 file was reviewed once by hand against `go list -deps`; a dependency added
 later is covered only insofar as the generator handles it the same way.
 
-Marker: `internal/tools/notices/doc_test.go`.
+Marker: on the package clause in `internal/tools/notices/main.go`.
 
 ## Tested, but shallowly
 
@@ -92,9 +94,12 @@ origin — tag created and pushed, then refused on a replay, and refused again
 with the tag present locally only. Nothing replays that automatically, so a
 regression in a guard shows up when cutting a release.
 
-`.goreleaser.yaml` is only exercised by `make release-check`, which CI does not
-run. The first real tag is therefore the first time the file runs as it will be
-used. Adding `make release-check` to the `build` job would close that.
+`.goreleaser.yaml` is exercised by `make release-check`, which the `build` job
+runs on every push and pull request: the whole pipeline short of publishing,
+so a broken configuration fails there rather than after a tag is pushed. What
+it still does not prove is the publishing itself — creating the release,
+uploading the archives, the provenance attestation — which only a real tag
+exercises.
 
 `Makefile` and `.github/workflows/ci.yml` test themselves by running.
 
