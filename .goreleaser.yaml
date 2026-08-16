@@ -1,0 +1,82 @@
+version: 2
+
+project_name: tun-manager
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tun-manager
+    main: .
+    binary: tun-manager
+    env:
+      # On darwin the Go runtime always goes through libSystem, so os/user
+      # resolves SUDO_USER without cgo. That keeps the build reproducible and
+      # cross-compilable.
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# A single file that runs on both Intel and Apple Silicon, next to the
+# per-architecture archives.
+universal_binaries:
+  - id: tun-manager
+    replace: false
+    name_template: tun-manager
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - configs/config.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+      order: 1
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    tar xzf tun-manager_{{ .Version }}_darwin_universal.tar.gz
+    sudo install -m 0755 tun-manager /usr/local/bin/tun-manager
+    tun-manager doctor
+    ```
+
+    The binaries are not notarized, so macOS quarantines them on first run.
+    Clear it with `xattr -d com.apple.quarantine ./tun-manager`, or build from
+    source with `make build`.
+
+    tun-manager runs as root: the WireGuard control sockets are root-only.

@@ -1,0 +1,39 @@
+version: 2
+
+linters:
+  enable:
+    # Unhandled errors, which in this codebase mostly means an ignored
+    # wg-quick failure.
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Dead parameters and results, which accumulate fast behind interfaces.
+    - unparam
+    # Shadowed or mishandled error values.
+    - errorlint
+    # Context passed but never used, or created without being cancelled.
+    - noctx
+    - bodyclose
+    # Catches the fmt.Errorf/%w mistakes that make errors.Is fail silently.
+    - perfsprint
+    - misspell
+
+  settings:
+    errcheck:
+      # Notifications are best-effort by design; the TUI must not care.
+      exclude-functions:
+        - (*os/exec.Cmd).Run
+    staticcheck:
+      checks: ["all"]
+
+  exclusions:
+    rules:
+      # Tests deliberately ignore returned values to keep assertions readable.
+      - path: _test\.go
+        linters: [errcheck, unparam, noctx]
+
+formatters:
+  enable:
+    - gofmt

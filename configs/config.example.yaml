@@ -1,0 +1,53 @@
+# tun-manager configuration
+#
+# Copy to ~/.config/tun-manager/config.yaml, then replace the tunnel names below
+# with your own.
+#
+# Every field is optional, but the built-in defaults define no group and no
+# network context: without this file every tunnel is listed and none belongs to
+# a group, so the group commands and keys have nothing to act on.
+#
+# The tunnel names here are placeholders and the addresses come from the ranges
+# reserved for documentation (RFC 5737).
+
+# Where the WireGuard .conf files live. Each file name is the tunnel name.
+config_dir: /private/wireguard/config
+
+# wg-quick is what actually creates the utun interface and the routes.
+wg_quick: /opt/homebrew/bin/wg-quick
+
+# Where wg-quick records the interface name of each live tunnel. This is how a
+# config is matched to its interface; peer public keys are not unique enough.
+run_dir: /var/run/wireguard
+
+# How often the TUI refreshes on its own.
+refresh_interval: 5m
+
+# macOS notifications when a tunnel goes up or down.
+notify: true
+
+# Recognisable networks. The first rule whose CIDR matches an address on one of
+# its interfaces wins; when none matches, the context is "default".
+contexts:
+  - name: office
+    interfaces: [en0, en10]
+    cidr: 198.51.100.0/24
+
+# Static group membership.
+#   needed — started by `up --group needed` and by the TUI's `s` and `n` keys
+#   extra  — offered for selection, started by the `e` key
+#   all    — everything `down --all` and the TUI's `s` key tear down
+groups:
+  needed: [alpha, bravo]
+  extra: [charlie, echo]
+  all: [delta, alpha, bravo, charlie, echo]
+
+# Tunnels whose group depends on the network.
+#
+# delta reaches the office LAN: sitting on that LAN it is redundant, so it is
+# merely offered; anywhere else it is needed.
+overrides:
+  - tunnel: delta
+    group_when:
+      office: extra
+      default: needed
