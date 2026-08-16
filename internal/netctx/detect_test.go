@@ -2,6 +2,7 @@ package netctx
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 )
@@ -176,5 +177,87 @@ func TestSystemFeedsDetect(t *testing.T) {
 
 	if got.Name != "loopback" {
 		t.Errorf("Name = %q, want %q", got.Name, "loopback")
+	}
+}
+
+// hostFuncs is the pair of system calls System depends on, so a test can make
+// either of them fail.
+func hostFuncs(ifaces []net.Interface, ifaceErr error, addrs map[string][]net.Addr, addrErr error) host {
+	return host{
+		interfaces: func() ([]net.Interface, error) { return ifaces, ifaceErr },
+		addrs: func(i net.Interface) ([]net.Addr, error) {
+			if addrErr != nil {
+				return nil, addrErr
+			}
+			return addrs[i.Name], nil
+		},
+	}
+}
+
+func TestListFailsWhenTheInterfacesCannotBeRead(t *testing.T) {
+	boom := errors.New("no such device")
+
+	_, err := hostFuncs(nil, boom, nil, nil).list()
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
+
+func TestListSkipsAnInterfaceThatIsDown(t *testing.T) {
+	ifaces := []net.Interface{
+		{Name: "en0", Flags: net.FlagUp},
+		{Name: "en9"}, // no FlagUp
+	}
+	addrs := map[string][]net.Addr{
+		"en0": {&net.IPNet{IP: net.ParseIP("198.51.100.42"), Mask: net.CIDRMask(24, 32)}},
+		"en9": {&net.IPNet{IP: net.ParseIP("203.0.113.9"), Mask: net.CIDRMask(24, 32)}},
+	}
+
+	got, err := hostFuncs(ifaces, nil, addrs, nil).list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(got) != 1 || got[0].Name != "en0" {
+		t.Errorf("got %+v, want only en0", got)
+	}
+}
+
+func TestListSkipsAnInterfaceWhoseAddressesVanish(t *testing.T) {
+	// An interface can disappear between the listing and the address lookup.
+	// Losing one is not a reason to fail the whole detection.
+	ifaces := []net.Interface{{Name: "en0", Flags: net.FlagUp}}
+
+	got, err := hostFuncs(ifaces, nil, nil, errors.New("no such device")).list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Errorf("got %+v, want the interface dropped rather than the listing failed", got)
+	}
+}
+
+func TestListIgnoresAddressesItCannotUnderstand(t *testing.T) {
+	// A link-layer address is not an IPNet, and an IPNet may hold something
+	// netip refuses.
+	ifaces := []net.Interface{{Name: "en0", Flags: net.FlagUp}}
+	addrs := map[string][]net.Addr{"en0": {
+		&net.IPAddr{IP: net.ParseIP("198.51.100.1")},
+		&net.IPNet{IP: net.IP{1, 2, 3}, Mask: net.CIDRMask(24, 32)},
+		&net.IPNet{IP: net.ParseIP("198.51.100.42"), Mask: net.CIDRMask(24, 32)},
+	}}
+
+	got, err := hostFuncs(ifaces, nil, addrs, nil).list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(got[0].Addrs) != 1 {
+		t.Fatalf("Addrs = %v, want only the one address that parses", got[0].Addrs)
+	}
+	if got[0].Addrs[0].Addr().String() != "198.51.100.42" {
+		t.Errorf("Addrs[0] = %v", got[0].Addrs[0])
 	}
 }

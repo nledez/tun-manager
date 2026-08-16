@@ -2,7 +2,9 @@ package notify
 
 import (
 	"context"
-	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"ledez.net/tun-manager/internal/privdrop"
@@ -121,68 +123,115 @@ func contains(s, sub string) bool {
 	return false
 }
 
-func TestNotifyPostsOneNotificationPerTransition(t *testing.T) {
-	var got [][]string
-	n := Notifier{Enabled: true, run: func(_ context.Context, args []string) error {
-		got = append(got, args)
+// recorder stands in for osascript: it appends its arguments to a file, so a
+// test can see exactly what would have reached the GUI session.
+func recorder(t *testing.T) (binary, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	binary = filepath.Join(dir, "osascript")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + log + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatalf("write %s: %v", binary, err)
+	}
+	return binary, log
+}
+
+func calls(t *testing.T, log string) []string {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if os.IsNotExist(err) {
 		return nil
-	}}
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", log, err)
+	}
+	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+}
+
+func TestNotifyRunsTheNotificationBinaryOncePerTransition(t *testing.T) {
+	binary, log := recorder(t)
+	n := Notifier{Enabled: true, Binary: binary, User: privdrop.User{HomeDir: t.TempDir()}}
 
 	n.Notify(context.Background(), []Transition{
 		{Tunnel: "alpha", From: wg.Up, To: wg.Down},
 		{Tunnel: "bravo", From: wg.Down, To: wg.Up},
 	})
 
-	if len(got) != 2 {
-		t.Fatalf("posted %d notification(s), want 2", len(got))
+	got := calls(t, log)
+	// Two arguments per call: -e and the script.
+	if len(got) != 4 {
+		t.Fatalf("recorded %d argument(s), want 4:\n%v", len(got), got)
 	}
-	if !contains(got[0][1], "alpha down") {
-		t.Errorf("first script = %q, want it to describe alpha going down", got[0][1])
+	if got[0] != "-e" || got[2] != "-e" {
+		t.Errorf("args = %v, want each call to start with -e", got)
+	}
+	if !strings.Contains(got[1], "alpha down") {
+		t.Errorf("first script = %q, want it to describe alpha going down", got[1])
+	}
+	if !strings.Contains(got[3], "bravo up") {
+		t.Errorf("second script = %q, want it to describe bravo coming up", got[3])
 	}
 }
 
-func TestNotifyStaysSilentWhenDisabled(t *testing.T) {
-	var called bool
-	n := Notifier{Enabled: false, run: func(context.Context, []string) error {
-		called = true
-		return nil
-	}}
+func TestNotifyRunsNothingWhenDisabled(t *testing.T) {
+	binary, log := recorder(t)
+	n := Notifier{Enabled: false, Binary: binary}
 
 	n.Notify(context.Background(), []Transition{{Tunnel: "alpha", From: wg.Up, To: wg.Down}})
 
-	if called {
-		t.Error("a notification was posted while notifications are disabled")
+	if got := calls(t, log); len(got) != 0 {
+		t.Errorf("recorded %v, want nothing while notifications are disabled", got)
 	}
 }
 
-func TestNotifySwallowsFailures(t *testing.T) {
-	// No GUI session means osascript fails; that must never disturb the TUI.
-	n := Notifier{Enabled: true, run: func(context.Context, []string) error {
-		return errors.New("no session")
-	}}
-
-	n.Notify(context.Background(), []Transition{{Tunnel: "alpha", From: wg.Up, To: wg.Down}})
-}
-
-func TestNotifyDoesNothingWithoutTransitions(t *testing.T) {
-	var called bool
-	n := Notifier{Enabled: true, run: func(context.Context, []string) error {
-		called = true
-		return nil
-	}}
+func TestNotifyRunsNothingWithoutTransitions(t *testing.T) {
+	binary, log := recorder(t)
+	n := Notifier{Enabled: true, Binary: binary}
 
 	n.Notify(context.Background(), nil)
 
-	if called {
-		t.Error("a notification was posted for an empty transition list")
+	if got := calls(t, log); len(got) != 0 {
+		t.Errorf("recorded %v, want nothing for an empty transition list", got)
 	}
 }
 
-func TestNotifyFallsBackToOsascript(t *testing.T) {
-	// A zero Notifier must still have somewhere to send its notifications.
-	n := Notifier{Enabled: true, User: privdrop.User{HomeDir: t.TempDir()}}
+func TestNotifySurvivesABinaryThatFails(t *testing.T) {
+	// No GUI session means osascript exits non-zero. That must never disturb
+	// the TUI, so Notify swallows it.
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "osascript")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	n := Notifier{Enabled: true, Binary: binary}
 
-	if n.runner() == nil {
-		t.Error("runner = nil, want the osascript default")
+	n.Notify(context.Background(), []Transition{{Tunnel: "alpha", From: wg.Up, To: wg.Down}})
+}
+
+func TestNotifySurvivesAMissingBinary(t *testing.T) {
+	n := Notifier{Enabled: true, Binary: filepath.Join(t.TempDir(), "absent")}
+
+	n.Notify(context.Background(), []Transition{{Tunnel: "alpha", From: wg.Up, To: wg.Down}})
+}
+
+func TestNotifyStopsWithItsContext(t *testing.T) {
+	binary, log := recorder(t)
+	n := Notifier{Enabled: true, Binary: binary}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	n.Notify(ctx, []Transition{{Tunnel: "alpha", From: wg.Up, To: wg.Down}})
+
+	if got := calls(t, log); len(got) != 0 {
+		t.Errorf("recorded %v, want nothing once the context is cancelled", got)
+	}
+}
+
+func TestTheDefaultBinaryIsOsascript(t *testing.T) {
+	// Nothing runs here: the point is that a zero Notifier still names a
+	// command instead of an empty string.
+	if got := (Notifier{}).binary(); got != defaultBinary {
+		t.Errorf("binary = %q, want %q", got, defaultBinary)
 	}
 }

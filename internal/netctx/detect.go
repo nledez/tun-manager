@@ -88,9 +88,24 @@ func (r Rule) matchesInterface(name string) bool {
 	return false
 }
 
+// host is the pair of system calls the listing rests on. Holding them as
+// fields is what lets a test make either one fail; neither can be provoked on a
+// real machine.
+type host struct {
+	interfaces func() ([]net.Interface, error)
+	addrs      func(net.Interface) ([]net.Addr, error)
+}
+
+var realHost = host{
+	interfaces: net.Interfaces,
+	addrs:      func(i net.Interface) ([]net.Addr, error) { return i.Addrs() },
+}
+
 // System lists the host interfaces, skipping the ones that are down.
-func System() ([]Iface, error) {
-	list, err := net.Interfaces()
+func System() ([]Iface, error) { return realHost.list() }
+
+func (h host) list() ([]Iface, error) {
+	list, err := h.interfaces()
 	if err != nil {
 		return nil, err
 	}
@@ -100,9 +115,10 @@ func System() ([]Iface, error) {
 		if iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		addrs, err := iface.Addrs()
+		addrs, err := h.addrs(iface)
 		if err != nil {
-			// A disappearing interface is not worth failing the whole detection.
+			// An interface can disappear between the listing and this call.
+			// Losing one is not a reason to fail the whole detection.
 			continue
 		}
 		entry := Iface{Name: iface.Name}

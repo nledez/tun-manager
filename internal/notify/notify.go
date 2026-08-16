@@ -45,25 +45,25 @@ func Diff(prev, next map[string]wg.Health) []Transition {
 	return out
 }
 
+// defaultBinary is what posts a notification on macOS.
+const defaultBinary = "/usr/bin/osascript"
+
 // Notifier posts notifications to the user's session.
 type Notifier struct {
 	User    privdrop.User
 	Enabled bool
 
-	// run posts one notification. It is a field so tests can observe what would
-	// be sent without spawning osascript; nil means the real thing.
-	run func(ctx context.Context, args []string) error
+	// Binary is the command that posts a notification. It is a field so a test
+	// can point it at a script that records its arguments rather than at
+	// osascript, which would reach the real desktop. Empty means the real one.
+	Binary string
 }
 
-// runner returns the configured poster, or the osascript one.
-func (n Notifier) runner() func(context.Context, []string) error {
-	if n.run != nil {
-		return n.run
+func (n Notifier) binary() string {
+	if n.Binary != "" {
+		return n.Binary
 	}
-	return func(ctx context.Context, args []string) error {
-		// Demoted to the pre-sudo user: root has no GUI session to talk to.
-		return n.User.CommandContext(ctx, "/usr/bin/osascript", args...).Run()
-	}
+	return defaultBinary
 }
 
 // Notify posts one notification per transition. Failures are silent: a missing
@@ -72,9 +72,9 @@ func (n Notifier) Notify(ctx context.Context, transitions []Transition) {
 	if !n.Enabled || len(transitions) == 0 {
 		return
 	}
-	run := n.runner()
 	for _, t := range transitions {
-		_ = run(ctx, argv(t))
+		// Demoted to the pre-sudo user: root has no GUI session to talk to.
+		_ = n.User.CommandContext(ctx, n.binary(), argv(t)...).Run()
 	}
 }
 
