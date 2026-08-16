@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/format"
@@ -48,7 +49,7 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.table())
 	if m.err != nil {
-		b.WriteString("\n" + errStyle.Render("error: "+m.err.Error()) + "\n")
+		b.WriteString("\n" + errStyle.Render(m.fit("error: "+m.err.Error())) + "\n")
 	}
 	if m.showLogs {
 		b.WriteString("\n" + m.logPane())
@@ -64,11 +65,14 @@ func (m Model) header() string {
 
 	right := m.status()
 	line := fmt.Sprintf("%s  %s", left, dimStyle.Render("ctx: "+ctx))
-	pad := m.width - lipgloss.Width(line) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
+
+	gap := m.width - lipgloss.Width(line) - lipgloss.Width(right)
+	if gap < 1 {
+		// Too narrow for both. The countdown is the expendable half: which
+		// network you are on decides what the table means.
+		return clamp(line, m.width) + "\n" + m.rule()
 	}
-	return line + strings.Repeat(" ", pad) + dimStyle.Render(right) + "\n" + m.rule()
+	return line + strings.Repeat(" ", gap) + dimStyle.Render(right) + "\n" + m.rule()
 }
 
 func (m Model) status() string {
@@ -80,7 +84,7 @@ func (m Model) status() string {
 	case m.lastRefresh.IsZero():
 		return "loading…"
 	default:
-		next := m.refreshInterval() - time.Since(m.lastRefresh)
+		next := m.refreshInterval() - m.clock().Sub(m.lastRefresh)
 		if next < 0 {
 			next = 0
 		}
@@ -89,11 +93,7 @@ func (m Model) status() string {
 }
 
 func (m Model) rule() string {
-	width := m.width
-	if width < 20 {
-		width = 20
-	}
-	return ruleStyle.Render(strings.Repeat("─", width))
+	return ruleStyle.Render(strings.Repeat("─", max(0, m.width)))
 }
 
 func (m Model) table() string {
@@ -102,7 +102,7 @@ func (m Model) table() string {
 	b.WriteString("\n")
 
 	if len(m.view.Rows) == 0 {
-		b.WriteString(dimStyle.Render("  no tunnel found\n"))
+		b.WriteString(dimStyle.Render(m.fit("  no tunnel found")) + "\n")
 		return b.String()
 	}
 
@@ -183,19 +183,38 @@ func (m Model) line(i int, r app.Row) string {
 
 // columns lays a row out at fixed widths so the table stays aligned whatever
 // the styling does.
+//
+// The endpoint takes what is left, down to nothing: a column that insists on a
+// minimum width pushes the row past the terminal, and a row past the terminal
+// wraps, which is the one thing a table must never do.
 func (m Model) columns(mark, name, group, state, shake, transfer, ping, endpoint string) string {
-	pad := func(s string, w int) string {
-		return lipgloss.NewStyle().Width(w).MaxWidth(w).Render(s)
-	}
-	fixed := wMark + wName + wGroup + wState + wShake + wTransfer + wPing
-	wEndpoint := m.width - fixed - 2
-	if wEndpoint < 12 {
-		wEndpoint = 12
-	}
+	fixed := 1 + wMark + wName + wGroup + wState + wShake + wTransfer + wPing
+	wEndpoint := max(0, m.width-fixed)
 
-	return " " + pad(mark, wMark) + pad(name, wName) + pad(group, wGroup) +
-		pad(state, wState) + pad(shake, wShake) + pad(transfer, wTransfer) +
-		pad(ping, wPing) + pad(endpoint, wEndpoint)
+	return clamp(" "+pad(mark, wMark)+pad(name, wName)+pad(group, wGroup)+
+		pad(state, wState)+pad(shake, wShake)+pad(transfer, wTransfer)+
+		pad(ping, wPing)+pad(endpoint, wEndpoint), m.width)
+}
+
+// pad fits a value to an exact width, cutting it rather than folding it. A
+// folded value would push every row below it down by a line and take the table
+// out of alignment; lipgloss's Width does exactly that, so it cannot be used
+// here.
+func pad(s string, w int) string {
+	s = clamp(s, w)
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		s += strings.Repeat(" ", gap)
+	}
+	return s
+}
+
+// clamp cuts a string to a width, counting what is on screen rather than what
+// is in the string: escape sequences take no columns.
+func clamp(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, w, "")
 }
 
 func healthLabel(h wg.Health) string {
@@ -215,7 +234,7 @@ func (m Model) logPane() string {
 	b.WriteString(headerStyle.Render(" LOGS") + "\n")
 
 	if len(m.logs) == 0 {
-		b.WriteString(dimStyle.Render("  nothing yet\n"))
+		b.WriteString(dimStyle.Render(m.fit("  nothing yet")) + "\n")
 		return b.String()
 	}
 
@@ -224,7 +243,7 @@ func (m Model) logPane() string {
 		tail = tail[len(tail)-n:]
 	}
 	for _, e := range tail {
-		line := fmt.Sprintf("  %s  %s", e.At.Format("15:04:05"), e.Text)
+		line := clamp(fmt.Sprintf("  %s  %s", e.At.Format("15:04:05"), e.Text), m.width)
 		if e.IsFail {
 			line = errStyle.Render(line)
 		}
@@ -244,7 +263,7 @@ func (m Model) logLines() int {
 
 func (m Model) footer() string {
 	if m.showHelp {
-		return helpStyle.Render(strings.Join([]string{
+		return helpStyle.Render(m.fit([]string{
 			" ↑↓/jk  move cursor",
 			" space  select / deselect a tunnel",
 			" enter  toggle the selection (or the row under the cursor)",
@@ -255,10 +274,20 @@ func (m Model) footer() string {
 			" l      toggle this log pane",
 			" ?      toggle this help",
 			" q      quit",
-		}, "\n"))
+		}...))
 	}
-	return helpStyle.Render(fmt.Sprintf(
+	return helpStyle.Render(m.fit(fmt.Sprintf(
 		" r refresh · p ping · s %s all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit",
 		m.stopStartAction(),
-	))
+	)))
+}
+
+// fit joins lines and cuts each to the terminal width, so the help never wraps
+// on a narrow window.
+func (m Model) fit(lines ...string) string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = clamp(l, m.width)
+	}
+	return strings.Join(out, "\n")
 }

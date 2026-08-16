@@ -916,3 +916,39 @@ func TestCommandsOfAModelWithoutAnApplicationAreHarmless(t *testing.T) {
 		t.Errorf("operate returned %#v, want an empty opMsg", msg)
 	}
 }
+
+func TestTheCountdownIsMeasuredFromTheLastRefresh(t *testing.T) {
+	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	m := loadedModel(threeRows...)
+	m.now = func() time.Time { return at.Add(42 * time.Second) }
+	m.lastRefresh = at
+
+	if got := m.status(); got != "next ⟳ 4m18s" {
+		t.Errorf("status = %q, want the remainder of the interval", got)
+	}
+}
+
+func TestTheCountdownStopsAtZero(t *testing.T) {
+	// A refresh that overran its interval must not display a negative delay.
+	at := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	m := loadedModel(threeRows...)
+	m.now = func() time.Time { return at.Add(time.Hour) }
+	m.lastRefresh = at
+
+	if got := m.status(); got != "next ⟳ 0s" {
+		t.Errorf("status = %q, want it clamped to zero", got)
+	}
+}
+
+func TestLogEntriesAreStampedFromTheSameClock(t *testing.T) {
+	at := time.Date(2026, 8, 16, 14, 30, 5, 0, time.UTC)
+	m := loadedModel(threeRows...)
+	m.now = func() time.Time { return at }
+
+	next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "up"}}})
+	m = next.(Model)
+
+	if got := m.logs[0].At; !got.Equal(at) {
+		t.Errorf("At = %v, want %v", got, at)
+	}
+}

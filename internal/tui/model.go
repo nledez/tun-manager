@@ -75,6 +75,18 @@ type Model struct {
 
 	lastHealth  map[string]wg.Health
 	lastRefresh time.Time
+
+	// now is the clock the interface reads. Two things on screen depend on it,
+	// the refresh countdown and the timestamp of a log entry, and neither can
+	// be pinned by a test while they read the wall clock.
+	now func() time.Time
+}
+
+func (m Model) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 // New builds the initial model.
@@ -175,7 +187,7 @@ func (m Model) current() (app.Row, bool) {
 }
 
 func (m *Model) log(text string, isFail bool) {
-	m.logs = append(m.logs, LogEntry{At: time.Now(), Text: redact(text), IsFail: isFail})
+	m.logs = append(m.logs, LogEntry{At: m.clock(), Text: redact(text), IsFail: isFail})
 	if len(m.logs) > maxLogs {
 		m.logs = m.logs[len(m.logs)-maxLogs:]
 	}
