@@ -1,6 +1,6 @@
 # Coverage gaps
 
-What the test suite does not reach, and why. 56 of 893 statements, so 93.7%.
+What the test suite does not reach, and why. 55 of 895 statements, so 93.8%.
 
 Regenerate the numbers with:
 
@@ -47,28 +47,27 @@ That is 19 statements, which would put the total near 96%.
 - [x] `notify` — the notification command is a configurable path now, so the
       tests exercise the real `privdrop.CommandContext` against a script that
       records its arguments. The package is at 100%.
-- [x] `wg.Read`, `wg.Close` — a `Client` interface stands in for
-      `*wgctrl.Client`. Mocking the client rather than the socket is the right
-      boundary: whether wgctrl works is not this suite's business.
+- [x] `wg` — a `Client` interface stands in for `*wgctrl.Client`, and the one
+      line calling `wgctrl.New` is injected as an `opener`. Mocking the client
+      rather than the socket is the right boundary: whether wgctrl works is not
+      this suite's business. The package is at 100%.
 
 ## Root, hardware, GUI
 
-One statement: the error branch of `wg.NewReader`, wrapping a failure of
-`wgctrl.New()`.
+Nothing. This section used to hold fourteen statements.
 
-`wgctrl.New()` succeeds for any user — it only records where to look — so on
-darwin that branch does not fire. Reaching the root-only sockets under
-`/var/run/wireguard` is `Read`'s problem, which is where the "are you root?"
-hint lives and where a fake client exercises both outcomes. That `NewReader`
-works without privileges is itself pinned by a test, so a future wgctrl that
-changed this would be caught rather than silently reporting the wrong problem.
+The three system calls behind them are injected now: an interface for the
+WireGuard client, function fields for `net.Interfaces` and `Interface.Addrs`, a
+configurable binary path for `osascript`. Each is reached through one line that
+does nothing but call out, and that line is itself injected — `wg.opener`
+exists for exactly that reason.
 
-This section used to hold fourteen statements. The three system calls behind
-them — the WireGuard client, `net.Interfaces`, and `osascript` — are now
-injected: an interface for the first, function fields for the second, a
-configurable binary path for the third. The tests check that tun-manager
-handles what each returns, which is the boundary that matters; whether the
-system call itself works is not this suite's business.
+The tests check that tun-manager handles what each returns, which is the
+boundary that matters. Whether the system call works is not this suite's
+business, and pretending to test it would only have tested the mock.
+
+`internal/wg`, `internal/netctx` and `internal/notify` are at 100%, along with
+`internal/format` and `internal/probe`.
 
 ## Entry point and composition root
 
@@ -111,10 +110,10 @@ point.
 
 **Cross-package attribution.** By default `go test` only credits the package
 under test. Measured with `-coverpkg` over the whole module, the total moves
-from 93.7% to 93.8%: one case changes, `app.Up`, whose "unknown tunnel" branch
+from 93.8% to 94.0%: one case changes, `app.Up`, whose "unknown tunnel" branch
 is covered from `main_test.go`. The rest of this document holds either way.
 
-**Statements, not behaviour.** 93.7% counts statements executed, not outcomes
+**Statements, not behaviour.** 93.8% counts statements executed, not outcomes
 asserted. A line reached by a test that checks nothing counts the same as one
 pinned by three assertions. The floor in the Makefile guards against coverage
 rotting, not against tests that do not test.

@@ -151,12 +151,22 @@ type CtrlReader struct {
 	client Client
 }
 
+// opener opens a control client.
+//
+// wgctrl.New is a package function and cannot be replaced, but the one line
+// that calls it can be, which is enough to drive the failure path.
+type opener func() (Client, error)
+
 // NewReader opens the WireGuard control client.
 //
 // This succeeds for any user: the client only records where to look. Reaching
 // the sockets is Read's problem, and that is where the privilege shows up.
-func NewReader() (*CtrlReader, error) {
-	c, err := wgctrl.New()
+func NewReader() (*CtrlReader, error) { return newReader(openWgctrl) }
+
+func openWgctrl() (Client, error) { return wgctrl.New() }
+
+func newReader(open opener) (*CtrlReader, error) {
+	c, err := open()
 	if err != nil {
 		return nil, fmt.Errorf("open the wireguard control client: %w", err)
 	}

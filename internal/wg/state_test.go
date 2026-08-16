@@ -322,3 +322,29 @@ func TestNewReaderNeedsNoPrivilege(t *testing.T) {
 		t.Error("client is nil")
 	}
 }
+
+func TestNewReaderWiresTheClientItWasGiven(t *testing.T) {
+	client := &fakeClient{}
+
+	r, err := newReader(func() (Client, error) { return client, nil })
+	if err != nil {
+		t.Fatalf("newReader: %v", err)
+	}
+
+	if r.client != client {
+		t.Error("the reader is not using the client the opener returned")
+	}
+}
+
+func TestNewReaderWrapsAnOpenFailure(t *testing.T) {
+	boom := errors.New("no control socket directory")
+
+	_, err := newReader(func() (Client, error) { return nil, boom })
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "wireguard") {
+		t.Errorf("err = %q, want it to say what failed to open", err)
+	}
+}
