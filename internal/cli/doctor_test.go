@@ -27,6 +27,9 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 	cfg := profile.Default()
 	cfg.ConfigDir = confDir
 	cfg.WgQuick = wgQuick
+	// Pinned to a temporary directory: leaving the default would make these
+	// checks depend on whether WireGuard happens to be running on the machine.
+	cfg.RunDir = t.TempDir()
 	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
 
 	return cfg, privdrop.User{Username: "operator", HomeDir: "/home/operator", UID: 1000, Demotable: true}

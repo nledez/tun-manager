@@ -74,6 +74,11 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 
 	cfg := profile.Default()
 	cfg.ConfigDir = dir
+	// The defaults point at a Homebrew wg-quick and at /var/run/wireguard.
+	// Depending on either would make these tests pass or fail according to what
+	// happens to be installed on the machine running them.
+	cfg.WgQuick = fakeExecutable(t)
+	cfg.RunDir = t.TempDir()
 	cfg.Groups = map[string][]string{
 		profile.GroupNeeded: {"alpha", "bravo"},
 		profile.GroupAll:    {"alpha", "bravo"},
@@ -97,6 +102,16 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 			}, nil
 		},
 	}
+}
+
+// fakeExecutable stands in for wg-quick so that doctor has something to find.
+func fakeExecutable(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "wg-quick")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
 }
 
 func output(e *env) string { return e.out.(*strings.Builder).String() }
@@ -164,7 +179,7 @@ func TestDoctorSucceedsWhenEveryCheckPasses(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 
 	if err := e.run([]string{"doctor"}); err != nil {
-		t.Fatalf("doctor: %v", err)
+		t.Fatalf("doctor: %v\n%s", err, output(e))
 	}
 	if !strings.Contains(output(e), "config dir") {
 		t.Errorf("doctor printed no report:\n%s", output(e))
@@ -484,7 +499,7 @@ func TestDoctorReportsTheVersion(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 
 	if err := e.run([]string{"doctor"}); err != nil {
-		t.Fatalf("doctor: %v", err)
+		t.Fatalf("doctor: %v\n%s", err, output(e))
 	}
 
 	if !strings.Contains(output(e), version) {
