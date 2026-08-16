@@ -3,30 +3,47 @@ name: CI
 on:
   push:
     branches: [main]
+    # A release is a tag. Cutting it hangs off this workflow, so the whole
+    # suite runs before anything is published.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
-
-# A superseded run tells you nothing; let the newest push win.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+# A superseded push tells you nothing, so the newest one wins.
+#
+# A tag is never cancelled: an interrupted release publishes nothing, and the
+# tag would have to be deleted and cut again to retry.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CGO_ENABLED: "0"
+
 jobs:
+  # macOS is the only platform this targets: wg-quick, osascript and
+  # /var/run/wireguard are all darwin. Testing elsewhere would be a
+  # comfortable lie.
   test:
-    # macOS is the only platform this targets: wg-quick, osascript and
-    # /var/run/wireguard are all darwin. Testing elsewhere would be a
-    # comfortable lie.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          # go.mod states the minimum; CI builds with the newest patch release
+          # so that a fixed standard-library vulnerability is picked up without
+          # editing go.mod.
+          go-version: stable
+          check-latest: true
           cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       - name: Check formatting
         run: |
@@ -40,46 +57,57 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # darwin always links libSystem, so the race runtime works even with
+      # CGO_ENABLED=0 above. On other platforms this would need cgo.
       - name: Test with the race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
 
+      - name: Verify third-party notices are up to date
+        run: |
+          go run ./internal/tools/notices -o THIRD-PARTY-NOTICES.txt ./...
+          git diff --exit-code -- THIRD-PARTY-NOTICES.txt
+
+      # Through the Makefile, so the floor CI enforces is the same one a local
+      # `make cover` enforces.
       - name: Coverage
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+        run: make cover
 
       - name: Coverage summary
-        run: |
-          go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+        run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
 
       # Reports the total and, on a pull request, the coverage of the change
       # itself as a comment.
       - name: Publish coverage
-        uses: shogo82148/actions-goveralls@v1
+        uses: shogo82148/actions-goveralls@8781f5dd05b691c4dd042d5e859c11c73e0104fa # v1.11.1
         with:
           path-to-profile: coverage.out
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   lint:
+    # Also macOS: privdrop uses syscall.Credential, which does not type-check
+    # under GOOS=linux, so the linter would not even see that package.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
           cache: true
-
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # Must be built with a Go at least as new as go.mod targets, or it
+          # refuses the module outright instead of linting it.
+          version: v2.12.2
 
   vulnerabilities:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
           cache: true
 
       # Reports only the vulnerabilities actually reachable from this code,
@@ -89,23 +117,61 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
+  # The release attaches both darwin architectures, so both have to compile
+  # here. A release must not be the first time a target build is attempted.
   build:
-    # A release must not be the first time the target build is attempted.
     runs-on: macos-latest
     strategy:
       matrix:
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
           cache: true
 
       - name: Build darwin/${{ matrix.goarch }}
         env:
-          CGO_ENABLED: 0
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o /dev/null .
+        run: go build -trimpath -ldflags='-s -w' -o /dev/null .
+
+  # Cuts the GitHub release for a tag. It waits for every other job, because a
+  # binary nobody has tested is worse than no binary: whoever downloads it has
+  # no way to know the suite was red.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, lint, vulnerabilities, build]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      # For the build provenance attestation.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser builds the changelog from the commits since the previous
+          # tag, so it needs the whole history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lets anyone verify a downloaded archive was built by this workflow from
+      # this commit, with `gh attestation verify`.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
