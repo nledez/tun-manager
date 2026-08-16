@@ -8,7 +8,14 @@
 // the licenses we are genuinely bound by.
 //
 // Apache-2.0 section 4 requires redistributing NOTICE files with binary
-// distributions, so the generated file ships in the container image.
+// distributions, so the generated file ships in the release archives.
+//
+// NOT TESTED: this package has no unit tests and is excluded from the coverage
+// profile by COVER_PKGS in the Makefile. It is a build-time generator: it never
+// ships in the binary, and its only output is THIRD-PARTY-NOTICES.txt, which
+// `make notices-check` regenerates and compares on every build and in CI. That
+// catches a regression; it does not catch a licence this never collected in the
+// first place. See docs/coverage-gaps.md, "The notices generator".
 package main
 
 import (

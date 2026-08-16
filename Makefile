@@ -76,7 +76,7 @@ release:
 # in a commit message is an excuse rather than a decision, so check the section
 # exists.
 markers-check:
-	@grep -rho 'docs/coverage-gaps.md, "[^"]*"' --include='*_test.go' . \
+	@grep -rho 'docs/coverage-gaps.md, "[^"]*"' --include='*.go' . \
 		| sed 's/.*"\(.*\)"/\1/' | sort -u | while read -r section; do \
 		grep -qF "### $$section" docs/coverage-gaps.md \
 			|| { echo "no \"$$section\" section in docs/coverage-gaps.md"; exit 1; }; \

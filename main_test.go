@@ -462,18 +462,6 @@ func TestUpReportsThatNothingWasNeeded(t *testing.T) {
 	}
 }
 
-// NOT TESTED: main itself. It calls os.Exit, so reaching it means starting a
-// subprocess to confirm that Go can start a program and that a non-zero return
-// becomes a non-zero exit code. Everything it reaches is covered below and in
-// TestNewEnvReadsTheProcess. See docs/coverage-gaps.md, "main".
-//
-// NOT TESTED: the branch in build that wraps a failure of wg.NewReader. That
-// call succeeds for any user on darwin, so the branch guards against a platform
-// where opening the client can fail; forcing it would mean threading an opener
-// through the composition root for one defensive line. NewReader is covered on
-// both paths in its own package. See docs/coverage-gaps.md, "build and the
-// WireGuard client".
-
 func TestNewEnvReadsTheProcess(t *testing.T) {
 	e := newEnv()
 

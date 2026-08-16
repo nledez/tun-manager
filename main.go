@@ -63,6 +63,11 @@ type env struct {
 	interactive func(context.Context, *app.App, *notify.Notifier) error
 }
 
+// NOT TESTED: this calls os.Exit, so covering it means starting a subprocess to
+// confirm that Go can start a program and that a non-zero return becomes a
+// non-zero exit code. Everything it reaches is covered: newEnv wires the
+// process, run dispatches, and main_test.go drives both directly.
+// See docs/coverage-gaps.md, "main".
 func main() {
 	if err := newEnv().run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", appName, err)
@@ -147,6 +152,13 @@ func build() (*app.App, error) {
 		return nil, err
 	}
 	reader, err := wg.NewReader()
+	// NOT TESTED: this branch. Opening the client succeeds for any user on
+	// darwin - it only records where to look - so this guards against a
+	// platform, or a future wgctrl, where it can fail. Reaching it would mean
+	// threading an opener through here, a seam inside the seam env already
+	// provides, for one defensive line; wg.NewReader is covered on both paths
+	// in its own package. See docs/coverage-gaps.md, "build and the WireGuard
+	// client".
 	if err != nil {
 		return nil, err
 	}
