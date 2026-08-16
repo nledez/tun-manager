@@ -206,7 +206,8 @@ func (e *env) runTUI() error {
 	notifier := e.notifier
 	if notifier == nil {
 		if _, u, err := e.config(); err == nil {
-			notifier = &notify.Notifier{User: u, Enabled: a.Config.Notify}
+			n := notify.New(u, a.Config.Notify)
+			notifier = &n
 		}
 	}
 

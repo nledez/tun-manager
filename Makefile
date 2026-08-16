@@ -10,7 +10,7 @@ COVERAGE_MIN := 99
 # counting them would only dilute the number this floor guards.
 COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt notices notices-check markers-check run install clean release release-check
+.PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check run install clean release release-check
 
 all: vet lint test notices-check markers-check build
 
@@ -53,6 +53,12 @@ run: build
 
 install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/tun-manager
+
+# The notification icon is carried in the binary, so an installed tun-manager
+# has one without an install step. Regenerate it after changing the artwork.
+icon:
+	sips -Z 256 assets/tun-manager.png --out internal/notify/icon.png >/dev/null
+	@ls -l internal/notify/icon.png
 
 # The licenses of every module linked into the binary. BSD-3-Clause clause 2
 # and the equivalent clauses of the dependencies require shipping them.

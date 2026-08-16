@@ -6,7 +6,11 @@ package notify
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -45,25 +49,84 @@ func Diff(prev, next map[string]wg.Health) []Transition {
 	return out
 }
 
-// defaultBinary is what posts a notification on macOS.
-const defaultBinary = "/usr/bin/osascript"
+// The two ways a notification reaches the desktop. terminal-notifier can be
+// told which icon to show; osascript cannot - "display notification" has no
+// clause for one, so it shows whatever icon the sender happens to have.
+const (
+	preferred = "terminal-notifier"
+	fallback  = "/usr/bin/osascript"
+)
+
+// icon is carried in the binary so an installed tun-manager has one without an
+// install step and without a file that can go missing. Regenerate it from the
+// full-size image with `make icon`.
+//
+//go:embed icon.png
+var icon []byte
 
 // Notifier posts notifications to the user's session.
 type Notifier struct {
 	User    privdrop.User
 	Enabled bool
 
+	// Icon is the image the notification shows, when the command in use can
+	// display one.
+	Icon string
+
 	// Binary is the command that posts a notification. It is a field so a test
-	// can point it at a script that records its arguments rather than at
-	// osascript, which would reach the real desktop. Empty means the real one.
+	// can point it at a script that records its arguments rather than at the
+	// real thing, which would reach the desktop. Empty means whichever of the
+	// two is installed.
 	Binary string
 }
 
-func (n Notifier) binary() string {
-	if n.Binary != "" {
-		return n.Binary
+// New writes the icon out and returns a notifier that can show it.
+func New(u privdrop.User, enabled bool) Notifier {
+	return Notifier{User: u, Enabled: enabled, Icon: writeIcon(u)}
+}
+
+// writeIcon puts the embedded image where the notification command can read it,
+// as the pre-sudo user who will be running that command. A failure is not worth
+// reporting: a notification with no icon beats no notification.
+func writeIcon(u privdrop.User) string {
+	dir := u.CacheDir("tun-manager")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
 	}
-	return defaultBinary
+	path := filepath.Join(dir, "icon.png")
+	if err := os.WriteFile(path, icon, 0o644); err != nil {
+		return ""
+	}
+	_ = u.Chown(dir)
+	_ = u.Chown(path)
+	return path
+}
+
+// command picks how to post one transition. The tool is identified by what it
+// is called, which is also how a test points either form at a script of its own.
+func (n Notifier) command(t Transition) (string, []string) {
+	path := n.Binary
+	if path == "" {
+		if found, err := exec.LookPath(preferred); err == nil {
+			path = found
+		} else {
+			path = fallback
+		}
+	}
+
+	if strings.Contains(filepath.Base(path), preferred) {
+		return path, n.notifierArgs(t)
+	}
+	return path, osascriptArgs(t)
+}
+
+func (n Notifier) notifierArgs(t Transition) []string {
+	title, body := t.Message()
+	args := []string{"-title", "tun-manager", "-subtitle", title, "-message", body}
+	if n.Icon != "" {
+		args = append(args, "-appIcon", n.Icon)
+	}
+	return args
 }
 
 // Notify posts one notification per transition. Failures are silent: a missing
@@ -73,13 +136,14 @@ func (n Notifier) Notify(ctx context.Context, transitions []Transition) {
 		return
 	}
 	for _, t := range transitions {
+		path, args := n.command(t)
 		// Demoted to the pre-sudo user: root has no GUI session to talk to.
-		_ = n.User.CommandContext(ctx, n.binary(), argv(t)...).Run()
+		_ = n.User.CommandContext(ctx, path, args...).Run()
 	}
 }
 
-// argv builds the osascript arguments for a transition.
-func argv(t Transition) []string {
+// osascriptArgs builds the AppleScript for a transition.
+func osascriptArgs(t Transition) []string {
 	title, body := t.Message()
 	script := fmt.Sprintf(
 		`display notification "%s" with title "tun-manager" subtitle "%s"`,

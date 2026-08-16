@@ -72,6 +72,12 @@ func (u User) ConfigDir(app string) string {
 	return filepath.Join(u.HomeDir, ".config", app)
 }
 
+// CacheDir returns the per-application cache directory of the user, for things
+// the program can regenerate.
+func (u User) CacheDir(app string) string {
+	return filepath.Join(u.HomeDir, ".cache", app)
+}
+
 // CommandContext builds a command that runs as the pre-sudo user when possible,
 // so that GUI-facing tools reach the right session. Without a demotable user
 // the command is returned unchanged and simply runs as root.

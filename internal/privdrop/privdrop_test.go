@@ -229,3 +229,16 @@ func TestResolveRejectsANonNumericGID(t *testing.T) {
 		t.Fatal("Resolve accepted a non-numeric gid, want an error")
 	}
 }
+
+func TestCacheDirSitsUnderTheRealUserHome(t *testing.T) {
+	// Under sudo, HOME points at /var/root; anything the program writes for the
+	// user to read has to land in their home, not root's.
+	u := User{Username: "operator", HomeDir: "/home/operator"}
+
+	got := u.CacheDir("tun-manager")
+
+	want := filepath.Join("/home/operator", ".cache", "tun-manager")
+	if got != want {
+		t.Errorf("CacheDir = %q, want %q", got, want)
+	}
+}
