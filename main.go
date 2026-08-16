@@ -234,30 +234,16 @@ func (e *env) runUp(args []string) error {
 		return errors.New("--group and explicit tunnel names are mutually exclusive")
 	}
 
-	a, err := e.build()
-	if err != nil {
-		return err
-	}
-	ctx, stop := signalled()
-	defer stop()
-
-	if *group != "" {
-		results, err := a.UpGroup(ctx, *group)
-		if err != nil {
-			return err
+	return e.act(func(ctx context.Context, a *app.App) ([]wg.Result, error) {
+		if *group != "" {
+			return a.UpGroup(ctx, *group)
 		}
-		return cli.WriteResults(e.out, results)
-	}
-
-	view, err := a.View()
-	if err != nil {
-		return err
-	}
-	results, err := a.Up(ctx, view, fs.Args())
-	if err != nil {
-		return err
-	}
-	return cli.WriteResults(e.out, results)
+		view, err := a.View()
+		if err != nil {
+			return nil, err
+		}
+		return a.Up(ctx, view, fs.Args())
+	})
 }
 
 func (e *env) runDown(args []string) error {
@@ -273,26 +259,30 @@ func (e *env) runDown(args []string) error {
 		return errors.New("--all and explicit tunnel names are mutually exclusive")
 	}
 
+	return e.act(func(ctx context.Context, a *app.App) ([]wg.Result, error) {
+		if *all {
+			return a.DownAll(ctx)
+		}
+		view, err := a.View()
+		if err != nil {
+			return nil, err
+		}
+		return a.Down(ctx, view, fs.Args())
+	})
+}
+
+// act opens the application, runs one batch of operations under a context an
+// interrupt can cancel, and reports the outcome.
+func (e *env) act(fn func(context.Context, *app.App) ([]wg.Result, error)) error {
 	a, err := e.build()
 	if err != nil {
 		return err
 	}
+
 	ctx, stop := signalled()
 	defer stop()
 
-	if *all {
-		results, err := a.DownAll(ctx)
-		if err != nil {
-			return err
-		}
-		return cli.WriteResults(e.out, results)
-	}
-
-	view, err := a.View()
-	if err != nil {
-		return err
-	}
-	results, err := a.Down(ctx, view, fs.Args())
+	results, err := fn(ctx, a)
 	if err != nil {
 		return err
 	}

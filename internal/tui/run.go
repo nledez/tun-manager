@@ -30,10 +30,10 @@ func Run(ctx context.Context, a *app.App, n *notify.Notifier, opts ...Option) er
 	}
 
 	_, err := tea.NewProgram(New(a, n), programOpts...).Run()
-	if err != nil && ctx.Err() != nil {
-		// A cancelled context is how the program is asked to stop; that is not
-		// a failure worth reporting.
-		return nil
+	if ctx.Err() != nil {
+		// An interrupt is how the program is asked to stop, so whatever the
+		// event loop reported on its way out is not a failure to report.
+		return nil //nolint:nilerr // deliberate: cancellation is not an error
 	}
 	return err
 }

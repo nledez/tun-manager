@@ -1,39 +1,74 @@
-version: 2
+version: "2"
 
 linters:
+  default: standard
   enable:
-    # Unhandled errors, which in this codebase mostly means an ignored
-    # wg-quick failure.
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
+    - bodyclose
+    # Contexts get created and dropped easily in a Bubble Tea command, which
+    # runs off the update loop.
+    - contextcheck
+    - copyloopvar
+    # Catches the fmt.Errorf/%w mistakes that make errors.Is fail silently.
+    - errorlint
+    - gocritic
+    - misspell
+    # A returned nil error next to a non-nil one is how a failed wg-quick
+    # would silently read as a success.
+    - nilerr
+    # Commands without a context cannot be given up on. osascript with no GUI
+    # session to talk to is exactly that case.
+    - noctx
+    - perfsprint
+    - revive
+    - unconvert
     # Dead parameters and results, which accumulate fast behind interfaces.
     - unparam
-    # Shadowed or mishandled error values.
-    - errorlint
-    # Context passed but never used, or created without being cancelled.
-    - noctx
-    - bodyclose
-    # Catches the fmt.Errorf/%w mistakes that make errors.Is fail silently.
-    - perfsprint
-    - misspell
+    - usestdlibvars
+    - wastedassign
 
   settings:
     errcheck:
+      check-type-assertions: true
       # Notifications are best-effort by design; the TUI must not care.
       exclude-functions:
         - (*os/exec.Cmd).Run
+    govet:
+      enable-all: true
+      disable:
+        # Reordering struct fields for packing would scramble types whose
+        # field order is the documentation.
+        - fieldalignment
+    revive:
+      rules:
+        - name: exported
+        - name: context-as-argument
+        - name: error-strings
+        - name: indent-error-flow
+        - name: var-naming
     staticcheck:
       checks: ["all"]
 
   exclusions:
     rules:
-      # Tests deliberately ignore returned values to keep assertions readable.
-      - path: _test\.go
-        linters: [errcheck, unparam, noctx]
+      # Tests deliberately ignore returned values to keep assertions readable,
+      # and build ad-hoc errors rather than declaring sentinels nobody matches.
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - noctx
+          - unparam
 
 formatters:
   enable:
     - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - ledez.net/tun-manager
+
+issues:
+  # Report everything rather than a truncated sample: a linter run that hides
+  # findings trains you to ignore it.
+  max-issues-per-linter: 0
+  max-same-issues: 0
