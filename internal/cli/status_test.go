@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,30 @@ func TestStatusJSONUsesTheConfiguredEndpointWhenDown(t *testing.T) {
 
 	if !strings.Contains(out.String(), "gateway.example:51824") {
 		t.Errorf("output missing the configured endpoint of a down tunnel:\n%s", out.String())
+	}
+}
+
+// failingWriter refuses every write, like a closed pipe.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestStatusTableReportsAWriteFailure(t *testing.T) {
+	// `tun-manager status | head` closes the pipe early; the exit code must not
+	// claim success.
+	boom := errors.New("broken pipe")
+
+	err := WriteStatus(failingWriter{err: boom}, sampleView(), false)
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
+
+func TestStatusJSONReportsAWriteFailure(t *testing.T) {
+	boom := errors.New("broken pipe")
+
+	if err := WriteStatus(failingWriter{err: boom}, sampleView(), true); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
 	}
 }

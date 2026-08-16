@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,9 +27,15 @@ import (
 const alphaKey = "JTI/TFlmc4CNmqe0wc7b6PUCDxwpNkNQXWp3hJGeq7g="
 const bravoKey = "SldkcX6LmKWyv8zZ5vMADRonNEFOW2h1go+cqbbD0N0="
 
-type fakeReader struct{ state wg.State }
+type fakeReader struct {
+	state wg.State
+	reads atomic.Int32
+}
 
-func (r fakeReader) Read() (wg.State, error) { return r.state, nil }
+func (r *fakeReader) Read() (wg.State, error) {
+	r.reads.Add(1)
+	return r.state, nil
+}
 
 type fakeRunner struct {
 	mu    sync.Mutex
@@ -90,7 +97,7 @@ func testApp(t *testing.T, runner wg.Runner, live ...string) *app.App {
 
 	return &app.App{
 		Config: cfg,
-		Reader: fakeReader{state: state},
+		Reader: &fakeReader{state: state},
 		Pinger: deadPinger{},
 		Lister: func() ([]netctx.Iface, error) {
 			return []netctx.Iface{{Name: "en0", Addrs: []netip.Prefix{netip.MustParsePrefix("203.0.113.9/24")}}}, nil
@@ -223,3 +230,60 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 }
 
 var _ = probe.Result{}
+
+func TestTheTableRefreshesOnItsOwn(t *testing.T) {
+	// The periodic refresh is what makes the table trustworthy without pressing
+	// anything. Nothing else exercises the tick.
+	a := testApp(t, &fakeRunner{}, alphaKey)
+	a.Config.RefreshInterval = 20 * time.Millisecond
+	reader := a.Reader.(*fakeReader)
+
+	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	waitFor(t, tm, "alpha")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for reader.reads.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
+
+	if got := reader.reads.Load(); got < 3 {
+		t.Errorf("the state was read %d time(s), want the tick to keep refreshing", got)
+	}
+}
+
+func TestTogglingATunnelThatVanishedIsReported(t *testing.T) {
+	// The table is a snapshot; a config can be removed between a refresh and
+	// the key press acting on it.
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	m.view = viewOf(row("ghost", profile.GroupNeeded, wg.Down))
+
+	msg, ok := m.toggleTargets()().(opMsg)
+	if !ok {
+		t.Fatalf("got %#v, want an opMsg", msg)
+	}
+
+	if msg.err == nil {
+		t.Fatal("err = nil, want the unknown tunnel reported")
+	}
+	if !strings.Contains(msg.err.Error(), "ghost") {
+		t.Errorf("err = %v, want it to name the tunnel", msg.err)
+	}
+}
+
+func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {
+	// Quitting and being interrupted are not failures. Anything else is, and a
+	// program that crashed must not exit zero: an application with no state
+	// reader makes the very first refresh panic inside its command.
+	a := testApp(t, &fakeRunner{})
+	a.Reader = nil
+
+	err := Run(context.Background(), a, nil, WithoutTerminal())
+
+	if err == nil {
+		t.Fatal("Run returned nil after the program crashed, want the failure reported")
+	}
+}

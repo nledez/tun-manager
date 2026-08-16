@@ -62,11 +62,6 @@ func TestWriteResultsSaysNothingHappenedOnAnEmptyRun(t *testing.T) {
 	}
 }
 
-// failingWriter refuses every write, like a closed pipe.
-type failingWriter struct{ err error }
-
-func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
-
 func TestWriteResultsReportsAWriteFailure(t *testing.T) {
 	// `tun-manager down --all | head` closes the pipe early; the exit code must
 	// not claim success.

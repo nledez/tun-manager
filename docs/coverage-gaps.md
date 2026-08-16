@@ -1,6 +1,6 @@
 # Coverage gaps
 
-What the test suite does not reach, and why. 55 of 895 statements, so 93.8%.
+What the test suite does not reach, and why. 34 of 896 statements, so 96.2%.
 
 Regenerate the numbers with:
 
@@ -15,42 +15,18 @@ not shipped code, and `make notices-check` exercises it end to end on every run.
 
 ## Open
 
-The gaps worth closing. Everything below this list is deliberate.
+Nothing. Every gap this file listed has been closed, and seven of the eleven
+packages are at 100%: `format`, `netctx`, `notify`, `privdrop`, `probe`, `tui`
+and `wg`.
 
-- [ ] `tui.onView` — the notification branch. `m.notifier` is nil in every TUI
-      test, so `notify.Diff` is tested but its wiring into the update loop is
-      not. 6 statements.
-- [ ] `tui.onKey` — the `n` key. Every other binding is exercised. 1 statement.
-- [ ] `tui.cells` — the live endpoint replacing the configured one, and the
-      selection mark. 2 statements.
-- [ ] `tui.logPane` — the pane truncating past a third of the screen, and the
-      styling of a failed entry. 2 statements.
-- [ ] `tui.Model` command closures — the `a == nil` guards in `refresh`, `ping`
-      and `operate`. The tests build `New(nil, nil)` but never run the returned
-      commands. 3 statements, low value: the guards exist for those tests.
-- [ ] `tui.toggleTargets` — the error path when a tunnel disappears mid-batch.
-      1 statement.
-- [ ] `privdrop.Resolve` — a `user.User` with a non-numeric uid or gid. The fake
-      directory only returns well-formed entries. 2 statements.
-- [ ] `profile.GroupOf` — the `default` fallback of an override whose
-      `group_when` has no key for the current context. The sample configuration
-      always defines both. 1 statement.
-- [ ] `cli.writeTable` — a failing writer. `WriteResults` has this test, using a
-      closed pipe; `WriteStatus` does not. 1 statement.
+Two of them were closed by fixing what the missing test exposed rather than by
+writing a test around the existing behaviour:
 
-That is 19 statements, which would put the total near 96%.
-
-## Closed
-
-- [x] `netctx.System` — the host calls are fields now, so a test can make
-      either fail. The package is at 100%.
-- [x] `notify` — the notification command is a configurable path now, so the
-      tests exercise the real `privdrop.CommandContext` against a script that
-      records its arguments. The package is at 100%.
-- [x] `wg` — a `Client` interface stands in for `*wgctrl.Client`, and the one
-      line calling `wgctrl.New` is injected as an `opener`. Mocking the client
-      rather than the socket is the right boundary: whether wgctrl works is not
-      this suite's business. The package is at 100%.
+- The cursor overwrote the selection mark. Since a row is always selected under
+  the cursor, pressing space changed nothing on screen until you moved away.
+  The two marks now share a three-wide column.
+- The "are you root?" hint sat on `NewReader`, which succeeds for any user.
+  It moved to `Read`, where the root-only sockets are actually reached.
 
 ## Root, hardware, GUI
 
@@ -110,10 +86,10 @@ point.
 
 **Cross-package attribution.** By default `go test` only credits the package
 under test. Measured with `-coverpkg` over the whole module, the total moves
-from 93.8% to 94.0%: one case changes, `app.Up`, whose "unknown tunnel" branch
+from 96.2% to 96.3%: one case changes, `app.Up`, whose "unknown tunnel" branch
 is covered from `main_test.go`. The rest of this document holds either way.
 
-**Statements, not behaviour.** 93.8% counts statements executed, not outcomes
+**Statements, not behaviour.** 96.2% counts statements executed, not outcomes
 asserted. A line reached by a test that checks nothing counts the same as one
 pinned by three assertions. The floor in the Makefile guards against coverage
 rotting, not against tests that do not test.

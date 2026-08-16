@@ -205,3 +205,27 @@ func TestCommandContextStillDemotes(t *testing.T) {
 		t.Fatal("no credential set, want the command demoted")
 	}
 }
+
+func TestResolveRejectsANonNumericUID(t *testing.T) {
+	// os/user hands back whatever the directory holds; a uid that is not a
+	// number would otherwise be silently truncated to zero, which is root.
+	env := map[string]string{"SUDO_USER": "operator", "HOME": "/var/root"}
+	lookup := fakeLookup(map[string]*user.User{
+		"operator": {Username: "operator", Uid: "not-a-number", Gid: "1000", HomeDir: "/home/operator"},
+	})
+
+	if _, err := Resolve(mapEnv(env), lookup); err == nil {
+		t.Fatal("Resolve accepted a non-numeric uid, want an error")
+	}
+}
+
+func TestResolveRejectsANonNumericGID(t *testing.T) {
+	env := map[string]string{"SUDO_USER": "operator", "HOME": "/var/root"}
+	lookup := fakeLookup(map[string]*user.User{
+		"operator": {Username: "operator", Uid: "1000", Gid: "not-a-number", HomeDir: "/home/operator"},
+	})
+
+	if _, err := Resolve(mapEnv(env), lookup); err == nil {
+		t.Fatal("Resolve accepted a non-numeric gid, want an error")
+	}
+}

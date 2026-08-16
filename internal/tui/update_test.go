@@ -1,7 +1,11 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +15,7 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/format"
 	"ledez.net/tun-manager/internal/netctx"
+	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wg"
@@ -722,5 +727,192 @@ func TestNarrowTerminalsStillRenderARule(t *testing.T) {
 
 	if m.View() == "" {
 		t.Error("View is empty on a narrow terminal")
+	}
+}
+
+// notifierTo builds a notifier whose command records its arguments, so a test
+// can see what the update loop would have posted.
+func notifierTo(t *testing.T) (*notify.Notifier, func() []string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	binary := filepath.Join(dir, "osascript")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + log + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatalf("write %s: %v", binary, err)
+	}
+	read := func() []string {
+		data, err := os.ReadFile(log)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", log, err)
+		}
+		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	}
+	return &notify.Notifier{Enabled: true, Binary: binary}, read
+}
+
+func viewOf(rows ...app.Row) app.View {
+	return app.View{Rows: rows, Taken: time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)}
+}
+
+func TestAStateChangeIsNotified(t *testing.T) {
+	notifier, recorded := notifierTo(t)
+	m := New(nil, notifier)
+	m.width, m.height = 120, 30
+
+	// First refresh: nothing to compare against, so nothing is posted.
+	next, cmd := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Up))})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("the first refresh produced a command, want silence with no previous state")
+	}
+
+	// Second refresh: alpha went down.
+	_, cmd = m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
+	if cmd == nil {
+		t.Fatal("no command for a tunnel going down, want a notification")
+	}
+	cmd()
+
+	got := recorded()
+	if len(got) != 2 {
+		t.Fatalf("recorded %v, want one call of two arguments", got)
+	}
+	if !strings.Contains(got[1], "alpha down") {
+		t.Errorf("script = %q, want it to describe alpha going down", got[1])
+	}
+}
+
+func TestAnUnchangedStateIsNotNotified(t *testing.T) {
+	notifier, recorded := notifierTo(t)
+	m := New(nil, notifier)
+
+	rows := viewOf(row("alpha", profile.GroupNeeded, wg.Up))
+	next, _ := m.Update(viewMsg{view: rows})
+	m = next.(Model)
+	_, cmd := m.Update(viewMsg{view: rows})
+
+	if cmd != nil {
+		t.Error("a command was produced for an unchanged state")
+	}
+	if got := recorded(); len(got) != 0 {
+		t.Errorf("recorded %v, want nothing", got)
+	}
+}
+
+func TestNKeyStartsTheNeededGroup(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	m = key(m, "n")
+
+	if !m.busy {
+		t.Error("busy = false after `n`, want the group being started")
+	}
+}
+
+func TestCellsPreferTheLiveEndpoint(t *testing.T) {
+	// The resolved endpoint is more useful than a DNS name when something is
+	// wrong, so it wins over the configured one while the tunnel is up.
+	m := loadedModel(threeRows...)
+	r := liveRow("alpha", profile.GroupNeeded, wg.Up)
+	r.Peer.Endpoint = "192.0.2.10:51820"
+
+	if got := m.cells(r).Endpoint; got != "192.0.2.10:51820" {
+		t.Errorf("Endpoint = %q, want the live one", got)
+	}
+}
+
+func TestASelectionShowsUnderTheCursorThatMadeIt(t *testing.T) {
+	// Selecting happens on the row the cursor is on, so a mark the cursor hides
+	// means pressing space looks like it did nothing.
+	m := loadedModel(threeRows...)
+
+	m = key(m, " ")
+
+	if !strings.Contains(m.View(), "✓") {
+		t.Errorf("no selection mark in the table:\n%s", m.View())
+	}
+}
+
+func TestTheCursorAndTheSelectionAreBothVisible(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	m = key(m, " ")
+
+	if !strings.Contains(m.View(), "▸✓") {
+		t.Errorf("the cursor and the mark are not shown together:\n%s", m.View())
+	}
+}
+
+func TestASelectionSurvivesTheCursorMovingAway(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, " ")
+
+	m = key(m, "j")
+
+	view := m.View()
+	if !strings.Contains(view, "✓") {
+		t.Errorf("the mark vanished when the cursor left:\n%s", view)
+	}
+	if strings.Contains(view, "▸✓") {
+		t.Errorf("the cursor is still drawn on the selected row:\n%s", view)
+	}
+}
+
+func TestTheLogPaneKeepsOnlyItsTail(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.height = 12 // four log lines
+	m = key(m, "l")
+
+	for i := 0; i < 10; i++ {
+		next, _ := m.Update(opMsg{results: []wg.Result{
+			{Tunnel: fmt.Sprintf("tunnel%d", i), Action: "up"},
+		}})
+		m = next.(Model)
+	}
+
+	view := m.View()
+	if strings.Contains(view, "tunnel0") {
+		t.Errorf("the oldest entry is still on screen:\n%s", view)
+	}
+	if !strings.Contains(view, "tunnel9") {
+		t.Errorf("the newest entry is missing:\n%s", view)
+	}
+}
+
+func TestAFailedOperationIsRenderedInTheLogPane(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	next, _ := m.Update(opMsg{results: []wg.Result{
+		{Tunnel: "alpha", Action: "up", Err: errors.New("exit status 1")},
+	}})
+	m = next.(Model)
+
+	// The failure opens the pane on its own.
+	if !strings.Contains(m.View(), "exit status 1") {
+		t.Errorf("the failure is not on screen:\n%s", m.View())
+	}
+}
+
+func TestCommandsOfAModelWithoutAnApplicationAreHarmless(t *testing.T) {
+	// New(nil, nil) is how the pure Update tests build a model. The commands it
+	// returns must not dereference the application that is not there.
+	m := New(nil, nil)
+
+	if msg, ok := m.refresh()().(viewMsg); !ok || msg.err != nil {
+		t.Errorf("refresh returned %#v, want an empty viewMsg", msg)
+	}
+	if msg, ok := m.ping()().(pingMsg); !ok || len(msg.results) != 0 {
+		t.Errorf("ping returned %#v, want an empty pingMsg", msg)
+	}
+	cmd := m.operate(func(context.Context, *app.App) ([]wg.Result, error) {
+		t.Fatal("the operation ran without an application")
+		return nil, nil
+	})
+	if msg, ok := cmd().(opMsg); !ok || len(msg.results) != 0 {
+		t.Errorf("operate returned %#v, want an empty opMsg", msg)
 	}
 }

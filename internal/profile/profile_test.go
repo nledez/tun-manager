@@ -228,3 +228,28 @@ func TestLoadRejectsInvalidYAML(t *testing.T) {
 		t.Fatal("Load succeeded on malformed YAML, want error")
 	}
 }
+
+func TestGroupOfFallsBackToTheDefaultKey(t *testing.T) {
+	// An override lists the contexts it cares about. On any other network the
+	// default key decides, which is what makes a two-line override enough.
+	cfg := loadString(t, sampleYAML)
+
+	if got := cfg.GroupOf("delta", "airport"); got != "needed" {
+		t.Errorf("GroupOf(delta, airport) = %q, want the default key %q", got, "needed")
+	}
+}
+
+func TestGroupOfIsEmptyWhenTheOverrideHasNoDefault(t *testing.T) {
+	cfg := loadString(t, `
+groups:
+  needed: [alpha]
+overrides:
+  - tunnel: delta
+    group_when:
+      office: extra
+`)
+
+	if got := cfg.GroupOf("delta", "airport"); got != "" {
+		t.Errorf("GroupOf(delta, airport) = %q, want empty", got)
+	}
+}

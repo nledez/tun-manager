@@ -28,7 +28,7 @@ var (
 
 // column widths, everything but the endpoint which takes what is left
 const (
-	wMark     = 2
+	wMark     = 3
 	wName     = 14
 	wGroup    = 7
 	wState    = 8
@@ -160,13 +160,18 @@ func (m Model) cells(r app.Row) rowCells {
 }
 
 func (m Model) line(i int, r app.Row) string {
-	mark := " "
-	if m.selected[r.Tunnel.Name] {
-		mark = "✓"
-	}
+	// Two independent facts in one column: where the cursor is, and what is
+	// selected. Letting the cursor overwrite the tick would mean pressing space
+	// changes nothing on screen, since the selection is always made on the row
+	// the cursor is on.
+	cursor, tick := " ", " "
 	if i == m.cursor {
-		mark = cursorStyle.Render("▸")
+		cursor = cursorStyle.Render("▸")
 	}
+	if m.selected[r.Tunnel.Name] {
+		tick = "✓"
+	}
+	mark := cursor + tick
 
 	c := m.cells(r)
 	line := m.columns(mark, c.Name, c.Group, c.State, c.Handshake, c.Transfer, c.Ping, c.Endpoint)
