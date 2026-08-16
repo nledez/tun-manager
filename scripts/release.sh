@@ -46,11 +46,21 @@ if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; the
 	exit 1
 fi
 
+# The tag has to name a commit origin already has, or CI runs against a commit
+# nobody else can fetch.
 git fetch --quiet --tags origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || {
-	echo "release: main and origin/main have diverged; push first" >&2
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+	ahead=$(git rev-list --count origin/main..HEAD)
+	behind=$(git rev-list --count HEAD..origin/main)
+	if [ "$ahead" -gt 0 ] && [ "$behind" -eq 0 ]; then
+		echo "release: main is $ahead commit(s) ahead of origin/main - push first" >&2
+	elif [ "$behind" -gt 0 ] && [ "$ahead" -eq 0 ]; then
+		echo "release: main is $behind commit(s) behind origin/main - pull first" >&2
+	else
+		echo "release: main and origin/main have diverged ($ahead ahead, $behind behind)" >&2
+	fi
 	exit 1
-}
+fi
 
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
 	echo "release: $tag already exists locally" >&2
