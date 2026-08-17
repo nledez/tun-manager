@@ -33,6 +33,12 @@ const (
 	// for. Without it a client could turn the menu bar into a way of hammering
 	// the WireGuard control socket.
 	refreshFloor = 2 * time.Second //nolint:unused
+
+	// byeGrace is how long goodbye is worth waiting for. A client that cannot
+	// take a handful of small messages over a local socket in that time has
+	// stopped reading, and waiting on it forever costs a goroutine and a file
+	// descriptor rather than delivering anything.
+	byeGrace = 200 * time.Millisecond
 )
 
 // Sampler reads one tunnel's cumulative counters. *app.App satisfies it.
@@ -71,6 +77,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	closed   bool
+	closing  bool
 	clients  map[*client]struct{}
 	view     app.View
 	haveView bool
@@ -167,6 +174,12 @@ func (s *Server) Serve(ctx context.Context) error {
 		return fmt.Errorf("feed: Serve on %s before Listen", s.Path)
 	}
 
+	// The watcher must not outlive Serve: cancelling on the way out also means
+	// an accept failure shuts the clients down cleanly rather than leaving
+	// them connected to a server that has stopped.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Closing the listener is what unblocks Accept; there is no deadline on it.
 	go func() {
 		<-ctx.Done()
@@ -206,7 +219,7 @@ func (s *Server) add(conn net.Conn) {
 	c := &client{conn: conn, out: make(chan any, sendQueue), watch: map[string]bool{}}
 
 	s.mu.Lock()
-	if s.closed {
+	if s.closing || s.closed {
 		s.mu.Unlock()
 		conn.Close() //nolint:errcheck
 		return
@@ -301,6 +314,7 @@ func (s *Server) drop(c *client) {
 // shutdown says goodbye to everyone, stops listening and removes the socket.
 func (s *Server) shutdown() {
 	s.mu.Lock()
+	s.closing = true
 	clients := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
 		clients = append(clients, c)
@@ -316,6 +330,11 @@ func (s *Server) shutdown() {
 		default:
 		}
 		close(c.out)
+
+		// The writer drains what is queued and then closes the connection. The
+		// deadline is what guarantees it gets that far: without one, a peer
+		// that stopped reading leaves it blocked in a write syscall.
+		c.conn.SetWriteDeadline(time.Now().Add(byeGrace)) //nolint:errcheck // the connection is going away regardless
 	}
 
 	s.Close() //nolint:errcheck

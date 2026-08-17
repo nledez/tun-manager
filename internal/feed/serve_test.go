@@ -295,6 +295,44 @@ func TestServeReportsAnAcceptFailureThatIsNotAShutdown(t *testing.T) {
 	}
 }
 
+func TestAnAcceptFailureAlsoSaysGoodbye(t *testing.T) {
+	// Serve derives its own cancellable context and cancels it on every return
+	// path, including a real accept failure. Without that, the ctx watcher
+	// goroutine stays parked on the caller's context forever and shutdown
+	// never runs, leaving an already-connected client talking to a server
+	// that has quietly stopped rather than told to go away.
+	s := &Server{Path: socketPath(t)}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(context.Background()) }()
+
+	c := dial(t, s)
+	c.next(t) // hello
+
+	s.mu.Lock()
+	ln := s.ln
+	s.mu.Unlock()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Serve = nil, want the accept failure reported")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after the listener closed")
+	}
+
+	if msg := c.next(t); msg["type"] != "bye" {
+		t.Errorf("last line = %v, want bye", msg)
+	}
+}
+
 func TestAddClosesAConnectionArrivingAfterShutdown(t *testing.T) {
 	// A connection can be accepted in the moment between shutdown marking the
 	// server closed and Accept noticing the listener is gone; add must not
@@ -307,6 +345,34 @@ func TestAddClosesAConnectionArrivingAfterShutdown(t *testing.T) {
 
 	s.mu.Lock()
 	s.closed = true
+	s.mu.Unlock()
+
+	server, peer := net.Pipe()
+	defer peer.Close()
+
+	s.add(server)
+
+	if _, err := peer.Write([]byte("x")); err == nil {
+		t.Error("write to the peer succeeded, want add to have closed its end")
+	}
+
+	s.mu.Lock()
+	n := len(s.clients)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Errorf("clients = %d, want none registered", n)
+	}
+}
+
+func TestAddRejectsAConnectionWhileShutdownIsClosing(t *testing.T) {
+	// shutdown clears s.clients and marks the server closing in its first
+	// critical section, well before Close() sets s.closed at the very end. A
+	// connection Accept hands to add inside that window must still be turned
+	// away - otherwise it is registered and greeted by a server that has
+	// already walked past it and will never say goodbye.
+	s := &Server{}
+	s.mu.Lock()
+	s.closing = true
 	s.mu.Unlock()
 
 	server, peer := net.Pipe()
@@ -389,5 +455,41 @@ func TestShutdownDoesNotBlockOnAClientThatFellBehind(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("shutdown blocked on a client that had fallen behind")
+	}
+}
+
+func TestShutdownClosesAConnectionThatNeverReads(t *testing.T) {
+	// A client that stops reading leaves the writer's Encode blocked in a
+	// write syscall on a synchronous connection: net.Pipe makes any write
+	// block until a matching read consumes it, and this peer never reads.
+	// Without a deadline that goroutine, and the queued bye, never come back.
+	// The deadline shutdown sets is what forces the write to fail and the
+	// connection to close underneath it.
+	s := &Server{}
+	server, peer := net.Pipe()
+	defer peer.Close()
+
+	c := &client{conn: server, out: make(chan any, sendQueue)}
+	s.clients = map[*client]struct{}{c: {}}
+	go c.write()
+
+	// Set before shutdown, not after: once the fix closes the connection,
+	// setting a deadline on the peer's end fails outright rather than doing
+	// nothing. This is the safety net against a regression hanging the suite.
+	if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("deadline: %v", err)
+	}
+
+	s.shutdown()
+
+	// Wait past byeGrace without reading: reading any earlier would pair with
+	// the still-pending write and let it succeed, which is not what this test
+	// is checking. By now the fixed code has already forced the write to fail
+	// on its deadline and closed the connection; the read below observes that
+	// rather than racing it.
+	time.Sleep(500 * time.Millisecond)
+
+	if _, err := peer.Read(make([]byte, 1)); err == nil {
+		t.Fatal("read succeeded, want the connection already closed")
 	}
 }
