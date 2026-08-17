@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"ledez.net/tun-manager/internal/privdrop"
 )
@@ -140,5 +141,33 @@ func TestCloseIsIdempotent(t *testing.T) {
 	_ = s.Close()
 	if err := s.Close(); err != nil {
 		t.Errorf("second Close = %v, want nothing to do", err)
+	}
+}
+
+func TestIntervalReturnsTheConfiguredInterval(t *testing.T) {
+	// interval() returns the configured Interval if set, otherwise sampleInterval.
+	s := &Server{}
+	if got := s.interval(); got != sampleInterval {
+		t.Errorf("interval = %v, want %v", got, sampleInterval)
+	}
+
+	s.Interval = 100 * time.Millisecond
+	if got := s.interval(); got != 100*time.Millisecond {
+		t.Errorf("interval = %v, want 100ms", got)
+	}
+}
+
+func TestClockReturnsTheConfiguredClock(t *testing.T) {
+	// clock() returns the configured Now function if set, otherwise time.Now.
+	s := &Server{}
+	now := s.clock()
+	if now.IsZero() {
+		t.Errorf("clock returned zero time, want a real time")
+	}
+
+	fixedTime := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return fixedTime }
+	if got := s.clock(); got != fixedTime {
+		t.Errorf("clock = %v, want %v", got, fixedTime)
 	}
 }

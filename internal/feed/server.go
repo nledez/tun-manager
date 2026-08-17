@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -20,15 +21,15 @@ const (
 	// sendQueue is how many messages a client may fall behind by. Sixteen is
 	// several seconds of sampling: a client that cannot keep up with one
 	// message a second is not going to recover.
-	sendQueue = 16
+	sendQueue = 16 //nolint:unused
 
 	// sampleInterval is how often a watched tunnel's counters are read.
-	sampleInterval = time.Second
+	sampleInterval = time.Second //nolint:unused
 
 	// refreshFloor is the shortest gap between two refreshes a client can ask
 	// for. Without it a client could turn the menu bar into a way of hammering
 	// the WireGuard control socket.
-	refreshFloor = 2 * time.Second
+	refreshFloor = 2 * time.Second //nolint:unused
 )
 
 // Sampler reads one tunnel's cumulative counters. *app.App satisfies it.
@@ -69,14 +70,14 @@ type Server struct {
 	closed bool
 }
 
-func (s *Server) interval() time.Duration {
+func (s *Server) interval() time.Duration { //nolint:unused
 	if s.Interval > 0 {
 		return s.Interval
 	}
 	return sampleInterval
 }
 
-func (s *Server) clock() time.Time {
+func (s *Server) clock() time.Time { //nolint:unused
 	if s.Now != nil {
 		return s.Now()
 	}
@@ -95,7 +96,8 @@ func (s *Server) Listen() error {
 		return fmt.Errorf("remove stale socket %s: %w", s.Path, err)
 	}
 
-	ln, err := net.Listen("unix", s.Path)
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "unix", s.Path)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.Path, err)
 	}
@@ -115,8 +117,8 @@ func (s *Server) Listen() error {
 
 // abandon undoes a half-built listener and returns the reason it was given.
 func (s *Server) abandon(ln net.Listener, cause error) error {
-	ln.Close()
-	os.Remove(s.Path)
+	ln.Close()        //nolint:errcheck
+	os.Remove(s.Path) //nolint:errcheck
 	return cause
 }
 
