@@ -97,6 +97,14 @@ func (s *Server) clock() time.Time {
 	return time.Now()
 }
 
+// clientCount reports how many clients are connected. It exists for the tests:
+// backpressure is only observable as a client that is no longer there.
+func (s *Server) clientCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.clients)
+}
+
 // Listen binds the socket and hands it to Owner. Call it before Serve.
 //
 // Any failure after the bind removes the socket again: a path left behind
