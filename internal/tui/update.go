@@ -63,6 +63,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
+
+	case requestMsg:
+		// Listening again first: whatever this request turns into, the next one
+		// still has to be heard.
+		listen := nextRequest(msg.from)
+		if m.refreshing {
+			return m, listen
+		}
+		m.refreshing = true
+		return m, tea.Batch(m.refresh(), m.heartbeat(), listen)
 	}
 	return m, nil
 }
@@ -85,6 +95,14 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 				return nil
 			}
 		}
+	}
+
+	if m.feed != nil {
+		f, published := m.feed, msg.view
+		cmd = tea.Batch(cmd, func() tea.Msg {
+			f.Publish(published)
+			return nil
+		})
 	}
 
 	m.view = msg.view

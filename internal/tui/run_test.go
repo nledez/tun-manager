@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/exp/teatest"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/netctx"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
@@ -219,7 +220,29 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, a, nil, WithoutTerminal())
+		done <- Run(ctx, a, nil, nil, WithoutTerminal())
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the context was cancelled")
+	}
+}
+
+func TestRunWithAFeedWiresPublishingAndRequests(t *testing.T) {
+	// A live *feed.Server assigned through the concrete type must not panic
+	// when a view is published to it, and Run must listen on its Requests
+	// channel rather than leaving it nil - the wiring the composition root
+	// relies on.
+	a := testApp(t, &fakeRunner{}, alphaKey)
+	f := &feed.Server{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, a, nil, f, WithoutTerminal())
 	}()
 
 	cancel()
@@ -290,7 +313,7 @@ func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
 	a.Reader = nil
 
-	err := Run(context.Background(), a, nil, WithoutTerminal())
+	err := Run(context.Background(), a, nil, nil, WithoutTerminal())
 
 	if err == nil {
 		t.Fatal("Run returned nil after the program crashed, want the failure reported")

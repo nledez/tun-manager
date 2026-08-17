@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
@@ -67,12 +68,29 @@ type (
 	sampleTickMsg struct{}
 	// tickMsg fires the periodic refresh.
 	tickMsg time.Time
+	// requestMsg is something the feed's clients asked for. The channel travels
+	// with it, the way a batch's does.
+	requestMsg struct {
+		req  feed.Request
+		from <-chan feed.Request
+	}
 )
+
+// Feed is what the interface publishes views to. It is an interface so the
+// interface can be tested without a socket, and so a program built without one
+// works unchanged.
+type Feed interface {
+	Publish(app.View)
+}
 
 // Model is the TUI state.
 type Model struct {
 	app      *app.App
 	notifier *notify.Notifier
+	// feed publishes each view for whoever is watching from outside. Nil when
+	// the feed is switched off, which is the ordinary case.
+	feed     Feed
+	requests <-chan feed.Request
 
 	view     app.View
 	pings    map[string]probe.Result
@@ -137,9 +155,10 @@ func New(a *app.App, n *notify.Notifier) Model {
 	}
 }
 
-// Init triggers the first refresh and starts the periodic tick.
+// Init triggers the first refresh, starts the periodic tick, and starts
+// listening to the feed if there is one.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), m.tick())
+	return tea.Batch(m.refresh(), m.tick(), nextRequest(m.requests))
 }
 
 func (m Model) refreshInterval() time.Duration {
@@ -200,6 +219,22 @@ func nextEvent(events <-chan app.Event) tea.Cmd {
 			return batchDoneMsg{}
 		}
 		return eventMsg{event: e, from: events}
+	}
+}
+
+// nextRequest turns the next thing a feed client asked for into a message, and
+// is re-issued for as long as the feed keeps talking. Same seam as nextEvent:
+// the feed runs on its own, the interface only reads what it says.
+func nextRequest(reqs <-chan feed.Request) tea.Cmd {
+	if reqs == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		req, ok := <-reqs
+		if !ok {
+			return nil
+		}
+		return requestMsg{req: req, from: reqs}
 	}
 }
 

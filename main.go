@@ -184,7 +184,8 @@ func build() (*app.App, error) {
 }
 
 func runTUI(ctx context.Context, a *app.App, n *notify.Notifier) error {
-	return tui.Run(ctx, a, n)
+	// TODO(task 9): wire the feed server through here.
+	return tui.Run(ctx, a, n, nil)
 }
 
 func (e *env) runDoctor() error {
