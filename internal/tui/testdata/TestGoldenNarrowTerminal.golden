@@ -1,8 +1,8 @@
 tun-manager  ctx: office (en0 198.51.100.42)    next ⟳ 4m12s
 ────────────────────────────────────────────────────────────
-    NAME          GRP    STATE   HANDSHAKE  RX / TX         
- ▸  alpha         needed ● up    12s        1.2M / 4.0K     
-    bravo         needed ● stale 9m00s      2.3M / 961.2K   
+    NAME          GRP    STATE     HANDSHAKE  RX / TX       
+ ▸  alpha         needed ● up      12s        1.2M / 4.0K   
+    bravo         needed ● stale   9m00s      2.3M / 961.2K 
     charlie       extra  ○ down                             
     delta         —      ○ down                             
 

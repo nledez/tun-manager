@@ -1,10 +1,10 @@
 tun-manager  ctx: office (en0 198.51.100.42)                                                                next ⟳ 4m12s
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-    NAME          GRP    STATE   HANDSHAKE  RX / TX          PING    ENDPOINT                                           
- ▸  alpha         needed ● up    12s        1.2M / 4.0K      18ms    192.0.2.10:51820                                   
-    bravo         needed ● stale 9m00s      2.3M / 961.2K    ×       192.0.2.10:51820                                   
-    charlie       extra  ○ down                                      charlie.example:51820                              
-    delta         —      ○ down                                      delta.example:51820                                
+    NAME          GRP    STATE     HANDSHAKE  RX / TX          PING    ENDPOINT                                         
+ ▸  alpha         needed ● up      12s        1.2M / 4.0K      18ms    192.0.2.10:51820                                 
+    bravo         needed ● stale   9m00s      2.3M / 961.2K    ×       192.0.2.10:51820                                 
+    charlie       extra  ○ down                                        charlie.example:51820                            
+    delta         —      ○ down                                        delta.example:51820                              
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  LOGS

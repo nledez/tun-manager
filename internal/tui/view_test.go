@@ -289,3 +289,13 @@ func TestADownRowIsDimmedAndAnUpRowIsNot(t *testing.T) {
 		t.Errorf("a down row is not dimmed as a whole:\n up   %q\n down %q", up, down)
 	}
 }
+
+func TestGoldenBatchInProgress(t *testing.T) {
+	// The one frame the reported bug was about: a batch running, with the
+	// tunnel being waited on saying so where its state would be.
+	m := frameModel(t, 120, 30)
+	m.busy, m.opTotal, m.opDone = true, 4, 1
+	next, _ := m.Update(opStartMsg{tunnel: "charlie", action: "up"})
+
+	teatest.RequireEqualOutput(t, []byte(next.(Model).View()))
+}

@@ -1066,8 +1066,8 @@ func TestAModelWithoutAnApplicationPlansNothing(t *testing.T) {
 	if got := m.groupMembers(profile.GroupNeeded); got != nil {
 		t.Errorf("groupMembers = %v, want none", got)
 	}
-	if steps := m.upGroup(profile.GroupNeeded); len(steps) != 0 {
-		t.Errorf("upGroup planned %d step(s), want none", len(steps))
+	if steps := m.upNeeded(); len(steps) != 0 {
+		t.Errorf("upNeeded planned %d step(s), want none", len(steps))
 	}
 }
 
@@ -1152,5 +1152,118 @@ func TestTheCountdownIsStillShownWhileWorking(t *testing.T) {
 
 	if !strings.Contains(m.View(), "next ⟳") {
 		t.Errorf("the countdown vanished while working:\n%s", m.View())
+	}
+}
+
+func TestTheRowBeingWorkedOnSaysSo(t *testing.T) {
+	// The counter says how far along a batch is; it does not say which tunnel
+	// is being waited on, which is what you look at the table for.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+
+	next, _ := m.Update(opStartMsg{tunnel: "bravo", action: "up"})
+	m = next.(Model)
+
+	if got := m.cells(m.view.Rows[1]).State; !strings.Contains(got, "starting") {
+		t.Errorf("bravo shows %q, want it starting", got)
+	}
+	if got := m.cells(m.view.Rows[0]).State; strings.Contains(got, "starting") {
+		t.Errorf("alpha shows %q, want it untouched", got)
+	}
+}
+
+func TestAStoppingRowSaysStopping(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+
+	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
+	m = next.(Model)
+
+	if got := m.cells(m.view.Rows[0]).State; !strings.Contains(got, "stopping") {
+		t.Errorf("alpha shows %q, want it stopping", got)
+	}
+}
+
+func TestTheRowMarkTurnsWithTheSpinner(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy = true
+	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
+	m = next.(Model)
+
+	first := m.cells(m.view.Rows[0]).State
+	m.beat++
+
+	if second := m.cells(m.view.Rows[0]).State; second == first {
+		t.Errorf("the mark is still %q after a beat, want it to turn", first)
+	}
+}
+
+func TestTheRowMarkClearsWhenTheStepReports(t *testing.T) {
+	// Its result is in; leaving it marked would claim work that is over.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
+	m = next.(Model)
+
+	next, _ = m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
+	m = next.(Model)
+
+	if got := m.cells(m.view.Rows[0]).State; strings.Contains(got, "stopping") {
+		t.Errorf("alpha still shows %q after reporting", got)
+	}
+}
+
+func TestTheRowMarkClearsWhenTheBatchEnds(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
+	m = next.(Model)
+
+	next, _ = m.Update(opDoneMsg{})
+	m = next.(Model)
+
+	if m.opCurrent != "" {
+		t.Errorf("opCurrent = %q, want it cleared", m.opCurrent)
+	}
+}
+
+func TestAToggleAnnouncesWhatEachTunnelWillDo(t *testing.T) {
+	// The batch is planned from the table, so what a row will do is known
+	// before the work starts rather than after it reports.
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Up),
+		row("bravo", profile.GroupNeeded, wg.Down),
+	)})
+	m = next.(Model)
+	m.selected = map[string]bool{"alpha": true, "bravo": true}
+
+	steps := m.toggleTargets()
+
+	if len(steps) != 2 {
+		t.Fatalf("got %d step(s), want one per tunnel", len(steps))
+	}
+	if steps[0].tunnel != "alpha" || steps[0].action != "down" {
+		t.Errorf("step 0 = %+v, want alpha going down", steps[0])
+	}
+	if steps[1].tunnel != "bravo" || steps[1].action != "up" {
+		t.Errorf("step 1 = %+v, want bravo coming up", steps[1])
+	}
+}
+
+func TestAGroupBatchAnnouncesTheSameActionThroughout(t *testing.T) {
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Down),
+		row("bravo", profile.GroupNeeded, wg.Down),
+	)})
+	m = next.(Model)
+
+	for _, s := range m.upNeeded() {
+		if s.action != "up" {
+			t.Errorf("step %+v, want every step of an up group to be an up", s)
+		}
 	}
 }

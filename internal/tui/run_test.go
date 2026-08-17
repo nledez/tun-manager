@@ -265,7 +265,7 @@ func TestTogglingATunnelThatVanishedIsReported(t *testing.T) {
 	if len(steps) != 1 {
 		t.Fatalf("got %d step(s), want one per tunnel", len(steps))
 	}
-	msg, ok := steps[0]().(opMsg)
+	msg, ok := m.operate(steps[0].run)().(opMsg)
 	if !ok {
 		t.Fatalf("got %#v, want an opMsg", msg)
 	}

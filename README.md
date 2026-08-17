@@ -26,11 +26,18 @@ Handshake age, transferred bytes, latency, and which network you are on.
  r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
 ```
 
-While a batch runs, a spinner turns beside the context and the header counts the
-tunnels off, so a slow `wg-quick` is never mistaken for a hung program:
+While a batch runs, a spinner turns beside the context, the header counts the
+tunnels off, and the row being waited on says so where its state would be — so a
+slow `wg-quick` is never mistaken for a hung program:
 
 ```
- tun-manager  ctx: office (en0 198.51.100.42)  ⠙ working 3/8      next ⟳ 4m12s
+ tun-manager  ctx: office (en0 198.51.100.42)  ⠋ working 1/4      next ⟳ 4m12s
+ ───────────────────────────────────────────────────────────────────────────────
+    NAME          GRP    STATE     HANDSHAKE  RX / TX        PING   ENDPOINT
+ ▸  alpha         needed ● up      12s        1.2M / 840K    18ms   192.0.2.10:51820
+    bravo         needed ● stale   9m04s      2.3M / 961K    ×      198.51.100.20:51821
+    charlie       extra  ⠋ starting                                 gateway.example:51824
+    delta         —      ○ down                                     198.51.100.30:51822
 ```
 
 ## Why root

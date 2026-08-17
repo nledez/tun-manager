@@ -49,6 +49,12 @@ type (
 		results []wg.Result
 		err     error
 	}
+	// opStartMsg announces the tunnel a batch is about to act on, so the table
+	// says which one is being waited on rather than only how many are left.
+	opStartMsg struct {
+		tunnel string
+		action string
+	}
 	// opDoneMsg closes a batch, once every step of it has reported.
 	opDoneMsg struct{}
 	// heartbeatMsg advances the working indicator while something runs.
@@ -67,18 +73,20 @@ type Model struct {
 	selected map[string]bool
 	logs     []LogEntry
 
-	cursor   int
-	opTotal  int
-	opDone   int
-	beat     int
-	width    int
-	height   int
-	showLogs bool
-	showHelp bool
-	busy     bool
-	pinging  bool
-	quitting bool
-	err      error
+	cursor    int
+	opTotal   int
+	opDone    int
+	opCurrent string
+	opAction  string
+	beat      int
+	width     int
+	height    int
+	showLogs  bool
+	showHelp  bool
+	busy      bool
+	pinging   bool
+	quitting  bool
+	err       error
 
 	lastHealth  map[string]wg.Health
 	lastRefresh time.Time
@@ -175,16 +183,34 @@ func (m Model) operate(fn func(context.Context, *app.App) ([]wg.Result, error)) 
 	}
 }
 
-// eachTunnel turns a list of tunnels into one command per tunnel, so each of
-// them reports, and the interface repaints, on its own.
-func (m Model) eachTunnel(names []string, fn func(context.Context, *app.App, string) ([]wg.Result, error)) []tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(names))
+// step is one tunnel's worth of a batch: what is about to happen to it, and the
+// work itself. Naming the action up front is what lets the table say a tunnel
+// is starting while it starts, rather than only once it has.
+type step struct {
+	tunnel string
+	action string
+	run    func(context.Context, *app.App) ([]wg.Result, error)
+}
+
+// eachTunnel turns a list of tunnels into one step per tunnel, so each of them
+// reports, and the interface repaints, on its own.
+func (m Model) eachTunnel(names []string, action func(string) string, fn func(context.Context, *app.App, string) ([]wg.Result, error)) []step {
+	steps := make([]step, 0, len(names))
 	for _, name := range names {
-		cmds = append(cmds, m.operate(func(ctx context.Context, a *app.App) ([]wg.Result, error) {
-			return fn(ctx, a, name)
-		}))
+		steps = append(steps, step{
+			tunnel: name,
+			action: action(name),
+			run: func(ctx context.Context, a *app.App) ([]wg.Result, error) {
+				return fn(ctx, a, name)
+			},
+		})
 	}
-	return cmds
+	return steps
+}
+
+// always is the action of a batch that does the same thing to every tunnel.
+func always(action string) func(string) string {
+	return func(string) string { return action }
 }
 
 // groupMembers resolves a group against the network the interface last saw.

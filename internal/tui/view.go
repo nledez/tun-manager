@@ -35,7 +35,7 @@ const (
 	wMark     = 3
 	wName     = 14
 	wGroup    = 7
-	wState    = 8
+	wState    = 10
 	wShake    = 11
 	wTransfer = 17
 	wPing     = 8
@@ -164,6 +164,12 @@ func (m Model) cells(r app.Row) rowCells {
 		State:    healthLabel(r.Health),
 		Endpoint: format.OrNone(r.Tunnel.Endpoint),
 	}
+	// A tunnel being acted on right now says so where its state would be: that
+	// state is about to be wrong, and which one is being waited on is what the
+	// table is read for while a batch runs.
+	if r.Tunnel.Name == m.opCurrent {
+		c.State = activeStyle.Render(m.spinner() + " " + inFlight(m.opAction))
+	}
 	if r.Health == wg.Down {
 		return c
 	}
@@ -242,6 +248,14 @@ func clamp(s string, w int) string {
 		return ""
 	}
 	return ansi.Truncate(s, w, "")
+}
+
+// inFlight names an action while it is happening rather than after it has.
+func inFlight(action string) string {
+	if action == "up" {
+		return "starting"
+	}
+	return "stopping"
 }
 
 func healthLabel(h wg.Health) string {
