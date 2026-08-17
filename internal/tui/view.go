@@ -10,6 +10,7 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/format"
+	"ledez.net/tun-manager/internal/rate"
 	"ledez.net/tun-manager/internal/wg"
 )
 
@@ -28,6 +29,14 @@ var (
 	// Work in progress is worth a colour of its own: it is the one thing on
 	// screen that is about to change.
 	activeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+)
+
+// The graph pane: three rows of braille per direction, and as many readings as
+// the width can hold at two per cell. At 120 columns that is a little under
+// four minutes of history at one reading a second.
+const (
+	graphRows   = 3
+	graphPoints = 240
 )
 
 // column widths, everything but the endpoint which takes what is left
@@ -53,6 +62,9 @@ func (m Model) View() string {
 	b.WriteString(m.table())
 	if m.err != nil {
 		b.WriteString("\n" + errStyle.Render(m.fit("error: "+m.err.Error())) + "\n")
+	}
+	if m.showGraph {
+		b.WriteString("\n" + m.graphPane())
 	}
 	if m.showLogs {
 		b.WriteString("\n" + m.logPane())
@@ -269,6 +281,47 @@ func healthLabel(h wg.Health) string {
 	}
 }
 
+// graphPane draws the traffic of the tunnel under the cursor, each direction on
+// its own scale: a download that dwarfs an upload would otherwise flatten it
+// into a line along the axis.
+func (m Model) graphPane() string {
+	var b strings.Builder
+	b.WriteString(m.rule() + "\n")
+
+	row, ok := m.current()
+	if !ok {
+		b.WriteString(dimStyle.Render(m.fit(" no tunnel to graph")) + "\n")
+		return b.String()
+	}
+
+	name := row.Tunnel.Name
+	series := m.series[name]
+	if series == nil || len(series.Points()) == 0 {
+		// It takes two readings a second apart before there is a rate at all,
+		// and a blank pane in the meantime looks like a broken one.
+		b.WriteString(headerStyle.Render(m.fit(" "+name)) + dimStyle.Render("  sampling…") + "\n")
+		return b.String()
+	}
+
+	down, up := series.Peak()
+	b.WriteString(headerStyle.Render(m.fit(" "+name)) + "\n")
+	b.WriteString(m.direction("DOWN", series.Down(), down, upStyle))
+	b.WriteString(m.direction("UP", series.Up(), up, activeStyle))
+	return b.String()
+}
+
+// direction draws one half of the graph, labelled with the peak it is scaled
+// to. Without the peak on screen the shape says how the traffic moved but
+// nothing about how much of it there was.
+func (m Model) direction(label string, values []float64, peak float64, style lipgloss.Style) string {
+	var b strings.Builder
+	b.WriteString(dimStyle.Render(m.fit(fmt.Sprintf(" %-4s peak %s", label, format.Rate(peak)))) + "\n")
+	for _, line := range rate.Braille(values, max(0, m.width-1), graphRows, peak) {
+		b.WriteString(" " + style.Render(line) + "\n")
+	}
+	return b.String()
+}
+
 func (m Model) logPane() string {
 	var b strings.Builder
 	b.WriteString(m.rule() + "\n")
@@ -312,13 +365,14 @@ func (m Model) footer() string {
 			" p      ping every remote address",
 			fmt.Sprintf(" s      stop/start everything (right now: %s)", m.stopStartAction()),
 			" n      bring the `needed` group up",
+			" g      toggle a traffic graph of the tunnel under the cursor",
 			" l      toggle this log pane",
 			" ?      toggle this help",
 			" q      quit",
 		}...))
 	}
 	return helpStyle.Render(m.fit(fmt.Sprintf(
-		" r refresh · p ping · s %s all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit",
+		" r refresh · p ping · s %s all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit",
 		m.stopStartAction(),
 	)))
 }

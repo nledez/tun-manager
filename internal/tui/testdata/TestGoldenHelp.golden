@@ -6,13 +6,14 @@ tun-manager  ctx: office (en0 198.51.100.42)                                    
     charlie       extra  ○ down                                        charlie.example:51820                            
     delta         —      ○ down                                        delta.example:51820                              
 
- ↑↓/jk  move cursor                                       
- space  select / deselect a tunnel                        
- enter  toggle the selection (or the row under the cursor)
- r      refresh now                                       
- p      ping every remote address                         
- s      stop/start everything (right now: down)           
- n      bring the `needed` group up                       
- l      toggle this log pane                              
- ?      toggle this help                                  
- q      quit                                              
+ ↑↓/jk  move cursor                                          
+ space  select / deselect a tunnel                           
+ enter  toggle the selection (or the row under the cursor)   
+ r      refresh now                                          
+ p      ping every remote address                            
+ s      stop/start everything (right now: down)              
+ n      bring the `needed` group up                          
+ g      toggle a traffic graph of the tunnel under the cursor
+ l      toggle this log pane                                 
+ ?      toggle this help                                     
+ q      quit                                                 

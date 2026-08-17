@@ -106,6 +106,28 @@ func TestGoldenLogPane(t *testing.T) {
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 
+func TestGoldenGraphPane(t *testing.T) {
+	m := frameModel(t, 120, 30)
+	m = key(m, "g")
+
+	// A ramp that resets, so the frame shows both a slope and the drop back to
+	// the axis, and the two directions land on different scales.
+	var rx, tx int64
+	for i := range 60 {
+		rx += int64((i % 12) * 8192)
+		tx += int64((i % 20) * 512)
+		next, _ := m.Update(sampleMsg{
+			tunnel: "alpha",
+			at:     frameTaken.Add(time.Duration(i) * time.Second),
+			rx:     rx,
+			tx:     tx,
+		})
+		m = next.(Model)
+	}
+
+	teatest.RequireEqualOutput(t, []byte(m.View()))
+}
+
 func TestGoldenHelp(t *testing.T) {
 	m := frameModel(t, 120, 30)
 

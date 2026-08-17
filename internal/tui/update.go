@@ -8,6 +8,7 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/profile"
+	"ledez.net/tun-manager/internal/rate"
 )
 
 // Update advances the state machine. It performs no I/O: everything that talks
@@ -40,6 +41,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case batchDoneMsg:
 		return m.onBatchDone()
+
+	case sampleMsg:
+		return m.onSample(msg)
+
+	case sampleTickMsg:
+		// The pane may have closed while the tick was out.
+		if !m.showGraph {
+			return m, nil
+		}
+		return m, m.sample()
 
 	case heartbeatMsg:
 		// Only while there is something to report on; a timer firing on an idle
@@ -103,6 +114,35 @@ func (m Model) onEvent(msg eventMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nextEvent(msg.from)
+}
+
+// onSample records one reading and asks for the next, for as long as the pane
+// is open.
+func (m Model) onSample(msg sampleMsg) (tea.Model, tea.Cmd) {
+	if !m.showGraph {
+		return m, nil
+	}
+	// A tunnel that is down reports itself with no reading: there is nothing to
+	// record, and the next tick will look again.
+	if msg.tunnel != "" && !msg.at.IsZero() {
+		m.series = withSample(m.series, msg)
+	}
+	return m, m.sampleTick()
+}
+
+// withSample copies the histories before adding to one of them: the model is
+// copied on every update, and the series a previous model still points at must
+// not change underneath it.
+func withSample(series map[string]*rate.Series, msg sampleMsg) map[string]*rate.Series {
+	out := make(map[string]*rate.Series, len(series)+1)
+	for name, s := range series {
+		out[name] = s
+	}
+	if out[msg.tunnel] == nil {
+		out[msg.tunnel] = rate.New(graphPoints)
+	}
+	out[msg.tunnel].Add(msg.at, msg.rx, msg.tx)
+	return out
 }
 
 // onBatchDone closes one batch. The refresh waits for the last of them: reading
@@ -176,6 +216,17 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		m.showLogs = !m.showLogs
 		return m, nil
+
+	case "g":
+		m.showGraph = !m.showGraph
+		if !m.showGraph {
+			// A reading a second for a pane nobody is looking at is a reading
+			// wasted, and the history goes with it: what it was worth was
+			// being on screen.
+			m.series = map[string]*rate.Series{}
+			return m, nil
+		}
+		return m, m.sample()
 
 	case "?":
 		m.showHelp = !m.showHelp

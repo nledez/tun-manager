@@ -16,6 +16,7 @@ import (
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
+	"ledez.net/tun-manager/internal/rate"
 	"ledez.net/tun-manager/internal/wg"
 )
 
@@ -55,6 +56,15 @@ type (
 	batchDoneMsg struct{}
 	// heartbeatMsg advances the working indicator while something runs.
 	heartbeatMsg struct{}
+	// sampleMsg carries one reading of a tunnel's counters, for the graph.
+	sampleMsg struct {
+		tunnel string
+		at     time.Time
+		rx, tx int64
+	}
+	// sampleTickMsg says it is time to take the next reading. It is separate
+	// from the reading itself: one asks, the other answers.
+	sampleTickMsg struct{}
 	// tickMsg fires the periodic refresh.
 	tickMsg time.Time
 )
@@ -79,19 +89,25 @@ type Model struct {
 	// the first is out gains nothing.
 	refreshing bool
 
+	// series holds the traffic history of each tunnel the graph has watched,
+	// kept while the pane is open so that moving the cursor away and back does
+	// not lose what was recorded.
+	series map[string]*rate.Series
+
 	// inFlight maps a tunnel to what is happening to it right now. A map rather
 	// than a single name, because a batch launches them together and several
 	// are waiting at any moment.
 	inFlight map[string]string
 	// events is the running batch, or nil. The interface reads it; it does not
 	// drive it.
-	width    int
-	height   int
-	showLogs bool
-	showHelp bool
-	pinging  bool
-	quitting bool
-	err      error
+	width     int
+	height    int
+	showLogs  bool
+	showHelp  bool
+	showGraph bool
+	pinging   bool
+	quitting  bool
+	err       error
 
 	lastHealth  map[string]wg.Health
 	lastRefresh time.Time
@@ -117,6 +133,7 @@ func New(a *app.App, n *notify.Notifier) Model {
 		pings:    map[string]probe.Result{},
 		selected: map[string]bool{},
 		inFlight: map[string]string{},
+		series:   map[string]*rate.Series{},
 	}
 }
 
@@ -184,6 +201,36 @@ func nextEvent(events <-chan app.Event) tea.Cmd {
 		}
 		return eventMsg{event: e, from: events}
 	}
+}
+
+// sampleInterval is how often the graph reads the counters while it is open.
+// One a second is what makes a rate a rate; the periodic refresh, minutes
+// apart, could only ever draw an average of the whole interval.
+const sampleInterval = time.Second
+
+// sample reads the counters of the tunnel under the cursor, off the UI
+// goroutine. It reads the control socket alone, which is cheap enough to do
+// every second.
+func (m Model) sample() tea.Cmd {
+	a := m.app
+	row, ok := m.current()
+	return func() tea.Msg {
+		if a == nil || !ok {
+			return sampleMsg{}
+		}
+		s, taken := a.Sample(row.Tunnel)
+		if !taken {
+			// A tunnel that is down has no counters. Reporting the tunnel
+			// anyway keeps the pane on it rather than blanking.
+			return sampleMsg{tunnel: row.Tunnel.Name}
+		}
+		return sampleMsg{tunnel: row.Tunnel.Name, at: s.At, rx: s.Rx, tx: s.Tx}
+	}
+}
+
+// sampleTick asks for the next reading, a second from now.
+func (m Model) sampleTick() tea.Cmd {
+	return tea.Tick(sampleInterval, func(time.Time) tea.Msg { return sampleTickMsg{} })
 }
 
 // busy reports whether anything is in flight, which is what decides that the

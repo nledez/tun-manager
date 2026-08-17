@@ -3,4 +3,4 @@ tun-manager  ctx: —                                                           
     NAME          GRP    STATE     HANDSHAKE  RX / TX          PING    ENDPOINT                                         
   no tunnel found
 
- r refresh · p ping · s up all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
+ r refresh · p ping · s up all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit

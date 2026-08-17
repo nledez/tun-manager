@@ -119,3 +119,29 @@ func TestOrNoneKeepsARealValue(t *testing.T) {
 		t.Errorf("OrNone(%q) = %q, want it unchanged", "utun7", got)
 	}
 }
+
+func TestRateReadsZeroAsIdleRatherThanAbsent(t *testing.T) {
+	// Unlike a byte count, a rate of zero is a measurement: the tunnel is up
+	// and nothing is going through it.
+	if got := Rate(0); got != "0B/s" {
+		t.Errorf("Rate(0) = %q, want %q", got, "0B/s")
+	}
+}
+
+func TestRateScalesLikeAByteCount(t *testing.T) {
+	for in, want := range map[float64]string{
+		512:     "512B/s",
+		1536:    "1.5K/s",
+		1258291: "1.2M/s",
+	} {
+		if got := Rate(in); got != want {
+			t.Errorf("Rate(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRateRoundsToWholeBytes(t *testing.T) {
+	if got := Rate(1023.9); got != "1023B/s" {
+		t.Errorf("Rate(1023.9) = %q, want %q", got, "1023B/s")
+	}
+}

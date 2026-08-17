@@ -12,4 +12,4 @@ tun-manager  ctx: office (en0 198.51.100.42)                                    
   10:00:48  up bravo: skipped, check address already reachable
   10:00:48  down charlie: FAILED: permission denied — wg-quick: permission denied
 
- r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
+ r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit

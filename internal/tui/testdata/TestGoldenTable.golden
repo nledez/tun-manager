@@ -6,4 +6,4 @@ tun-manager  ctx: office (en0 198.51.100.42)                                    
     charlie       extra  ○ down                                        charlie.example:51820                            
     delta         —      ○ down                                        delta.example:51820                              
 
- r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
+ r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit

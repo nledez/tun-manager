@@ -53,6 +53,18 @@ func Age(t, now time.Time) string {
 	}
 }
 
+// Rate renders a transfer rate.
+//
+// Zero reads as "0B/s" rather than as the absent-value marker: unlike a byte
+// count, a rate of zero is something that was measured.
+func Rate(bytesPerSecond float64) string {
+	n := int64(bytesPerSecond)
+	if n <= 0 {
+		return "0B/s"
+	}
+	return Bytes(n) + "/s"
+}
+
 // OrNone replaces an empty string with the absent-value marker.
 func OrNone(s string) string {
 	if s == "" {

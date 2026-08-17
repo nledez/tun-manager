@@ -15,6 +15,7 @@ import (
 	"ledez.net/tun-manager/internal/netctx"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wg"
+	"ledez.net/tun-manager/internal/wgconf"
 )
 
 // Every key, address and name below is invented. Addresses come from the
@@ -884,5 +885,47 @@ func TestDownAllSkipsAGroupMemberWithNoConfiguration(t *testing.T) {
 
 	if got := runner.actions(); strings.Join(got, ",") != "down alpha" {
 		t.Errorf("commands = %v, want the known tunnel stopped", got)
+	}
+}
+
+func TestSampleReadsTheCountersOfOneTunnel(t *testing.T) {
+	// A graph asks for this every second, so it reads the control socket alone
+	// and never the configuration on disk.
+	a := newApp(t, upState(alphaKey), &fakeRunner{}, away())
+	at := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return at }
+	view, _ := a.View()
+	row, _ := view.Row("alpha")
+
+	got, ok := a.Sample(row.Tunnel)
+
+	if !ok {
+		t.Fatal("Sample found nothing for a live tunnel")
+	}
+	if got.Rx != 100 {
+		t.Errorf("Rx = %d, want the live counter", got.Rx)
+	}
+	if !got.At.Equal(at) {
+		t.Errorf("At = %v, want the injected clock", got.At)
+	}
+}
+
+func TestSampleOfADownTunnelFindsNothing(t *testing.T) {
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	view, _ := a.View()
+	row, _ := view.Row("alpha")
+
+	if _, ok := a.Sample(row.Tunnel); ok {
+		t.Error("Sample found counters for a tunnel that is down")
+	}
+}
+
+func TestSampleSurvivesAnUnreadableState(t *testing.T) {
+	// The socket can go away under the program; a graph missing a point is not
+	// worth an error path of its own.
+	a := newApp(t, stateFunc(func() (wg.State, error) { return nil, errors.New("boom") }), &fakeRunner{}, away())
+
+	if _, ok := a.Sample(wgconf.Tunnel{Name: "alpha"}); ok {
+		t.Error("Sample reported a reading it could not take")
 	}
 }

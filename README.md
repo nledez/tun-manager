@@ -23,7 +23,7 @@ Handshake age, transferred bytes, latency, and which network you are on.
     charlie       extra  ○ down                                   gateway.example:51824
     delta         —      ○ down                                   198.51.100.30:51822
  ───────────────────────────────────────────────────────────────────────────────
- r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
+ r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit
 ```
 
 While a batch runs, a spinner turns beside the context, the header counts the
@@ -112,11 +112,17 @@ sudo tun-manager down --all ; gum confirm "Restart VPN?" && sudo tun-manager
 | `␣` | select / deselect a tunnel |
 | `⏎` | toggle the selection, or the row under the cursor |
 | `n` | bring the `needed` group up |
+| `g` | traffic graph of the tunnel under the cursor |
 | `l` | log pane (command outcomes, errors) |
 | `↑↓` `jk` | move · `?` help · `q` quit |
 
 The table refreshes on its own every `refresh_interval` (5 minutes by default),
 and right after every operation.
+
+`g` opens a graph of the tunnel under the cursor, download above upload, each on
+its own scale so that a busy download does not flatten the upload into a line
+along the axis. Readings are taken once a second, but only while the pane is
+open: closing it stops the sampling and drops the history.
 
 A batch starts every tunnel at once, spaced a few milliseconds apart so that two
 `wg-quick` runs do not reach the routing table in the same instant, so eight of

@@ -17,6 +17,7 @@ import (
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
+	"ledez.net/tun-manager/internal/rate"
 	"ledez.net/tun-manager/internal/wg"
 	"ledez.net/tun-manager/internal/wgconf"
 )
@@ -53,6 +54,8 @@ func key(m Model, k string) Model {
 	next, _ := m.Update(msg)
 	return next.(Model)
 }
+
+var t0 = time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
 
 var threeRows = []app.Row{
 	row("alpha", profile.GroupNeeded, wg.Up),
@@ -1451,5 +1454,241 @@ func TestTheLastBatchDoesNotRefreshOverAnotherRefresh(t *testing.T) {
 
 	if cmd != nil {
 		t.Error("a refresh was started while one was already in flight")
+	}
+}
+
+func TestGTogglesTheGraph(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	if m = key(m, "g"); !m.showGraph {
+		t.Error("showGraph = false after `g`, want the pane opened")
+	}
+	if m = key(m, "g"); m.showGraph {
+		t.Error("showGraph = true after a second `g`, want it closed")
+	}
+}
+
+func TestOpeningTheGraphStartsSampling(t *testing.T) {
+	// The counters are cumulative, so a rate needs readings of its own: the
+	// five-minute refresh is far too coarse to draw anything from.
+	m := loadedModel(threeRows...)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+
+	if cmd == nil {
+		t.Error("no command after `g`, want the sampling started")
+	}
+}
+
+func TestClosingTheGraphStopsSampling(t *testing.T) {
+	// A reading a second for a graph nobody is looking at is a reading wasted.
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+	m = key(m, "g")
+
+	if _, cmd := m.Update(sampleMsg{}); cmd != nil {
+		t.Error("the sampling rescheduled itself with the pane closed")
+	}
+}
+
+func TestClosingTheGraphForgetsWhatItHeld(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+	m.series["alpha"] = rate.New(10)
+
+	m = key(m, "g")
+
+	if len(m.series) != 0 {
+		t.Errorf("series = %v, want them dropped with the pane", m.series)
+	}
+}
+
+func TestEachTunnelKeepsItsOwnHistory(t *testing.T) {
+	// Moving the cursor changes which graph is drawn, not what has been
+	// recorded: coming back to a tunnel finds its history where it was.
+	a := testApp(t, &fakeRunner{}, alphaKey)
+	m := New(a, nil)
+	m.width, m.height = 120, 40
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Up),
+		row("bravo", profile.GroupNeeded, wg.Up),
+	)})
+	m = next.(Model)
+	m = key(m, "g")
+
+	next, _ = m.Update(sampleMsg{tunnel: "alpha", at: t0, rx: 100, tx: 100})
+	m = next.(Model)
+	next, _ = m.Update(sampleMsg{tunnel: "bravo", at: t0, rx: 999, tx: 999})
+	m = next.(Model)
+
+	if len(m.series) != 2 {
+		t.Fatalf("series = %v, want one per tunnel sampled", m.series)
+	}
+}
+
+func TestARateNeedsTwoReadings(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+
+	next, _ := m.Update(sampleMsg{tunnel: "alpha", at: t0, rx: 1000, tx: 500})
+	m = next.(Model)
+	if got := m.series["alpha"].Points(); len(got) != 0 {
+		t.Errorf("points = %v, want none from one reading", got)
+	}
+
+	next, _ = m.Update(sampleMsg{tunnel: "alpha", at: t0.Add(time.Second), rx: 3000, tx: 700})
+	m = next.(Model)
+	if got := m.series["alpha"].Points(); len(got) != 1 || got[0].Down != 2000 {
+		t.Errorf("points = %+v, want one at 2000 bytes a second", got)
+	}
+}
+
+func TestTheGraphNamesTheTunnelAndBothDirections(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+	for i, rx := range []int64{0, 1000, 5000} {
+		next, _ := m.Update(sampleMsg{tunnel: "alpha", at: t0.Add(time.Duration(i) * time.Second), rx: rx, tx: rx / 2})
+		m = next.(Model)
+	}
+
+	view := m.View()
+	for _, want := range []string{"alpha", "DOWN", "UP"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the graph does not mention %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestTheGraphShowsThePeakOfEachDirection(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+	for i, rx := range []int64{0, 4096} {
+		next, _ := m.Update(sampleMsg{tunnel: "alpha", at: t0.Add(time.Duration(i) * time.Second), rx: rx, tx: rx / 4})
+		m = next.(Model)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "4.0K/s") {
+		t.Errorf("the down peak is missing:\n%s", view)
+	}
+	if !strings.Contains(view, "1.0K/s") {
+		t.Errorf("the up peak is missing:\n%s", view)
+	}
+}
+
+func TestAGraphWithNothingRecordedYetSaysSo(t *testing.T) {
+	// It takes a couple of seconds before there is a rate to draw, and a blank
+	// pane in the meantime looks like a broken one.
+	m := loadedModel(threeRows...)
+
+	m = key(m, "g")
+
+	if !strings.Contains(m.View(), "sampling") {
+		t.Errorf("the graph does not say it is still gathering:\n%s", m.View())
+	}
+}
+
+func TestTheGraphFollowsTheCursor(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+
+	m = key(m, "j")
+
+	if !strings.Contains(m.View(), "bravo") {
+		t.Errorf("the graph did not follow the cursor:\n%s", m.View())
+	}
+}
+
+func TestSamplingATunnelWithoutAnApplicationIsHarmless(t *testing.T) {
+	m := New(nil, nil)
+	m.showGraph = true
+
+	if msg, ok := m.sample()().(sampleMsg); !ok || msg.tunnel != "" {
+		t.Errorf("sample returned %#v, want an empty sampleMsg", msg)
+	}
+}
+
+func TestSamplingReadsTheCountersOfTheTunnelUnderTheCursor(t *testing.T) {
+	a := testApp(t, &fakeRunner{}, alphaKey)
+	m := New(a, nil)
+	live := row("alpha", profile.GroupNeeded, wg.Up)
+	live.Tunnel.PeerPublicKey = alphaKey
+	next, _ := m.Update(viewMsg{view: viewOf(live)})
+	m = next.(Model)
+
+	msg, ok := m.sample()().(sampleMsg)
+
+	if !ok {
+		t.Fatalf("sample returned %#v, want a sampleMsg", msg)
+	}
+	if msg.tunnel != "alpha" {
+		t.Errorf("tunnel = %q, want the one under the cursor", msg.tunnel)
+	}
+	if msg.rx != 2048 {
+		t.Errorf("rx = %d, want the counter read from the socket", msg.rx)
+	}
+	if msg.at.IsZero() {
+		t.Error("the reading has no timestamp, so no rate can come of it")
+	}
+}
+
+func TestSamplingATunnelThatIsDownReportsItWithoutAReading(t *testing.T) {
+	// The pane stays on the tunnel rather than blanking, but a tunnel with no
+	// counters must not be recorded as a reading of zero.
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
+	m = next.(Model)
+	m.showGraph = true
+
+	msg := m.sample()().(sampleMsg)
+
+	if msg.tunnel != "alpha" {
+		t.Errorf("tunnel = %q, want the pane kept on it", msg.tunnel)
+	}
+	if !msg.at.IsZero() {
+		t.Errorf("at = %v, want nothing recorded for a tunnel that is down", msg.at)
+	}
+
+	next, _ = m.Update(msg)
+	if got := next.(Model).series["alpha"]; got != nil {
+		t.Errorf("series = %v, want no history from a reading that never happened", got.Points())
+	}
+}
+
+func TestTheSampleTickAsksForTheNextReading(t *testing.T) {
+	// A second of wall clock, which is the interval itself: the tick is what
+	// paces the graph, so there is nothing shorter to wait for.
+	if msg := loadedModel(threeRows...).sampleTick()(); msg != (sampleTickMsg{}) {
+		t.Errorf("tick delivered %#v, want a sampleTickMsg", msg)
+	}
+}
+
+func TestATickWhileTheGraphIsOpenTakesAnotherReading(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m = key(m, "g")
+
+	if _, cmd := m.Update(sampleTickMsg{}); cmd == nil {
+		t.Error("cmd = nil, want the next reading taken")
+	}
+}
+
+func TestATickArrivingAfterTheGraphClosedIsDropped(t *testing.T) {
+	// Closing the pane cannot recall a tick already in flight, so the handler
+	// is what stops the loop.
+	m := loadedModel(threeRows...)
+
+	if _, cmd := m.Update(sampleTickMsg{}); cmd != nil {
+		t.Error("cmd is not nil, want the sampling loop to end with the pane")
+	}
+}
+
+func TestTheGraphOfAnEmptyTableSaysThereIsNothingToDraw(t *testing.T) {
+	m := New(nil, nil)
+	m.width, m.height = 120, 30
+	m.showGraph = true
+
+	if !strings.Contains(m.View(), "no tunnel to graph") {
+		t.Errorf("the graph pane says nothing with no rows:\n%s", m.View())
 	}
 }
