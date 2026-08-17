@@ -9,12 +9,22 @@ import (
 	"ledez.net/tun-manager/internal/privdrop"
 )
 
-// socketPath returns a path in a temporary directory. A unix socket path is
-// limited to about a hundred bytes, and a long TMPDIR overflows it, so the
-// directory is kept shallow.
+// socketPath returns a path for a unix socket, short enough to bind.
+//
+// t.TempDir() is the usual answer and the wrong one here: it puts the test's
+// name in the path, and a unix socket path is capped at around a hundred
+// bytes, which a name like TestAClientArrivingBeforeAnyViewGetsOnlyHello
+// blows through on its own once $TMPDIR is prepended. The directory is still
+// made fresh for each call and removed when the test ends.
 func socketPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "f.sock")
+
+	dir, err := os.MkdirTemp("/tmp", "tm")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "f.sock")
 }
 
 func TestListenCreatesTheSocketReadableByNobodyElse(t *testing.T) {
