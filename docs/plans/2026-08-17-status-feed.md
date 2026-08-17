@@ -2829,11 +2829,30 @@ func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) *f
 }
 ```
 
-Update the `interactive` stub in `main_test.go` to the four-argument signature, and add a test that the feed is skipped when it is switched off:
+**Make `main_test.go` hermetic first.** `testEnv` (`main_test.go:56`) builds its
+configuration from `profile.Default()`, so the moment `Feed` defaults to true
+every existing test that reaches the TUI path tries to bind
+`/var/run/tun-manager.sock`. That is the exact failure the comment at
+`main_test.go:77-79` already warns about for `WgQuick` and `RunDir`. Add the
+socket to the same block, right after `cfg.RunDir = t.TempDir()`:
+
+```go
+	// Same reason as the two above: the default socket lives in /var/run, and
+	// a test that binds it either fails on a machine where it cannot or leaves
+	// a real socket behind on a machine where it can.
+	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
+```
+
+Then update every `interactive` stub in `main_test.go` (there are five, at
+roughly lines 363, 379, 401, 417 and 427) to the four-argument signature, and
+add two tests:
 
 ```go
 func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
-	e := testEnv(t)
+	e := testEnv(t, &fakeRunner{})
+	cfg, _, _ := e.config()
+	cfg.Feed = false
+
 	var got *feed.Server
 	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
 		got = f
@@ -2850,7 +2869,63 @@ func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
 }
 ```
 
-Build `testEnv` so its configuration has `Feed: false` — follow whatever the file already does to construct an `env`, and set `Feed: true` with a `FeedSocket` in `t.TempDir()` in a second test that asserts a feed is passed and that the socket exists.
+```go
+func TestTheInterfaceGetsAFeedWhenItIsOn(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	cfg, _, _ := e.config()
+
+	var got *feed.Server
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+		got = f
+		if f != nil {
+			// While the interface runs, the socket is there to be connected to.
+			if _, err := os.Stat(cfg.FeedSocket); err != nil {
+				t.Errorf("stat %s: %v", cfg.FeedSocket, err)
+			}
+		}
+		return nil
+	}
+
+	if err := e.run(nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got == nil {
+		t.Fatal("feed = nil, want one")
+	}
+	if _, err := os.Stat(cfg.FeedSocket); !os.IsNotExist(err) {
+		t.Errorf("stat after run = %v, want the socket cleaned up", err)
+	}
+}
+
+func TestAFeedThatCannotBindIsReportedRatherThanFatal(t *testing.T) {
+	// Losing the menu bar must never cost you the ability to bring a tunnel up.
+	e := testEnv(t, &fakeRunner{})
+	cfg, _, _ := e.config()
+	cfg.FeedSocket = filepath.Join(t.TempDir(), "no-such-dir", "f.sock")
+
+	var got *feed.Server
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+		got = f
+		return nil
+	}
+
+	if err := e.run(nil); err != nil {
+		t.Fatalf("run = %v, want a missing feed not to stop the interface", err)
+	}
+	if got != nil {
+		t.Errorf("feed = %+v, want none", got)
+	}
+	if out := e.out.(*strings.Builder).String(); !strings.Contains(out, "status feed unavailable") {
+		t.Errorf("output = %q, want it to say why there is no feed", out)
+	}
+}
+```
+
+For the first test, `testEnv` must have `Feed` on — it comes from `Default()`, so
+it already does once Step 3 lands. Adjust the `e.out` assertion in the second
+test to however the file already reads that writer if `*strings.Builder` is not
+how it is typed.
 
 - [ ] **Step 10: Run everything**
 
