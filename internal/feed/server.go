@@ -75,13 +75,15 @@ type Server struct {
 
 	ln net.Listener
 
-	mu       sync.Mutex
-	closed   bool
-	closing  bool
-	clients  map[*client]struct{}
-	view     app.View
-	haveView bool
-	sampling chan struct{}
+	mu          sync.Mutex
+	closed      bool
+	closing     bool
+	clients     map[*client]struct{}
+	view        app.View
+	haveView    bool
+	sampling    chan struct{}
+	requests    chan Request
+	lastRefresh time.Time
 
 	// chmod and remove are the filesystem calls Listen and Close depend on.
 	// They are fields so a test can make them fail: the paths where the
@@ -117,6 +119,26 @@ func (s *Server) removeFn() func(string) error {
 		return s.remove
 	}
 	return os.Remove
+}
+
+// Requests yields what clients asked for that the feed cannot do itself. It is
+// a Request rather than a bare signal so a second verb does not change every
+// signature.
+//
+// The channel is buffered by one and written without blocking: a refresh that
+// cannot be delivered is dropped, because the next one carries the same
+// meaning and nothing guarantees anybody is listening.
+func (s *Server) Requests() <-chan Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requestsLocked()
+}
+
+func (s *Server) requestsLocked() chan Request {
+	if s.requests == nil {
+		s.requests = make(chan Request, 1)
+	}
+	return s.requests
 }
 
 // clientCount reports how many clients are connected. It exists for the tests:
@@ -318,6 +340,21 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 		delete(c.watch, msg.Tunnel)
 		s.mu.Unlock()
 		s.retick()
+	case "refresh":
+		s.mu.Lock()
+		now := s.clock()
+		if !s.lastRefresh.IsZero() && now.Sub(s.lastRefresh) < refreshFloor {
+			s.mu.Unlock()
+			return
+		}
+		s.lastRefresh = now
+		reqs := s.requestsLocked()
+		s.mu.Unlock()
+
+		select {
+		case reqs <- Request{Kind: RequestRefresh}:
+		default:
+		}
 	}
 }
 
