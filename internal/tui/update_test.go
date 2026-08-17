@@ -66,7 +66,7 @@ func TestViewMsgLoadsTheRows(t *testing.T) {
 	if len(m.view.Rows) != 3 {
 		t.Fatalf("len(rows) = %d, want 3", len(m.view.Rows))
 	}
-	if m.busy {
+	if m.busy() {
 		t.Error("busy = true, want false once the refresh landed")
 	}
 }
@@ -180,7 +180,7 @@ func TestRefreshKeyMarksTheModelBusy(t *testing.T) {
 
 	m = key(m, "r")
 
-	if !m.busy {
+	if !m.busy() {
 		t.Error("busy = false after `r`, want true while the refresh runs")
 	}
 }
@@ -283,19 +283,26 @@ func TestTheSelectionIsClearedWhenTheBatchEnds(t *testing.T) {
 	}
 }
 
-func TestABatchCountsItsStepsAsTheyReport(t *testing.T) {
+func TestTheHeaderCountsWhatIsStillRunning(t *testing.T) {
+	// Batches overlap, so a fraction of one of them would be a half-truth. What
+	// is true at any moment is how many tunnels are in flight.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
-
-	for i := 1; i <= 3; i++ {
-		next, _ := m.Update(finished("alpha", "down", nil))
+	m.batches = 1
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		next, _ := m.Update(started(name, app.ActionDown))
 		m = next.(Model)
-		if m.opDone != i {
-			t.Fatalf("opDone = %d after %d step(s)", m.opDone, i)
+	}
+
+	for want := 3; want > 0; want-- {
+		if got := m.activity(); !strings.Contains(got, fmt.Sprintf("%d running", want)) {
+			t.Errorf("activity = %q, want %d running", got, want)
 		}
-		if got, want := m.activity(), fmt.Sprintf("%s working %d/3", m.spinner(), i); got != want {
-			t.Errorf("status = %q, want %q", got, want)
-		}
+		next, _ := m.Update(finished([]string{"alpha", "bravo", "charlie"}[3-want], "down", nil))
+		m = next.(Model)
+	}
+
+	if got := m.activity(); strings.Contains(got, "running") {
+		t.Errorf("activity = %q, want nothing left running", got)
 	}
 }
 
@@ -387,16 +394,17 @@ func TestReadingTheTableKeepsWorkingWhileBusy(t *testing.T) {
 	}
 }
 
-func TestStartingWorkIsRefusedWhileBusy(t *testing.T) {
-	// Two batches of wg-quick at once is how a routing table gets corrupted.
+func TestReadingTheSystemIsNotStackedOnItself(t *testing.T) {
+	// Refreshing and pinging read the whole system; a second one while the
+	// first is out reads the same thing twice.
 	m := loadedModel(threeRows...)
-	m = key(m, "r")
-	m.opTotal, m.opDone = 0, 0
 
-	for _, k := range []string{"s", "n", "enter", "r", "p"} {
-		next := key(m, k)
-		if next.opTotal != 0 {
-			t.Errorf("%q started a batch of %d while busy", k, next.opTotal)
+	m = key(m, "r")
+	m = key(m, "p")
+
+	for _, k := range []string{"r", "p"} {
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}); cmd != nil {
+			t.Errorf("%q started a second read while one was in flight", k)
 		}
 	}
 }
@@ -432,7 +440,7 @@ func TestEKeyIsNotBound(t *testing.T) {
 
 	m = key(m, "e")
 
-	if m.busy {
+	if m.busy() {
 		t.Error("busy = true after `e`, want the key ignored")
 	}
 }
@@ -573,7 +581,7 @@ func TestTickRefreshesWhenIdle(t *testing.T) {
 
 	next, cmd := m.Update(tickMsg(time.Now()))
 
-	if !next.(Model).busy {
+	if !next.(Model).busy() {
 		t.Error("busy = false after a tick, want the refresh started")
 	}
 	if cmd == nil {
@@ -589,7 +597,7 @@ func TestTickIsSkippedWhileBusy(t *testing.T) {
 
 	next, cmd := m.Update(tickMsg(time.Now()))
 
-	if !next.(Model).busy {
+	if !next.(Model).busy() {
 		t.Error("busy = false, want the running operation untouched")
 	}
 	if cmd == nil {
@@ -641,7 +649,7 @@ func TestEnterOnAnEmptyTableDoesNothing(t *testing.T) {
 
 	m = key(m, "enter")
 
-	if m.busy {
+	if m.busy() {
 		t.Error("busy = true, want enter ignored with nothing to act on")
 	}
 }
@@ -676,7 +684,7 @@ func TestAnEmptyPlanStartsNothing(t *testing.T) {
 	if cmd != nil {
 		t.Error("a command was returned for an empty plan")
 	}
-	if m.busy {
+	if m.busy() {
 		t.Error("busy = true, want nothing started")
 	}
 }
@@ -759,7 +767,7 @@ func TestHeaderReportsWork(t *testing.T) {
 
 	m = key(m, "r")
 
-	if !strings.Contains(m.View(), "working") {
+	if !strings.Contains(m.View(), "refreshing") {
 		t.Errorf("header does not report the running refresh:\n%s", m.View())
 	}
 }
@@ -885,11 +893,11 @@ func TestNKeyStartsOneStepPerTunnelOfTheNeededGroup(t *testing.T) {
 
 	m = key(m, "n")
 
-	if !m.busy {
+	if !m.busy() {
 		t.Error("busy = false after `n`, want the group being started")
 	}
-	if m.opTotal != 2 {
-		t.Errorf("opTotal = %d, want one step per tunnel of the group", m.opTotal)
+	if m.batches != 1 {
+		t.Errorf("batches = %d, want one", m.batches)
 	}
 }
 
@@ -1030,7 +1038,7 @@ func TestASingleLongStepStillAnimates(t *testing.T) {
 	// frame would stay identical for as long as wg-quick takes. Something has
 	// to change on screen or the interface reads as hung.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 1
+	m.batches = 1
 
 	first := m.activity()
 	next, cmd := m.Update(heartbeatMsg{})
@@ -1061,7 +1069,7 @@ func TestStartingWorkStartsTheHeartbeat(t *testing.T) {
 
 	m = key(m, "r")
 
-	if !m.busy {
+	if !m.busy() {
 		t.Fatal("busy = false after `r`")
 	}
 	if _, cmd := m.Update(heartbeatMsg{}); cmd == nil {
@@ -1086,11 +1094,12 @@ func TestTheActivitySitsBesideTheContext(t *testing.T) {
 	// Far right is where the eye goes last. Work in progress belongs next to
 	// what it is happening to.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal, m.opDone = true, 8, 3
+	m.batches = 1
+	m.inFlight = map[string]string{"alpha": app.ActionUp, "bravo": app.ActionUp, "charlie": app.ActionUp}
 
 	header := strings.Split(m.View(), "\n")[0]
 	ctx := strings.Index(header, "ctx:")
-	work := strings.Index(header, "working")
+	work := strings.Index(header, "running")
 
 	if ctx < 0 || work < 0 {
 		t.Fatalf("header has no context or no activity:\n%s", header)
@@ -1128,17 +1137,18 @@ func TestAnIdleHeaderShowsNoActivity(t *testing.T) {
 func TestTheActivitySaysWhatIsHappening(t *testing.T) {
 	m := loadedModel(threeRows...)
 
-	m.busy, m.opTotal, m.opDone = true, 8, 3
-	if got := m.activity(); !strings.Contains(got, "working 3/8") {
-		t.Errorf("activity = %q, want the batch counted off", got)
+	m.inFlight = map[string]string{"alpha": app.ActionUp, "bravo": app.ActionUp, "charlie": app.ActionUp}
+	if got := m.activity(); !strings.Contains(got, "3 running") {
+		t.Errorf("activity = %q, want the tunnels in flight counted", got)
 	}
 
-	m.busy, m.opTotal = true, 0
-	if got := m.activity(); !strings.Contains(got, "working") {
-		t.Errorf("activity = %q, want it to say it is working", got)
+	m.inFlight = map[string]string{}
+	m.refreshing = true
+	if got := m.activity(); !strings.Contains(got, "refreshing") {
+		t.Errorf("activity = %q, want it to say it is refreshing", got)
 	}
 
-	m.busy, m.pinging = false, true
+	m.refreshing, m.pinging = false, true
 	if got := m.activity(); !strings.Contains(got, "pinging") {
 		t.Errorf("activity = %q, want it to say it is pinging", got)
 	}
@@ -1146,7 +1156,7 @@ func TestTheActivitySaysWhatIsHappening(t *testing.T) {
 
 func TestTheActivityCarriesTheSpinner(t *testing.T) {
 	m := loadedModel(threeRows...)
-	m.busy = true
+	m.batches = 1
 
 	first := m.activity()
 	m.beat++
@@ -1158,7 +1168,7 @@ func TestTheActivityCarriesTheSpinner(t *testing.T) {
 func TestTheCountdownIsStillShownWhileWorking(t *testing.T) {
 	// The next automatic refresh is no less true for something being in flight.
 	m := loadedModel(threeRows...)
-	m.busy = true
+	m.batches = 1
 	m.now = func() time.Time { return m.lastRefresh.Add(time.Second) }
 
 	if !strings.Contains(m.View(), "next ⟳") {
@@ -1211,7 +1221,7 @@ func TestSeveralRowsCanBeInFlightAtOnce(t *testing.T) {
 	// Tunnels start at the same time, so more than one row is waiting at any
 	// moment. A single "current tunnel" cannot say that.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
+	m.batches = 1
 
 	for _, e := range []app.Event{
 		{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown},
@@ -1236,7 +1246,7 @@ func TestARowClearsOnItsOwnResult(t *testing.T) {
 	// One tunnel finishing says nothing about the others, so it must not clear
 	// their marks.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 2
+	m.batches = 1
 	for _, e := range []app.Event{
 		{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown},
 		{Phase: app.Started, Tunnel: "bravo", Action: app.ActionUp},
@@ -1259,26 +1269,26 @@ func TestARowClearsOnItsOwnResult(t *testing.T) {
 	}
 }
 
-func TestOnlyFinishedEventsCountTowardsTheTotal(t *testing.T) {
+func TestATunnelIsInFlightBetweenItsTwoEvents(t *testing.T) {
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 2
+	m.batches = 1
 
-	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionUp}})
+	next, _ := m.Update(started("alpha", app.ActionUp))
 	m = next.(Model)
-	if m.opDone != 0 {
-		t.Errorf("opDone = %d after a start, want 0", m.opDone)
+	if len(m.inFlight) != 1 {
+		t.Errorf("inFlight = %v after a start, want alpha in it", m.inFlight)
 	}
 
-	next, _ = m.Update(eventMsg{event: app.Event{Phase: app.Finished, Tunnel: "alpha", Action: app.ActionUp}})
+	next, _ = m.Update(finished("alpha", app.ActionUp, nil))
 	m = next.(Model)
-	if m.opDone != 1 {
-		t.Errorf("opDone = %d after a finish, want 1", m.opDone)
+	if len(m.inFlight) != 0 {
+		t.Errorf("inFlight = %v after a finish, want it empty", m.inFlight)
 	}
 }
 
 func TestAFinishedEventIsLogged(t *testing.T) {
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 1
+	m.batches = 1
 
 	next, _ := m.Update(eventMsg{event: app.Event{
 		Phase: app.Finished, Tunnel: "alpha", Action: app.ActionUp,
@@ -1294,26 +1304,29 @@ func TestAFinishedEventIsLogged(t *testing.T) {
 	}
 }
 
-func TestTheEndOfABatchClearsEveryMark(t *testing.T) {
+func TestOneBatchEndingLeavesAnotherAlone(t *testing.T) {
+	// Every tunnel clears its own mark when it reports, so a batch closing has
+	// nothing left of its own to clear - and must not touch what is still
+	// running elsewhere.
 	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 2
-	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown}})
+	m.batches = 2
+	next, _ := m.Update(started("alpha", app.ActionDown))
 	m = next.(Model)
 
 	next, _ = m.Update(batchDoneMsg{})
 	m = next.(Model)
 
-	if len(m.inFlight) != 0 {
-		t.Errorf("inFlight = %v, want it cleared", m.inFlight)
+	if _, running := m.inFlight["alpha"]; !running {
+		t.Errorf("inFlight = %v, want alpha still marked", m.inFlight)
 	}
-	if m.opTotal != 0 {
-		t.Errorf("opTotal = %d, want the batch forgotten", m.opTotal)
+	if m.batches != 1 {
+		t.Errorf("batches = %d, want the other one still counted", m.batches)
 	}
 }
 
 func TestTheRowMarksTurnWithTheSpinner(t *testing.T) {
 	m := loadedModel(threeRows...)
-	m.busy = true
+	m.batches = 1
 	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown}})
 	m = next.(Model)
 
@@ -1322,5 +1335,121 @@ func TestTheRowMarksTurnWithTheSpinner(t *testing.T) {
 
 	if second := m.cells(m.view.Rows[0]).State; second == first {
 		t.Errorf("the mark is still %q after a beat, want it to turn", first)
+	}
+}
+
+func TestAnotherTunnelCanBeActedOnWhileOneRuns(t *testing.T) {
+	// Tunnels no longer wait for each other, so neither should the person
+	// driving them: enter on a second row while a first one is still starting.
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Down),
+		row("bravo", profile.GroupNeeded, wg.Down),
+	)})
+	m = next.(Model)
+
+	m = key(m, "enter") // alpha
+	next, _ = m.Update(started("alpha", app.ActionUp))
+	m = next.(Model)
+
+	m = key(m, "j")
+	before := m.batches
+	m = key(m, "enter") // bravo, while alpha is still going
+
+	if m.batches != before+1 {
+		t.Errorf("batches = %d, want a second one started", m.batches)
+	}
+}
+
+func TestATunnelAlreadyRunningIsNotStartedTwice(t *testing.T) {
+	// Two wg-quick runs on the same tunnel is the one overlap that is never
+	// wanted.
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
+	m = next.(Model)
+	next, _ = m.Update(started("alpha", app.ActionUp))
+	m = next.(Model)
+
+	before := m.batches
+	m = key(m, "enter")
+
+	if m.batches != before {
+		t.Errorf("batches = %d, want no batch for a tunnel already running", m.batches)
+	}
+}
+
+func TestABatchSkipsTheTunnelsAlreadyRunning(t *testing.T) {
+	a := testApp(t, &fakeRunner{})
+	m := New(a, nil)
+	next, _ := m.Update(viewMsg{view: viewOf(
+		row("alpha", profile.GroupNeeded, wg.Down),
+		row("bravo", profile.GroupNeeded, wg.Down),
+	)})
+	m = next.(Model)
+	next, _ = m.Update(started("alpha", app.ActionUp))
+	m = next.(Model)
+
+	steps := m.idle(m.upNeeded())
+
+	if len(steps) != 1 || steps[0].Tunnel.Name != "bravo" {
+		t.Errorf("steps = %+v, want alpha left alone", steps)
+	}
+}
+
+func TestTheRefreshIsNotFiredTwiceAtOnce(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	m = key(m, "r")
+	if !m.refreshing {
+		t.Fatal("refreshing = false after `r`")
+	}
+
+	// A second press must not stack a second read of the whole system.
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}); cmd != nil {
+		t.Error("a second refresh was started while one was in flight")
+	}
+}
+
+func TestTheLastBatchToFinishRefreshes(t *testing.T) {
+	// One refresh for however many batches were running, not one each.
+	m := loadedModel(threeRows...)
+	m.batches = 2
+
+	next, cmd := m.Update(batchDoneMsg{})
+	m = next.(Model)
+	if cmd != nil {
+		t.Error("the first batch to finish asked for a refresh")
+	}
+
+	_, cmd = m.Update(batchDoneMsg{})
+	if cmd == nil {
+		t.Error("the last batch to finish did not refresh")
+	}
+}
+
+func TestTheActivityCountsWhatIsRunning(t *testing.T) {
+	m := loadedModel(threeRows...)
+	for _, e := range []eventMsg{started("alpha", app.ActionDown), started("bravo", app.ActionUp)} {
+		next, _ := m.Update(e)
+		m = next.(Model)
+	}
+
+	if got := m.activity(); !strings.Contains(got, "2 running") {
+		t.Errorf("activity = %q, want the number in flight", got)
+	}
+}
+
+func TestTheLastBatchDoesNotRefreshOverAnotherRefresh(t *testing.T) {
+	// A batch ending while the periodic tick is already reading would be two
+	// reads of the same thing, and the second would land on top of the first.
+	m := loadedModel(threeRows...)
+	m.batches, m.refreshing = 1, true
+
+	_, cmd := m.Update(batchDoneMsg{})
+
+	if cmd != nil {
+		t.Error("a refresh was started while one was already in flight")
 	}
 }

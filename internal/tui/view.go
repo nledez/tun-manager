@@ -88,10 +88,10 @@ func (m Model) header() string {
 // only waiting.
 func (m Model) activity() string {
 	switch {
-	case m.busy && m.opTotal > 0:
-		return fmt.Sprintf("%s working %d/%d", m.spinner(), m.opDone, m.opTotal)
-	case m.busy:
-		return m.spinner() + " working"
+	case len(m.inFlight) > 0:
+		return fmt.Sprintf("%s %d running", m.spinner(), len(m.inFlight))
+	case m.busy():
+		return m.spinner() + " refreshing"
 	case m.pinging:
 		return m.spinner() + " pinging"
 	default:

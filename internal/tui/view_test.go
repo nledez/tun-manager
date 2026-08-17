@@ -300,7 +300,8 @@ func TestGoldenBatchInProgress(t *testing.T) {
 	// The one frame the reported bug was about: a batch running, with the
 	// tunnel being waited on saying so where its state would be.
 	m := frameModel(t, 120, 30)
-	m.busy, m.opTotal, m.opDone = true, 4, 1
+	m.batches = 1
+	m.inFlight = map[string]string{"charlie": app.ActionUp}
 	next, _ := m.Update(started("charlie", app.ActionUp))
 
 	teatest.RequireEqualOutput(t, []byte(next.(Model).View()))

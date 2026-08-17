@@ -19,10 +19,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		if m.busy {
+		if m.refreshing {
 			return m, m.tick()
 		}
-		m.busy = true
+		m.refreshing = true
 		return m, tea.Batch(m.refresh(), m.tick(), m.heartbeat())
 
 	case viewMsg:
@@ -36,7 +36,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case eventMsg:
-		return m.onEvent(msg.event)
+		return m.onEvent(msg)
 
 	case batchDoneMsg:
 		return m.onBatchDone()
@@ -44,7 +44,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case heartbeatMsg:
 		// Only while there is something to report on; a timer firing on an idle
 		// interface wakes the process for nothing.
-		if !m.busy && !m.pinging {
+		if !m.busy() && !m.pinging {
 			return m, nil
 		}
 		m.beat++
@@ -57,7 +57,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
-	m.busy = false
+	m.refreshing = false
 	m.err = msg.err
 	if msg.err != nil {
 		m.log("refresh failed: "+msg.err.Error(), true)
@@ -88,31 +88,36 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 // onEvent records one report from a running batch and asks for the next. Each
 // event names its own tunnel, so nothing here has to know what the others are
 // doing.
-func (m Model) onEvent(e app.Event) (tea.Model, tea.Cmd) {
+func (m Model) onEvent(msg eventMsg) (tea.Model, tea.Cmd) {
+	e := msg.event
 	switch e.Phase {
 	case app.Started:
 		m.inFlight = withKey(m.inFlight, e.Tunnel, e.Action)
 
 	case app.Finished:
 		m.inFlight = withoutKey(m.inFlight, e.Tunnel)
-		m.opDone++
 		text, isFail := describe(e.Result)
 		m.log(text, isFail)
 		if isFail {
 			m.showLogs = true
 		}
 	}
-	return m, nextEvent(m.events)
+	return m, nextEvent(msg.from)
 }
 
-// onBatchDone closes a batch: one refresh for the whole of it rather than one
-// per tunnel, and the selection is spent.
+// onBatchDone closes one batch. The refresh waits for the last of them: reading
+// the whole system once per batch would be several reads of the same thing.
 func (m Model) onBatchDone() (tea.Model, tea.Cmd) {
+	m.batches = max(0, m.batches-1)
+	if m.batches > 0 {
+		return m, nil
+	}
+
 	m.selected = map[string]bool{}
-	m.inFlight = map[string]string{}
-	m.opTotal, m.opDone = 0, 0
-	m.events = nil
-	m.busy = true
+	if m.refreshing {
+		return m, nil
+	}
+	m.refreshing = true
 	return m, m.refresh()
 }
 
@@ -177,21 +182,25 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Anything below starts work, and two batches of wg-quick at once is how a
-	// routing table gets corrupted.
-	if m.busy {
-		return m, nil
-	}
-
 	switch key {
 	case "r":
-		m.busy = true
+		// A second read of the whole system while the first is out gains
+		// nothing.
+		if m.refreshing {
+			return m, nil
+		}
+		m.refreshing = true
 		return m, tea.Batch(m.refresh(), m.heartbeat())
 
 	case "p":
+		if m.pinging {
+			return m, nil
+		}
 		m.pinging = true
 		return m, tea.Batch(m.ping(), m.heartbeat())
 
+	// Acting on one tunnel no longer waits for another: batches overlap, and
+	// startBatch leaves out whatever is already running.
 	case "enter":
 		return m.startBatch(m.toggleTargets())
 
@@ -208,20 +217,32 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // runs on its own from here: everything the interface knows about it arrives as
 // an event.
 func (m Model) startBatch(steps []app.Step) (tea.Model, tea.Cmd) {
+	steps = m.idle(steps)
 	if len(steps) == 0 || m.app == nil {
 		return m, nil
 	}
 
-	m.busy = true
-	m.opTotal, m.opDone = len(steps), 0
-	m.inFlight = map[string]string{}
+	m.batches++
 	// No deadline on the batch as a whole: it is as long as its slowest tunnel,
 	// and a batch cut off halfway leaves the machine in a state nobody asked
 	// for. Each wg-quick run is the thing that can hang, and the context that
 	// carries it is the program's own.
-	m.events = m.app.RunBatch(context.Background(), steps)
+	events := m.app.RunBatch(context.Background(), steps)
 
-	return m, tea.Batch(nextEvent(m.events), m.heartbeat())
+	return m, tea.Batch(nextEvent(events), m.heartbeat())
+}
+
+// idle drops the steps whose tunnel is already being worked on. Two wg-quick
+// runs on the same tunnel is the one overlap that is never wanted, and it is
+// the only thing a second batch has to be kept away from.
+func (m Model) idle(steps []app.Step) []app.Step {
+	out := make([]app.Step, 0, len(steps))
+	for _, s := range steps {
+		if _, running := m.inFlight[s.Tunnel.Name]; !running {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // toggleTargets brings the selected tunnels (or the cursor row) to the opposite

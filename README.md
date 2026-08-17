@@ -31,13 +31,13 @@ tunnels off, and the row being waited on says so where its state would be — so
 slow `wg-quick` is never mistaken for a hung program:
 
 ```
- tun-manager  ctx: office (en0 198.51.100.42)  ⠋ working 1/4      next ⟳ 4m12s
+ tun-manager  ctx: office (en0 198.51.100.42)  ⠋ 2 running        next ⟳ 4m12s
  ───────────────────────────────────────────────────────────────────────────────
     NAME          GRP    STATE     HANDSHAKE  RX / TX        PING   ENDPOINT
  ▸  alpha         needed ● up      12s        1.2M / 840K    18ms   192.0.2.10:51820
     bravo         needed ● stale   9m04s      2.3M / 961K    ×      198.51.100.20:51821
     charlie       extra  ⠋ starting                                 gateway.example:51824
-    delta         —      ○ down                                     198.51.100.30:51822
+    delta         —      ⠋ stopping                                 198.51.100.30:51822
 ```
 
 ## Why root
@@ -122,9 +122,12 @@ A batch starts every tunnel at once, spaced a few milliseconds apart so that two
 `wg-quick` runs do not reach the routing table in the same instant, so eight of
 them take about as long as the slowest rather than as long as all of them added
 up. Each reports for itself: the row says `starting` or `stopping` while it
-waits, the header counts the batch off, and the cursor, the log pane and the
-help keep responding throughout — only the keys that would start a second batch
-are held back.
+waits, and the header counts how many are in flight.
+
+Nothing waits for a batch. The cursor, the log pane and the help keep
+responding, and `⏎` on another tunnel starts it there and then — batches
+overlap. The one thing refused is a second `wg-quick` on a tunnel that already
+has one, which is skipped rather than queued.
 
 ## How a tunnel's state is decided
 

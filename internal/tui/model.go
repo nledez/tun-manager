@@ -44,10 +44,12 @@ type (
 	pingMsg struct {
 		results map[string]probe.Result
 	}
-	// eventMsg carries one report from a running batch. Tunnels run at the same
-	// time, so these interleave and each one names its own.
+	// eventMsg carries one report from a running batch, and the batch it came
+	// from so the interface knows where to listen next. Several batches can be
+	// running, and their events interleave.
 	eventMsg struct {
 		event app.Event
+		from  <-chan app.Event
 	}
 	// batchDoneMsg closes a batch, once its channel is drained.
 	batchDoneMsg struct{}
@@ -67,10 +69,15 @@ type Model struct {
 	selected map[string]bool
 	logs     []LogEntry
 
-	cursor  int
-	opTotal int
-	opDone  int
-	beat    int
+	cursor int
+	beat   int
+	// batches counts the batches still running. Acting on one tunnel does not
+	// wait for another, so there can be several at once, and the last to finish
+	// is the one that refreshes.
+	batches int
+	// refreshing is a read of the whole system in flight. Firing a second while
+	// the first is out gains nothing.
+	refreshing bool
 
 	// inFlight maps a tunnel to what is happening to it right now. A map rather
 	// than a single name, because a batch launches them together and several
@@ -78,12 +85,10 @@ type Model struct {
 	inFlight map[string]string
 	// events is the running batch, or nil. The interface reads it; it does not
 	// drive it.
-	events   <-chan app.Event
 	width    int
 	height   int
 	showLogs bool
 	showHelp bool
-	busy     bool
 	pinging  bool
 	quitting bool
 	err      error
@@ -165,17 +170,26 @@ func (m Model) ping() tea.Cmd {
 	}
 }
 
-// nextEvent turns the next report of a running batch into a message, and is
-// re-issued for as long as the batch keeps talking. This is the seam: the batch
-// runs on its own, the interface only reads what it says.
+// nextEvent turns the next report of a batch into a message, and is re-issued
+// for as long as that batch keeps talking. This is the seam: the batch runs on
+// its own, the interface only reads what it says.
+//
+// The channel travels with the message, so several batches can be listened to
+// at once without the interface keeping a list of them.
 func nextEvent(events <-chan app.Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-events
 		if !ok {
 			return batchDoneMsg{}
 		}
-		return eventMsg{event: e}
+		return eventMsg{event: e, from: events}
 	}
+}
+
+// busy reports whether anything is in flight, which is what decides that the
+// screen has to keep moving.
+func (m Model) busy() bool {
+	return m.batches > 0 || m.refreshing
 }
 
 // groupMembers resolves a group against the network the interface last saw.
