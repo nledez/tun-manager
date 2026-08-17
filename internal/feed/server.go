@@ -1,7 +1,9 @@
 package feed
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/wgconf"
+	"ledez.net/tun-manager/internal/wire"
 )
 
 const (
@@ -21,7 +24,7 @@ const (
 	// sendQueue is how many messages a client may fall behind by. Sixteen is
 	// several seconds of sampling: a client that cannot keep up with one
 	// message a second is not going to recover.
-	sendQueue = 16 //nolint:unused
+	sendQueue = 16
 
 	// sampleInterval is how often a watched tunnel's counters are read.
 	sampleInterval = time.Second //nolint:unused
@@ -66,8 +69,11 @@ type Server struct {
 
 	ln net.Listener
 
-	mu     sync.Mutex
-	closed bool
+	mu       sync.Mutex
+	closed   bool
+	clients  map[*client]struct{}
+	view     app.View
+	haveView bool
 }
 
 func (s *Server) interval() time.Duration {
@@ -141,4 +147,176 @@ func (s *Server) Close() error {
 		err = rmErr
 	}
 	return err
+}
+
+// client is one connection, with the queue its writer drains.
+//
+// A client's watch set lives under the server's mutex rather than one of its
+// own: the sampler reads every client's set at once, and a second lock ordering
+// is a second thing to get wrong.
+type client struct {
+	conn  net.Conn
+	out   chan any
+	watch map[string]bool
+}
+
+// Serve accepts connections until ctx is cancelled, then says goodbye to
+// everyone and removes the socket.
+func (s *Server) Serve(ctx context.Context) error {
+	if s.ln == nil {
+		return fmt.Errorf("feed: Serve on %s before Listen", s.Path)
+	}
+
+	// Closing the listener is what unblocks Accept; there is no deadline on it.
+	go func() {
+		<-ctx.Done()
+		s.shutdown()
+	}()
+
+	for {
+		conn, err := s.ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil //nolint:nilerr // deliberate: cancellation is not an error
+			}
+			return fmt.Errorf("accept on %s: %w", s.Path, err)
+		}
+		s.add(conn)
+	}
+}
+
+// Publish fans a view out to every client and remembers it for whoever
+// connects next. Safe to call from any goroutine.
+func (s *Server) Publish(v app.View) {
+	s.mu.Lock()
+	s.view, s.haveView = v, true
+	msg := stateMsg{Type: "state", View: wire.Of(v)}
+	clients := make([]*client, 0, len(s.clients))
+	for c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.mu.Unlock()
+
+	for _, c := range clients {
+		s.sendTo(c, msg)
+	}
+}
+
+func (s *Server) add(conn net.Conn) {
+	c := &client{conn: conn, out: make(chan any, sendQueue), watch: map[string]bool{}}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		conn.Close() //nolint:errcheck
+		return
+	}
+	if s.clients == nil {
+		s.clients = map[*client]struct{}{}
+	}
+	s.clients[c] = struct{}{}
+	view, have := s.view, s.haveView
+	s.mu.Unlock()
+
+	go c.write()
+	go s.read(c)
+
+	s.sendTo(c, helloMsg{Type: "hello", Schema: Schema, Version: s.Version})
+	if have {
+		// Whoever connects between two refreshes must not sit blank until the
+		// next one, which is five minutes away by default.
+		s.sendTo(c, stateMsg{Type: "state", View: wire.Of(view)})
+	}
+}
+
+// write drains the queue onto the connection. Encode appends a newline, which
+// is the framing.
+func (c *client) write() {
+	defer c.conn.Close() //nolint:errcheck
+
+	enc := json.NewEncoder(c.conn)
+	for msg := range c.out {
+		if err := enc.Encode(msg); err != nil {
+			return
+		}
+	}
+}
+
+// read turns each line a client sends into an action. A line that does not
+// parse, or whose type is unknown, is ignored: it is how a newer application
+// talks to an older publisher.
+func (s *Server) read(c *client) {
+	defer s.drop(c)
+
+	lines := bufio.NewScanner(c.conn)
+	for lines.Scan() {
+		var msg clientMsg
+		if err := json.Unmarshal(lines.Bytes(), &msg); err != nil {
+			continue
+		}
+		s.onMessage(c, msg)
+	}
+}
+
+// onMessage grows in Tasks 6 and 7. Nothing here can act on a tunnel.
+func (s *Server) onMessage(c *client, msg clientMsg) {}
+
+// sendTo queues one message, dropping the client if it has fallen too far
+// behind.
+//
+// The queue is only ever closed by whoever removed the client from s.clients
+// while holding the mutex, so a send that finds the client live cannot land on
+// a closed channel.
+func (s *Server) sendTo(c *client, msg any) {
+	s.mu.Lock()
+	if _, live := s.clients[c]; !live {
+		s.mu.Unlock()
+		return
+	}
+	select {
+	case c.out <- msg:
+		s.mu.Unlock()
+		return
+	default:
+	}
+	s.mu.Unlock()
+
+	s.drop(c)
+}
+
+// drop forgets a client and lets its writer finish.
+func (s *Server) drop(c *client) {
+	s.mu.Lock()
+	if _, live := s.clients[c]; !live {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.clients, c)
+	s.mu.Unlock()
+
+	close(c.out)
+	c.conn.Close() //nolint:errcheck
+}
+
+// shutdown says goodbye to everyone, stops listening and removes the socket.
+func (s *Server) shutdown() {
+	s.mu.Lock()
+	clients := make([]*client, 0, len(s.clients))
+	for c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.clients = map[*client]struct{}{}
+	s.mu.Unlock()
+
+	for _, c := range clients {
+		// Queued rather than written: the writer owns the connection, and the
+		// bye goes out behind whatever it has not flushed yet.
+		select {
+		case c.out <- byeMsg{Type: "bye"}:
+		default:
+		}
+		close(c.out)
+	}
+
+	s.Close() //nolint:errcheck
 }
