@@ -1,10 +1,13 @@
 package feed
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,39 +71,58 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 
 	silent, err := net.Dial("unix", s.Path)
 	if err != nil {
-		t.Fatalf("dial: %v", err)
+		t.Fatalf("dial silent: %v", err)
 	}
 	defer silent.Close()
 
-	// Create a reader connection that will actively read messages.
-	readerConn := dial(t, s)
-	readerConn.next(t) // consume hello
+	attentive, err := net.Dial("unix", s.Path)
+	if err != nil {
+		t.Fatalf("dial attentive: %v", err)
+	}
+	defer attentive.Close()
 
-	// In a separate goroutine, have the reader actively consume messages
-	// to keep its buffer drained.
-	readerDone := make(chan struct{})
+	// The attentive client has to be drained for as long as the publishing
+	// lasts. fatView is sized to defeat the kernel's socket buffer, so a
+	// client nobody reads fills up whether or not it is the one under test,
+	// and both would be dropped for reasons that have nothing to do with the
+	// policy.
+	//
+	// One deadline for the whole drain rather than one per line: bufio.Scanner
+	// latches its first error permanently, so a single timeout mid-loop would
+	// end this goroutine silently and bring back the very flake it exists to
+	// prevent.
+	if err := attentive.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("deadline: %v", err)
+	}
+
+	var states atomic.Int64
+	drained := make(chan struct{})
 	go func() {
-		defer close(readerDone)
-		for {
-			readerConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)) //nolint:errcheck
-			if !readerConn.lines.Scan() {
-				return
+		defer close(drained)
+		lines := bufio.NewScanner(attentive)
+		for lines.Scan() {
+			var msg struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(lines.Bytes(), &msg) == nil && msg.Type == "state" {
+				states.Add(1)
 			}
 		}
 	}()
 
-	// Publish large messages until the silent client is dropped.
+	// Give the drain goroutine a moment to start reading before publishing.
+	time.Sleep(10 * time.Millisecond)
+
 	publishUntil(t, s, 1)
 
-	// Give the reader a moment to drain any final messages.
-	time.Sleep(50 * time.Millisecond)
+	attentive.Close()
+	<-drained
 
-	// Stop the reader goroutine.
-	readerConn.Close()
-	<-readerDone
-
-	// The point is that publishing didn't block and we dropped one client while keeping the other.
-	// This is verified by publishUntil succeeding and ending with 1 client.
+	// publishUntil already proved the attentive client survived. This proves it
+	// was still being served rather than merely still counted.
+	if states.Load() == 0 {
+		t.Error("the attentive client received no state at all")
+	}
 }
 
 func TestPublishingWithNobodyConnectedIsHarmless(t *testing.T) {
