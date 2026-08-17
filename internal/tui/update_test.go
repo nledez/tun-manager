@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -227,14 +226,16 @@ func TestViewMsgErrorKeepsThePreviousRows(t *testing.T) {
 	}
 }
 
-func TestOpMsgLogsEveryResult(t *testing.T) {
+func TestEveryOutcomeIsLogged(t *testing.T) {
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{results: []wg.Result{
-		{Tunnel: "bravo", Action: "up"},
-		{Tunnel: "alpha", Action: "down", Err: errors.New("exit status 1")},
-	}})
-	m = next.(Model)
+	for _, e := range []eventMsg{
+		finished("bravo", "up", nil),
+		finished("alpha", "down", errors.New("exit status 1")),
+	} {
+		next, _ := m.Update(e)
+		m = next.(Model)
+	}
 
 	joined := logText(m)
 	for _, want := range []string{"up bravo", "down alpha", "exit status 1"} {
@@ -244,13 +245,11 @@ func TestOpMsgLogsEveryResult(t *testing.T) {
 	}
 }
 
-func TestOpMsgOpensTheLogPaneOnFailure(t *testing.T) {
+func TestAFailureOpensTheLogPane(t *testing.T) {
 	// A failure the user cannot see is a failure they will not act on.
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{results: []wg.Result{
-		{Tunnel: "alpha", Action: "up", Err: errors.New("exit status 1")},
-	}})
+	next, _ := m.Update(finished("alpha", "up", errors.New("exit status 1")))
 	m = next.(Model)
 
 	if !m.showLogs {
@@ -264,7 +263,7 @@ func TestTheSelectionSurvivesUntilTheBatchEnds(t *testing.T) {
 	m := loadedModel(threeRows...)
 	m = key(m, " ")
 
-	next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
+	next, _ := m.Update(finished("alpha", "down", nil))
 	m = next.(Model)
 
 	if len(m.selected) != 1 {
@@ -276,7 +275,7 @@ func TestTheSelectionIsClearedWhenTheBatchEnds(t *testing.T) {
 	m := loadedModel(threeRows...)
 	m = key(m, " ")
 
-	next, _ := m.Update(opDoneMsg{})
+	next, _ := m.Update(batchDoneMsg{})
 	m = next.(Model)
 
 	if len(m.selected) != 0 {
@@ -289,7 +288,7 @@ func TestABatchCountsItsStepsAsTheyReport(t *testing.T) {
 	m.busy, m.opTotal = true, 3
 
 	for i := 1; i <= 3; i++ {
-		next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
+		next, _ := m.Update(finished("alpha", "down", nil))
 		m = next.(Model)
 		if m.opDone != i {
 			t.Fatalf("opDone = %d after %d step(s)", m.opDone, i)
@@ -304,7 +303,7 @@ func TestLogsAreCapped(t *testing.T) {
 	m := loadedModel(threeRows...)
 
 	for i := 0; i < maxLogs+20; i++ {
-		next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "up"}}})
+		next, _ := m.Update(finished("alpha", "up", nil))
 		m = next.(Model)
 	}
 
@@ -317,12 +316,15 @@ func TestLogsNeverKeepWireGuardKeys(t *testing.T) {
 	// wg-quick can echo a config line; a base64 key must not reach the pane.
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{results: []wg.Result{{
-		Tunnel: "alpha",
-		Action: "up",
-		Err:    errors.New("bad config"),
-		Output: "PrivateKey = +JTI/TFlmc4CNmqe0wc7b/BhyJm3vQWnYbqNO246QsOWI=",
-	}}})
+	next, _ := m.Update(eventMsg{event: app.Event{
+		Phase: app.Finished, Tunnel: "alpha", Action: "up",
+		Result: wg.Result{
+			Tunnel: "alpha",
+			Action: "up",
+			Err:    errors.New("bad config"),
+			Output: "PrivateKey = +JTI/TFlmc4CNmqe0wc7b/BhyJm3vQWnYbqNO246QsOWI=",
+		},
+	}})
 	m = next.(Model)
 
 	if strings.Contains(logText(m), "JTI/TFlmc4CNmqe0wc7b") {
@@ -397,6 +399,21 @@ func TestStartingWorkIsRefusedWhileBusy(t *testing.T) {
 			t.Errorf("%q started a batch of %d while busy", k, next.opTotal)
 		}
 	}
+}
+
+// started and finished build the two reports a batch produces, so a test reads
+// as what happened rather than as a struct literal.
+func started(tunnel, action string) eventMsg {
+	return eventMsg{event: app.Event{Phase: app.Started, Tunnel: tunnel, Action: action}}
+}
+
+func finished(tunnel, action string, err error) eventMsg {
+	return eventMsg{event: app.Event{
+		Phase:  app.Finished,
+		Tunnel: tunnel,
+		Action: action,
+		Result: wg.Result{Tunnel: tunnel, Action: action, Err: err},
+	}}
 }
 
 func logText(m Model) string {
@@ -640,7 +657,7 @@ func TestEmptyTableSaysSo(t *testing.T) {
 func TestSkippedOperationsAreLogged(t *testing.T) {
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "up", Skipped: true}}})
+	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Finished, Tunnel: "alpha", Action: "up", Result: wg.Result{Tunnel: "alpha", Action: "up", Skipped: true}}})
 	m = next.(Model)
 
 	if !strings.Contains(logText(m), "skipped") {
@@ -648,17 +665,19 @@ func TestSkippedOperationsAreLogged(t *testing.T) {
 	}
 }
 
-func TestAFailingBatchIsLoggedAsAWhole(t *testing.T) {
+func TestAnEmptyPlanStartsNothing(t *testing.T) {
+	// Everything already in the wanted state: there is no work, so there is no
+	// batch and nothing claims to be busy.
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{err: errors.New("unknown tunnel \"ghost\"")})
+	next, cmd := m.startBatch(nil)
 	m = next.(Model)
 
-	if !strings.Contains(logText(m), "ghost") {
-		t.Errorf("logs = %s, want the batch error kept", logText(m))
+	if cmd != nil {
+		t.Error("a command was returned for an empty plan")
 	}
-	if !m.showLogs {
-		t.Error("showLogs = false, want the pane opened on a batch failure")
+	if m.busy {
+		t.Error("busy = true, want nothing started")
 	}
 }
 
@@ -929,9 +948,7 @@ func TestTheLogPaneKeepsOnlyItsTail(t *testing.T) {
 	m = key(m, "l")
 
 	for i := 0; i < 10; i++ {
-		next, _ := m.Update(opMsg{results: []wg.Result{
-			{Tunnel: fmt.Sprintf("tunnel%d", i), Action: "up"},
-		}})
+		next, _ := m.Update(finished(fmt.Sprintf("tunnel%d", i), "up", nil))
 		m = next.(Model)
 	}
 
@@ -947,9 +964,7 @@ func TestTheLogPaneKeepsOnlyItsTail(t *testing.T) {
 func TestAFailedOperationIsRenderedInTheLogPane(t *testing.T) {
 	m := loadedModel(threeRows...)
 
-	next, _ := m.Update(opMsg{results: []wg.Result{
-		{Tunnel: "alpha", Action: "up", Err: errors.New("exit status 1")},
-	}})
+	next, _ := m.Update(finished("alpha", "up", errors.New("exit status 1")))
 	m = next.(Model)
 
 	// The failure opens the pane on its own.
@@ -969,12 +984,8 @@ func TestCommandsOfAModelWithoutAnApplicationAreHarmless(t *testing.T) {
 	if msg, ok := m.ping()().(pingMsg); !ok || len(msg.results) != 0 {
 		t.Errorf("ping returned %#v, want an empty pingMsg", msg)
 	}
-	cmd := m.operate(func(context.Context, *app.App) ([]wg.Result, error) {
-		t.Fatal("the operation ran without an application")
-		return nil, nil
-	})
-	if msg, ok := cmd().(opMsg); !ok || len(msg.results) != 0 {
-		t.Errorf("operate returned %#v, want an empty opMsg", msg)
+	if _, cmd := m.startBatch([]app.Step{{Action: app.ActionUp}}); cmd != nil {
+		t.Error("a batch was started without an application to run it")
 	}
 }
 
@@ -1006,7 +1017,7 @@ func TestLogEntriesAreStampedFromTheSameClock(t *testing.T) {
 	m := loadedModel(threeRows...)
 	m.now = func() time.Time { return at }
 
-	next, _ := m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "up"}}})
+	next, _ := m.Update(finished("alpha", "up", nil))
 	m = next.(Model)
 
 	if got := m.logs[0].At; !got.Equal(at) {
@@ -1155,78 +1166,6 @@ func TestTheCountdownIsStillShownWhileWorking(t *testing.T) {
 	}
 }
 
-func TestTheRowBeingWorkedOnSaysSo(t *testing.T) {
-	// The counter says how far along a batch is; it does not say which tunnel
-	// is being waited on, which is what you look at the table for.
-	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
-
-	next, _ := m.Update(opStartMsg{tunnel: "bravo", action: "up"})
-	m = next.(Model)
-
-	if got := m.cells(m.view.Rows[1]).State; !strings.Contains(got, "starting") {
-		t.Errorf("bravo shows %q, want it starting", got)
-	}
-	if got := m.cells(m.view.Rows[0]).State; strings.Contains(got, "starting") {
-		t.Errorf("alpha shows %q, want it untouched", got)
-	}
-}
-
-func TestAStoppingRowSaysStopping(t *testing.T) {
-	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
-
-	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
-	m = next.(Model)
-
-	if got := m.cells(m.view.Rows[0]).State; !strings.Contains(got, "stopping") {
-		t.Errorf("alpha shows %q, want it stopping", got)
-	}
-}
-
-func TestTheRowMarkTurnsWithTheSpinner(t *testing.T) {
-	m := loadedModel(threeRows...)
-	m.busy = true
-	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
-	m = next.(Model)
-
-	first := m.cells(m.view.Rows[0]).State
-	m.beat++
-
-	if second := m.cells(m.view.Rows[0]).State; second == first {
-		t.Errorf("the mark is still %q after a beat, want it to turn", first)
-	}
-}
-
-func TestTheRowMarkClearsWhenTheStepReports(t *testing.T) {
-	// Its result is in; leaving it marked would claim work that is over.
-	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
-	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
-	m = next.(Model)
-
-	next, _ = m.Update(opMsg{results: []wg.Result{{Tunnel: "alpha", Action: "down"}}})
-	m = next.(Model)
-
-	if got := m.cells(m.view.Rows[0]).State; strings.Contains(got, "stopping") {
-		t.Errorf("alpha still shows %q after reporting", got)
-	}
-}
-
-func TestTheRowMarkClearsWhenTheBatchEnds(t *testing.T) {
-	m := loadedModel(threeRows...)
-	m.busy, m.opTotal = true, 3
-	next, _ := m.Update(opStartMsg{tunnel: "alpha", action: "down"})
-	m = next.(Model)
-
-	next, _ = m.Update(opDoneMsg{})
-	m = next.(Model)
-
-	if m.opCurrent != "" {
-		t.Errorf("opCurrent = %q, want it cleared", m.opCurrent)
-	}
-}
-
 func TestAToggleAnnouncesWhatEachTunnelWillDo(t *testing.T) {
 	// The batch is planned from the table, so what a row will do is known
 	// before the work starts rather than after it reports.
@@ -1244,10 +1183,10 @@ func TestAToggleAnnouncesWhatEachTunnelWillDo(t *testing.T) {
 	if len(steps) != 2 {
 		t.Fatalf("got %d step(s), want one per tunnel", len(steps))
 	}
-	if steps[0].tunnel != "alpha" || steps[0].action != "down" {
+	if steps[0].Tunnel.Name != "alpha" || steps[0].Action != app.ActionDown {
 		t.Errorf("step 0 = %+v, want alpha going down", steps[0])
 	}
-	if steps[1].tunnel != "bravo" || steps[1].action != "up" {
+	if steps[1].Tunnel.Name != "bravo" || steps[1].Action != app.ActionUp {
 		t.Errorf("step 1 = %+v, want bravo coming up", steps[1])
 	}
 }
@@ -1262,8 +1201,126 @@ func TestAGroupBatchAnnouncesTheSameActionThroughout(t *testing.T) {
 	m = next.(Model)
 
 	for _, s := range m.upNeeded() {
-		if s.action != "up" {
+		if s.Action != app.ActionUp {
 			t.Errorf("step %+v, want every step of an up group to be an up", s)
 		}
+	}
+}
+
+func TestSeveralRowsCanBeInFlightAtOnce(t *testing.T) {
+	// Tunnels start at the same time, so more than one row is waiting at any
+	// moment. A single "current tunnel" cannot say that.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 3
+
+	for _, e := range []app.Event{
+		{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown},
+		{Phase: app.Started, Tunnel: "bravo", Action: app.ActionUp},
+	} {
+		next, _ := m.Update(eventMsg{event: e})
+		m = next.(Model)
+	}
+
+	if got := m.cells(m.view.Rows[0]).State; !strings.Contains(got, "stopping") {
+		t.Errorf("alpha shows %q, want it stopping", got)
+	}
+	if got := m.cells(m.view.Rows[1]).State; !strings.Contains(got, "starting") {
+		t.Errorf("bravo shows %q, want it starting", got)
+	}
+	if got := m.cells(m.view.Rows[2]).State; strings.Contains(got, "ing") {
+		t.Errorf("charlie shows %q, want it untouched", got)
+	}
+}
+
+func TestARowClearsOnItsOwnResult(t *testing.T) {
+	// One tunnel finishing says nothing about the others, so it must not clear
+	// their marks.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 2
+	for _, e := range []app.Event{
+		{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown},
+		{Phase: app.Started, Tunnel: "bravo", Action: app.ActionUp},
+	} {
+		next, _ := m.Update(eventMsg{event: e})
+		m = next.(Model)
+	}
+
+	next, _ := m.Update(eventMsg{event: app.Event{
+		Phase: app.Finished, Tunnel: "alpha", Action: app.ActionDown,
+		Result: wg.Result{Tunnel: "alpha", Action: "down"},
+	}})
+	m = next.(Model)
+
+	if got := m.cells(m.view.Rows[0]).State; strings.Contains(got, "stopping") {
+		t.Errorf("alpha still shows %q after reporting", got)
+	}
+	if got := m.cells(m.view.Rows[1]).State; !strings.Contains(got, "starting") {
+		t.Errorf("bravo shows %q, want it still starting", got)
+	}
+}
+
+func TestOnlyFinishedEventsCountTowardsTheTotal(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 2
+
+	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionUp}})
+	m = next.(Model)
+	if m.opDone != 0 {
+		t.Errorf("opDone = %d after a start, want 0", m.opDone)
+	}
+
+	next, _ = m.Update(eventMsg{event: app.Event{Phase: app.Finished, Tunnel: "alpha", Action: app.ActionUp}})
+	m = next.(Model)
+	if m.opDone != 1 {
+		t.Errorf("opDone = %d after a finish, want 1", m.opDone)
+	}
+}
+
+func TestAFinishedEventIsLogged(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 1
+
+	next, _ := m.Update(eventMsg{event: app.Event{
+		Phase: app.Finished, Tunnel: "alpha", Action: app.ActionUp,
+		Result: wg.Result{Tunnel: "alpha", Action: "up", Err: errors.New("exit status 1")},
+	}})
+	m = next.(Model)
+
+	if !strings.Contains(logText(m), "up alpha") {
+		t.Errorf("logs = %s, want the outcome recorded", logText(m))
+	}
+	if !m.showLogs {
+		t.Error("showLogs = false after a failure, want the pane opened")
+	}
+}
+
+func TestTheEndOfABatchClearsEveryMark(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal = true, 2
+	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown}})
+	m = next.(Model)
+
+	next, _ = m.Update(batchDoneMsg{})
+	m = next.(Model)
+
+	if len(m.inFlight) != 0 {
+		t.Errorf("inFlight = %v, want it cleared", m.inFlight)
+	}
+	if m.opTotal != 0 {
+		t.Errorf("opTotal = %d, want the batch forgotten", m.opTotal)
+	}
+}
+
+func TestTheRowMarksTurnWithTheSpinner(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy = true
+	next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Started, Tunnel: "alpha", Action: app.ActionDown}})
+	m = next.(Model)
+
+	first := m.cells(m.view.Rows[0]).State
+	m.beat++
+
+	if second := m.cells(m.view.Rows[0]).State; second == first {
+		t.Errorf("the mark is still %q after a beat, want it to turn", first)
 	}
 }

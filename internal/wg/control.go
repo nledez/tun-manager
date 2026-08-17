@@ -3,7 +3,6 @@ package wg
 import (
 	"context"
 	"os/exec"
-	"sync"
 	"time"
 
 	"ledez.net/tun-manager/internal/wgconf"
@@ -33,16 +32,17 @@ type Result struct {
 
 // Controller brings tunnels up and down through wg-quick.
 //
-// Operations are serialised: wg-quick rewrites the routing table and the DNS
-// configuration, and two concurrent runs leave the system inconsistent.
+// It runs whatever it is asked to, whenever it is asked: how many wg-quick runs
+// overlap is the caller's decision, because only the caller knows whether it is
+// walking a list for the command line or spreading a batch across an interface.
+// app.RunBatch is where that decision lives, and it spaces launches out so two
+// of them do not reach the routing table in the same instant.
 type Controller struct {
 	WgQuick string
 	Runner  Runner
 	// Pinger is optional. When set, Up skips tunnels whose check address
 	// already answers.
 	Pinger Pinger
-
-	mu sync.Mutex
 }
 
 // Up brings a tunnel up, unless its check address already answers.
@@ -62,9 +62,6 @@ func (c *Controller) Down(ctx context.Context, tun wgconf.Tunnel) Result {
 }
 
 func (c *Controller) run(ctx context.Context, tun wgconf.Tunnel, action string) Result {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	out, err := c.Runner.Run(ctx, c.WgQuick, action, tun.Path)
 	return Result{Tunnel: tun.Name, Action: action, Output: out, Err: err}
 }

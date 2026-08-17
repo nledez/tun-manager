@@ -94,13 +94,16 @@ func TestGoldenTable(t *testing.T) {
 func TestGoldenLogPane(t *testing.T) {
 	m := frameModel(t, 120, 30)
 	m = key(m, "l")
-	next, _ := m.Update(opMsg{results: []wg.Result{
+	for _, r := range []wg.Result{
 		{Tunnel: "alpha", Action: "up"},
 		{Tunnel: "bravo", Action: "up", Skipped: true},
 		{Tunnel: "charlie", Action: "down", Err: os.ErrPermission, Output: "wg-quick: permission denied"},
-	}})
+	} {
+		next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Finished, Tunnel: r.Tunnel, Action: r.Action, Result: r}})
+		m = next.(Model)
+	}
 
-	teatest.RequireEqualOutput(t, []byte(next.(Model).View()))
+	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 
 func TestGoldenHelp(t *testing.T) {
@@ -249,11 +252,14 @@ func TestAFailedLogEntryStandsOut(t *testing.T) {
 	m := frameModel(t, 120, 30)
 	m = key(m, "l")
 
-	next, _ := m.Update(opMsg{results: []wg.Result{
+	for _, r := range []wg.Result{
 		{Tunnel: "alpha", Action: "up"},
 		{Tunnel: "bravo", Action: "up", Err: os.ErrPermission},
-	}})
-	pane := next.(Model).logPane()
+	} {
+		next, _ := m.Update(eventMsg{event: app.Event{Phase: app.Finished, Tunnel: r.Tunnel, Action: r.Action, Result: r}})
+		m = next.(Model)
+	}
+	pane := m.logPane()
 
 	var ok, failed string
 	for _, line := range strings.Split(pane, "\n") {
@@ -295,7 +301,7 @@ func TestGoldenBatchInProgress(t *testing.T) {
 	// tunnel being waited on saying so where its state would be.
 	m := frameModel(t, 120, 30)
 	m.busy, m.opTotal, m.opDone = true, 4, 1
-	next, _ := m.Update(opStartMsg{tunnel: "charlie", action: "up"})
+	next, _ := m.Update(started("charlie", app.ActionUp))
 
 	teatest.RequireEqualOutput(t, []byte(next.(Model).View()))
 }

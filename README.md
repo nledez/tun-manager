@@ -118,10 +118,13 @@ sudo tun-manager down --all ; gum confirm "Restart VPN?" && sudo tun-manager
 The table refreshes on its own every `refresh_interval` (5 minutes by default),
 and right after every operation.
 
-`wg-quick` is serialised, so a batch takes as long as its tunnels put together.
-Each one reports as it finishes rather than at the end, the header counts them
-off, and the cursor, the log pane and the help keep responding throughout — only
-the keys that would start a second batch are held back.
+A batch starts every tunnel at once, spaced a few milliseconds apart so that two
+`wg-quick` runs do not reach the routing table in the same instant, so eight of
+them take about as long as the slowest rather than as long as all of them added
+up. Each reports for itself: the row says `starting` or `stopping` while it
+waits, the header counts the batch off, and the cursor, the log pane and the
+help keep responding throughout — only the keys that would start a second batch
+are held back.
 
 ## How a tunnel's state is decided
 

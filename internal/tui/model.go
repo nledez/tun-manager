@@ -44,19 +44,13 @@ type (
 	pingMsg struct {
 		results map[string]probe.Result
 	}
-	// opMsg carries the outcome of a batch of up/down operations.
-	opMsg struct {
-		results []wg.Result
-		err     error
+	// eventMsg carries one report from a running batch. Tunnels run at the same
+	// time, so these interleave and each one names its own.
+	eventMsg struct {
+		event app.Event
 	}
-	// opStartMsg announces the tunnel a batch is about to act on, so the table
-	// says which one is being waited on rather than only how many are left.
-	opStartMsg struct {
-		tunnel string
-		action string
-	}
-	// opDoneMsg closes a batch, once every step of it has reported.
-	opDoneMsg struct{}
+	// batchDoneMsg closes a batch, once its channel is drained.
+	batchDoneMsg struct{}
 	// heartbeatMsg advances the working indicator while something runs.
 	heartbeatMsg struct{}
 	// tickMsg fires the periodic refresh.
@@ -73,20 +67,26 @@ type Model struct {
 	selected map[string]bool
 	logs     []LogEntry
 
-	cursor    int
-	opTotal   int
-	opDone    int
-	opCurrent string
-	opAction  string
-	beat      int
-	width     int
-	height    int
-	showLogs  bool
-	showHelp  bool
-	busy      bool
-	pinging   bool
-	quitting  bool
-	err       error
+	cursor  int
+	opTotal int
+	opDone  int
+	beat    int
+
+	// inFlight maps a tunnel to what is happening to it right now. A map rather
+	// than a single name, because a batch launches them together and several
+	// are waiting at any moment.
+	inFlight map[string]string
+	// events is the running batch, or nil. The interface reads it; it does not
+	// drive it.
+	events   <-chan app.Event
+	width    int
+	height   int
+	showLogs bool
+	showHelp bool
+	busy     bool
+	pinging  bool
+	quitting bool
+	err      error
 
 	lastHealth  map[string]wg.Health
 	lastRefresh time.Time
@@ -111,6 +111,7 @@ func New(a *app.App, n *notify.Notifier) Model {
 		notifier: n,
 		pings:    map[string]probe.Result{},
 		selected: map[string]bool{},
+		inFlight: map[string]string{},
 	}
 }
 
@@ -164,53 +165,17 @@ func (m Model) ping() tea.Cmd {
 	}
 }
 
-// operate runs one step of a batch off the UI goroutine.
-//
-// One step, not the whole batch: a command reports when it returns, and
-// Bubble Tea repaints when a message arrives. A batch that reports once at the
-// end leaves the screen untouched while it runs, and wg-quick is serialised, so
-// that is one frozen frame for as long as every tunnel takes together.
-func (m Model) operate(fn func(context.Context, *app.App) ([]wg.Result, error)) tea.Cmd {
-	a := m.app
+// nextEvent turns the next report of a running batch into a message, and is
+// re-issued for as long as the batch keeps talking. This is the seam: the batch
+// runs on its own, the interface only reads what it says.
+func nextEvent(events <-chan app.Event) tea.Cmd {
 	return func() tea.Msg {
-		if a == nil {
-			return opMsg{}
+		e, ok := <-events
+		if !ok {
+			return batchDoneMsg{}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		results, err := fn(ctx, a)
-		return opMsg{results: results, err: err}
+		return eventMsg{event: e}
 	}
-}
-
-// step is one tunnel's worth of a batch: what is about to happen to it, and the
-// work itself. Naming the action up front is what lets the table say a tunnel
-// is starting while it starts, rather than only once it has.
-type step struct {
-	tunnel string
-	action string
-	run    func(context.Context, *app.App) ([]wg.Result, error)
-}
-
-// eachTunnel turns a list of tunnels into one step per tunnel, so each of them
-// reports, and the interface repaints, on its own.
-func (m Model) eachTunnel(names []string, action func(string) string, fn func(context.Context, *app.App, string) ([]wg.Result, error)) []step {
-	steps := make([]step, 0, len(names))
-	for _, name := range names {
-		steps = append(steps, step{
-			tunnel: name,
-			action: action(name),
-			run: func(ctx context.Context, a *app.App) ([]wg.Result, error) {
-				return fn(ctx, a, name)
-			},
-		})
-	}
-	return steps
-}
-
-// always is the action of a batch that does the same thing to every tunnel.
-func always(action string) func(string) string {
-	return func(string) string { return action }
 }
 
 // groupMembers resolves a group against the network the interface last saw.

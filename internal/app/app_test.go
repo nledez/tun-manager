@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -668,5 +669,220 @@ func TestUpRejectsAnUnknownTunnel(t *testing.T) {
 
 	if _, err := a.Up(context.Background(), view, []string{"ghost"}); err == nil {
 		t.Fatal("Up succeeded on an unknown tunnel, want an error")
+	}
+}
+
+func TestPlanUpSkipsWhatIsAlreadyUp(t *testing.T) {
+	a := newApp(t, upState(alphaKey), &fakeRunner{}, away())
+	view, err := a.View()
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+
+	steps := view.PlanUp([]string{"alpha", "bravo"})
+
+	if len(steps) != 1 || steps[0].Tunnel.Name != "bravo" || steps[0].Action != ActionUp {
+		t.Errorf("steps = %+v, want bravo alone coming up", steps)
+	}
+}
+
+func TestPlanDownSkipsWhatIsAlreadyDown(t *testing.T) {
+	a := newApp(t, upState(alphaKey), &fakeRunner{}, away())
+	view, _ := a.View()
+
+	steps := view.PlanDown([]string{"alpha", "bravo"})
+
+	if len(steps) != 1 || steps[0].Tunnel.Name != "alpha" || steps[0].Action != ActionDown {
+		t.Errorf("steps = %+v, want alpha alone going down", steps)
+	}
+}
+
+func TestPlanToggleReadsEachTunnelState(t *testing.T) {
+	// What a tunnel will do is known from the table, before anything runs.
+	a := newApp(t, upState(alphaKey), &fakeRunner{}, away())
+	view, _ := a.View()
+
+	steps := view.PlanToggle([]string{"alpha", "bravo"})
+
+	if len(steps) != 2 {
+		t.Fatalf("steps = %+v, want one per tunnel", steps)
+	}
+	if steps[0].Action != ActionDown || steps[1].Action != ActionUp {
+		t.Errorf("actions = %q, %q, want down then up", steps[0].Action, steps[1].Action)
+	}
+}
+
+func TestPlanSkipsATunnelItHasNeverHeardOf(t *testing.T) {
+	// A group naming a tunnel with no configuration must not stop the tunnels
+	// that do have one.
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	view, _ := a.View()
+
+	if steps := view.PlanUp([]string{"ghost", "alpha"}); len(steps) != 1 {
+		t.Errorf("steps = %+v, want the ghost skipped and alpha kept", steps)
+	}
+	if steps := view.PlanDown([]string{"ghost"}); len(steps) != 0 {
+		t.Errorf("steps = %+v, want none", steps)
+	}
+	if steps := view.PlanToggle([]string{"ghost"}); len(steps) != 0 {
+		t.Errorf("steps = %+v, want none", steps)
+	}
+}
+
+func TestUnknownNamesTheTunnelsTheTableHasNeverHeardOf(t *testing.T) {
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	view, _ := a.View()
+
+	got := view.Unknown([]string{"alpha", "ghost", "bravo"})
+
+	if len(got) != 1 || got[0] != "ghost" {
+		t.Errorf("Unknown = %v, want only the ghost", got)
+	}
+}
+
+func TestRunBatchReportsEachTunnelStartingAndFinishing(t *testing.T) {
+	runner := &fakeRunner{}
+	a := newApp(t, upState(), runner, away())
+	a.Stagger = time.Millisecond
+	view, _ := a.View()
+	steps := view.PlanUp([]string{"alpha", "bravo"})
+
+	var started, finished []string
+	for e := range a.RunBatch(context.Background(), steps) {
+		switch e.Phase {
+		case Started:
+			started = append(started, e.Tunnel)
+		case Finished:
+			finished = append(finished, e.Tunnel)
+		}
+	}
+
+	if len(started) != 2 || len(finished) != 2 {
+		t.Errorf("started %v, finished %v, want both tunnels in each", started, finished)
+	}
+}
+
+func TestRunBatchRunsTheTunnelsAtTheSameTime(t *testing.T) {
+	// Eight tunnels one after another is eight times as long as one. The whole
+	// point of the batch is that they do not wait for each other.
+	var live, peak atomic.Int32
+	runner := runnerFunc(func() {
+		n := live.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		live.Add(-1)
+	})
+	a := newApp(t, upState(), runner, away())
+	a.Stagger = time.Millisecond
+	view, _ := a.View()
+	steps := view.PlanUp([]string{"alpha", "bravo", "delta"})
+
+	for range a.RunBatch(context.Background(), steps) {
+	}
+
+	if peak.Load() < 2 {
+		t.Errorf("peak concurrency = %d, want the tunnels to overlap", peak.Load())
+	}
+}
+
+func TestRunBatchStaggersTheLaunches(t *testing.T) {
+	// A few milliseconds apart, so that two wg-quick runs do not reach the
+	// routing table in the same instant.
+	var starts []time.Time
+	var mu sync.Mutex
+	runner := runnerFunc(func() {
+		mu.Lock()
+		starts = append(starts, time.Now())
+		mu.Unlock()
+	})
+	a := newApp(t, upState(), runner, away())
+	a.Stagger = 40 * time.Millisecond
+	view, _ := a.View()
+	steps := view.PlanUp([]string{"alpha", "bravo"})
+
+	for range a.RunBatch(context.Background(), steps) {
+	}
+
+	if len(starts) != 2 {
+		t.Fatalf("got %d launches, want 2", len(starts))
+	}
+	if gap := starts[1].Sub(starts[0]); gap < 20*time.Millisecond {
+		t.Errorf("launches are %v apart, want them staggered", gap)
+	}
+}
+
+func TestRunBatchOfNothingClosesAtOnce(t *testing.T) {
+	a := newApp(t, upState(), &fakeRunner{}, away())
+
+	for range a.RunBatch(context.Background(), nil) {
+		t.Error("an empty batch reported something")
+	}
+}
+
+func TestRunBatchStopsWithItsContext(t *testing.T) {
+	a := newApp(t, upState(), &fakeRunner{}, away())
+	a.Stagger = time.Hour // the batch can only end by being cancelled
+	view, _ := a.View()
+	steps := view.PlanUp([]string{"alpha", "bravo", "delta"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := a.RunBatch(ctx, steps)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the batch did not stop when its context was cancelled")
+	}
+}
+
+// runnerFunc runs a side effect and reports success, for tests that care about
+// when a command ran rather than what it was.
+func runnerFunc(fn func()) wg.Runner {
+	return runnerFn(func(context.Context, string, ...string) (string, error) {
+		fn()
+		return "", nil
+	})
+}
+
+type runnerFn func(context.Context, string, ...string) (string, error)
+
+func (f runnerFn) Run(ctx context.Context, name string, args ...string) (string, error) {
+	return f(ctx, name, args...)
+}
+
+func TestABatchWithoutAStaggerUsesTheDefault(t *testing.T) {
+	a := newApp(t, upState(), &fakeRunner{}, away())
+
+	if got := a.stagger(); got != DefaultStagger {
+		t.Errorf("stagger = %v, want %v", got, DefaultStagger)
+	}
+}
+
+func TestDownAllSkipsAGroupMemberWithNoConfiguration(t *testing.T) {
+	// The `all` group is a list of things to tear down; one that has no
+	// configuration is already down, and refusing the whole batch over it would
+	// leave the rest running.
+	runner := &fakeRunner{}
+	a := newApp(t, upState(alphaKey), runner, away())
+	a.Config.Groups[profile.GroupAll] = []string{"ghost", "alpha"}
+
+	if _, err := a.DownAll(context.Background()); err != nil {
+		t.Fatalf("DownAll: %v", err)
+	}
+
+	if got := runner.actions(); strings.Join(got, ",") != "down alpha" {
+		t.Errorf("commands = %v, want the known tunnel stopped", got)
 	}
 }

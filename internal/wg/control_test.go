@@ -165,8 +165,10 @@ func TestResultCarriesTheCommandOutputOnFailure(t *testing.T) {
 	}
 }
 
-func TestOperationsAreSerialised(t *testing.T) {
-	// wg-quick rewrites the routing table; two of them at once corrupt it.
+func TestOperationsMayOverlap(t *testing.T) {
+	// The controller no longer decides how many wg-quick runs coexist: only the
+	// caller knows whether it is walking a list for the command line or
+	// spreading a batch across an interface. app.RunBatch makes that call.
 	var live, peak atomic.Int32
 	runner := runnerFunc(func(context.Context, string, ...string) (string, error) {
 		n := live.Add(1)
@@ -192,8 +194,8 @@ func TestOperationsAreSerialised(t *testing.T) {
 	}
 	wg.Wait()
 
-	if peak.Load() != 1 {
-		t.Errorf("peak concurrency = %d, want 1", peak.Load())
+	if peak.Load() < 2 {
+		t.Errorf("peak concurrency = %d, want the controller to let them overlap", peak.Load())
 	}
 }
 

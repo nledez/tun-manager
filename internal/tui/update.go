@@ -8,7 +8,6 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/profile"
-	"ledez.net/tun-manager/internal/wg"
 )
 
 // Update advances the state machine. It performs no I/O: everything that talks
@@ -36,15 +35,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case opMsg:
-		return m.onOp(msg)
+	case eventMsg:
+		return m.onEvent(msg.event)
 
-	case opStartMsg:
-		m.opCurrent, m.opAction = msg.tunnel, msg.action
-		return m, nil
-
-	case opDoneMsg:
-		return m.onOpDone()
+	case batchDoneMsg:
+		return m.onBatchDone()
 
 	case heartbeatMsg:
 		// Only while there is something to report on; a timer firing on an idle
@@ -90,35 +85,56 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// onOp records one step of a batch. Returning without a command is enough:
-// Bubble Tea repaints on the message itself, which is the point of reporting
-// per step rather than per batch.
-func (m Model) onOp(msg opMsg) (tea.Model, tea.Cmd) {
-	if msg.err != nil {
-		m.log(msg.err.Error(), true)
-		m.showLogs = true
-	}
-	for _, r := range msg.results {
-		text, isFail := describe(r)
+// onEvent records one report from a running batch and asks for the next. Each
+// event names its own tunnel, so nothing here has to know what the others are
+// doing.
+func (m Model) onEvent(e app.Event) (tea.Model, tea.Cmd) {
+	switch e.Phase {
+	case app.Started:
+		m.inFlight = withKey(m.inFlight, e.Tunnel, e.Action)
+
+	case app.Finished:
+		m.inFlight = withoutKey(m.inFlight, e.Tunnel)
+		m.opDone++
+		text, isFail := describe(e.Result)
 		m.log(text, isFail)
 		if isFail {
 			m.showLogs = true
 		}
 	}
-	m.opDone++
-	// Its result is in, so it is no longer the one being waited on.
-	m.opCurrent, m.opAction = "", ""
-	return m, nil
+	return m, nextEvent(m.events)
 }
 
-// onOpDone closes a batch: one refresh for the whole of it rather than one per
-// tunnel, and the selection is spent.
-func (m Model) onOpDone() (tea.Model, tea.Cmd) {
+// onBatchDone closes a batch: one refresh for the whole of it rather than one
+// per tunnel, and the selection is spent.
+func (m Model) onBatchDone() (tea.Model, tea.Cmd) {
 	m.selected = map[string]bool{}
+	m.inFlight = map[string]string{}
 	m.opTotal, m.opDone = 0, 0
-	m.opCurrent, m.opAction = "", ""
+	m.events = nil
 	m.busy = true
 	return m, m.refresh()
+}
+
+// The model is copied on every update, so a map it holds has to be copied too:
+// mutating the one the previous model still points at would reach back in time.
+func withKey(m map[string]string, k, v string) map[string]string {
+	out := make(map[string]string, len(m)+1)
+	for key, val := range m {
+		out[key] = val
+	}
+	out[k] = v
+	return out
+}
+
+func withoutKey(m map[string]string, k string) map[string]string {
+	out := make(map[string]string, len(m))
+	for key, val := range m {
+		if key != k {
+			out[key] = val
+		}
+	}
+	return out
 }
 
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -177,68 +193,47 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.ping(), m.heartbeat())
 
 	case "enter":
-		return m.startOp(m.toggleTargets())
+		return m.startBatch(m.toggleTargets())
 
 	case "s":
-		return m.startOp(m.stopStart())
+		return m.startBatch(m.stopStart())
 
 	case "n":
-		return m.startOp(m.upNeeded())
+		return m.startBatch(m.upNeeded())
 	}
 	return m, nil
 }
 
-// startOp runs a batch one step at a time, in order, with a closing message.
-// tea.Sequence dispatches each step's message before starting the next, which
-// is what puts a repaint between tunnels.
-func (m Model) startOp(steps []step) (tea.Model, tea.Cmd) {
-	if len(steps) == 0 {
+// startBatch hands a plan to the application and starts listening. The work
+// runs on its own from here: everything the interface knows about it arrives as
+// an event.
+func (m Model) startBatch(steps []app.Step) (tea.Model, tea.Cmd) {
+	if len(steps) == 0 || m.app == nil {
 		return m, nil
 	}
+
 	m.busy = true
 	m.opTotal, m.opDone = len(steps), 0
+	m.inFlight = map[string]string{}
+	// No deadline on the batch as a whole: it is as long as its slowest tunnel,
+	// and a batch cut off halfway leaves the machine in a state nobody asked
+	// for. Each wg-quick run is the thing that can hang, and the context that
+	// carries it is the program's own.
+	m.events = m.app.RunBatch(context.Background(), steps)
 
-	// Two commands per tunnel: one that announces it, one that does the work.
-	// tea.Sequence dispatches each message before starting the next command, so
-	// the announcement is on screen while the work it describes runs.
-	cmds := make([]tea.Cmd, 0, 2*len(steps)+1)
-	for _, s := range steps {
-		cmds = append(cmds, func() tea.Msg { return opStartMsg{tunnel: s.tunnel, action: s.action} })
-		cmds = append(cmds, m.operate(s.run))
-	}
-	cmds = append(cmds, func() tea.Msg { return opDoneMsg{} })
-
-	return m, tea.Batch(tea.Sequence(cmds...), m.heartbeat())
+	return m, tea.Batch(nextEvent(m.events), m.heartbeat())
 }
 
 // toggleTargets brings the selected tunnels (or the cursor row) to the opposite
 // of their current state.
-func (m Model) toggleTargets() []step {
-	// What a row will do is decided from the table, so it can be announced
-	// before the work starts rather than deduced from its result.
-	action := func(name string) string {
-		if row, ok := m.view.Row(name); ok && row.Health == wg.Down {
-			return "up"
-		}
-		return "down"
-	}
-	return m.eachTunnel(m.targets(), action, func(ctx context.Context, a *app.App, name string) ([]wg.Result, error) {
-		res, err := a.Toggle(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-		return []wg.Result{res}, nil
-	})
+func (m Model) toggleTargets() []app.Step {
+	return m.view.PlanToggle(m.targets())
 }
 
 // stopStart is the `s` key: tear everything down, or start what is needed.
-func (m Model) stopStart() []step {
+func (m Model) stopStart() []app.Step {
 	if m.stopStartAction() == "down" {
-		view := m.view
-		return m.eachTunnel(m.groupMembers(profile.GroupAll), always("down"),
-			func(ctx context.Context, a *app.App, name string) ([]wg.Result, error) {
-				return a.Down(ctx, view, []string{name})
-			})
+		return m.view.PlanDown(m.groupMembers(profile.GroupAll))
 	}
 	return m.upNeeded()
 }
@@ -246,10 +241,6 @@ func (m Model) stopStart() []step {
 // upNeeded is the `n` key, and the other half of `s`. There is no group
 // parameter: the `extra` group is picked from the table with space and enter,
 // not started wholesale.
-func (m Model) upNeeded() []step {
-	view := m.view
-	return m.eachTunnel(m.groupMembers(profile.GroupNeeded), always("up"),
-		func(ctx context.Context, a *app.App, name string) ([]wg.Result, error) {
-			return a.Up(ctx, view, []string{name})
-		})
+func (m Model) upNeeded() []app.Step {
+	return m.view.PlanUp(m.groupMembers(profile.GroupNeeded))
 }

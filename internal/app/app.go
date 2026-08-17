@@ -89,6 +89,9 @@ type App struct {
 	Locator wg.Locator
 	// Now is injectable so health thresholds stay testable.
 	Now func() time.Time
+	// Stagger is how long a batch waits between launching one tunnel and the
+	// next. Zero means DefaultStagger.
+	Stagger time.Duration
 }
 
 func (a *App) now() time.Time {
@@ -174,54 +177,53 @@ func (a *App) UpGroup(ctx context.Context, group string) ([]wg.Result, error) {
 	return a.Up(ctx, view, a.Config.Members(group, view.Context.Name))
 }
 
-// Up starts the named tunnels that are currently down.
+// Up starts the named tunnels that are currently down. A name the table does
+// not know is refused: it was typed, and a typo silently doing nothing is worse
+// than an error.
 func (a *App) Up(ctx context.Context, view View, names []string) ([]wg.Result, error) {
-	var results []wg.Result
-	for _, name := range names {
-		row, ok := view.Row(name)
-		if !ok {
-			return results, fmt.Errorf("unknown tunnel %q", name)
-		}
-		if row.Health != wg.Down {
-			continue
-		}
-		results = append(results, a.Control.Up(ctx, row.Tunnel))
+	if err := refuseUnknown(view, names); err != nil {
+		return nil, err
 	}
-	return results, nil
+	return a.runInOrder(ctx, view.PlanUp(names)), nil
 }
 
-// DownAll stops every live tunnel of the "all" group, in declaration order.
+func refuseUnknown(view View, names []string) error {
+	if unknown := view.Unknown(names); len(unknown) > 0 {
+		return fmt.Errorf("unknown tunnel %q", unknown[0])
+	}
+	return nil
+}
+
+// runInOrder walks a plan one step at a time. The command line has nothing to
+// display while it waits, so there is nothing to gain from overlapping and one
+// less thing to reason about when a step fails.
+func (a *App) runInOrder(ctx context.Context, steps []Step) []wg.Result {
+	var results []wg.Result
+	for _, s := range steps {
+		results = append(results, a.Do(ctx, s))
+	}
+	return results
+}
+
+// DownAll stops every live tunnel of the "all" group, in declaration order. A
+// name with no configuration is skipped rather than refused: the group is a
+// list of things to tear down, and one that is not there is already down.
 func (a *App) DownAll(ctx context.Context) ([]wg.Result, error) {
 	view, err := a.View()
 	if err != nil {
 		return nil, err
 	}
 
-	var results []wg.Result
-	for _, name := range a.Config.Members(profile.GroupAll, view.Context.Name) {
-		row, ok := view.Row(name)
-		if !ok || row.Health == wg.Down {
-			continue
-		}
-		results = append(results, a.Control.Down(ctx, row.Tunnel))
-	}
-	return results, nil
+	names := a.Config.Members(profile.GroupAll, view.Context.Name)
+	return a.runInOrder(ctx, view.PlanDown(names)), nil
 }
 
 // Down stops the named tunnels that are currently live.
 func (a *App) Down(ctx context.Context, view View, names []string) ([]wg.Result, error) {
-	var results []wg.Result
-	for _, name := range names {
-		row, ok := view.Row(name)
-		if !ok {
-			return results, fmt.Errorf("unknown tunnel %q", name)
-		}
-		if row.Health == wg.Down {
-			continue
-		}
-		results = append(results, a.Control.Down(ctx, row.Tunnel))
+	if err := refuseUnknown(view, names); err != nil {
+		return nil, err
 	}
-	return results, nil
+	return a.runInOrder(ctx, view.PlanDown(names)), nil
 }
 
 // Toggle stops a live tunnel, or starts a dead one.
@@ -230,12 +232,8 @@ func (a *App) Toggle(ctx context.Context, name string) (wg.Result, error) {
 	if err != nil {
 		return wg.Result{}, err
 	}
-	row, ok := view.Row(name)
-	if !ok {
-		return wg.Result{}, fmt.Errorf("unknown tunnel %q", name)
+	if err := refuseUnknown(view, []string{name}); err != nil {
+		return wg.Result{}, err
 	}
-	if row.Health == wg.Down {
-		return a.Control.Up(ctx, row.Tunnel), nil
-	}
-	return a.Control.Down(ctx, row.Tunnel), nil
+	return a.Do(ctx, view.PlanToggle([]string{name})[0]), nil
 }

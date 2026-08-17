@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -254,28 +255,32 @@ func TestTheTableRefreshesOnItsOwn(t *testing.T) {
 	}
 }
 
-func TestTogglingATunnelThatVanishedIsReported(t *testing.T) {
-	// The table is a snapshot; a config can be removed between a refresh and
-	// the key press acting on it.
-	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
-	m.view = viewOf(row("ghost", profile.GroupNeeded, wg.Down))
+func TestATunnelWhoseConfigVanishedFailsWhenItRuns(t *testing.T) {
+	// The plan is made from the table, so a row that is there can always be
+	// planned. What can still go wrong is the work: wg-quick meeting a file
+	// that is no longer where the table says it is.
+	runner := failingRunner{err: errors.New("exit status 1"), output: "wg-quick: `/gone.conf' does not exist"}
+	a := testApp(t, runner)
+	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	waitFor(t, tm, "alpha")
 
-	steps := m.toggleTargets()
-	if len(steps) != 1 {
-		t.Fatalf("got %d step(s), want one per tunnel", len(steps))
-	}
-	msg, ok := m.operate(steps[0].run)().(opMsg)
-	if !ok {
-		t.Fatalf("got %#v, want an opMsg", msg)
-	}
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "does not exist")
 
-	if msg.err == nil {
-		t.Fatal("err = nil, want the unknown tunnel reported")
-	}
-	if !strings.Contains(msg.err.Error(), "ghost") {
-		t.Errorf("err = %v, want it to name the tunnel", msg.err)
-	}
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
+}
+
+// failingRunner refuses every command, like a wg-quick meeting a file that is
+// not there.
+type failingRunner struct {
+	err    error
+	output string
+}
+
+func (r failingRunner) Run(context.Context, string, ...string) (string, error) {
+	return r.output, r.err
 }
 
 func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {

@@ -167,8 +167,8 @@ func (m Model) cells(r app.Row) rowCells {
 	// A tunnel being acted on right now says so where its state would be: that
 	// state is about to be wrong, and which one is being waited on is what the
 	// table is read for while a batch runs.
-	if r.Tunnel.Name == m.opCurrent {
-		c.State = activeStyle.Render(m.spinner() + " " + inFlight(m.opAction))
+	if action, ok := m.inFlight[r.Tunnel.Name]; ok {
+		c.State = activeStyle.Render(m.spinner() + " " + happening(action))
 	}
 	if r.Health == wg.Down {
 		return c
@@ -250,9 +250,9 @@ func clamp(s string, w int) string {
 	return ansi.Truncate(s, w, "")
 }
 
-// inFlight names an action while it is happening rather than after it has.
-func inFlight(action string) string {
-	if action == "up" {
+// happening names an action while it is under way rather than after it has run.
+func happening(action string) string {
+	if action == app.ActionUp {
 		return "starting"
 	}
 	return "stopping"
