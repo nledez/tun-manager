@@ -81,6 +81,13 @@ type Server struct {
 	clients  map[*client]struct{}
 	view     app.View
 	haveView bool
+
+	// chmod and remove are the filesystem calls Listen and Close depend on.
+	// They are fields so a test can make them fail: the paths where the
+	// filesystem misbehaves between two operations are the ones a real
+	// failure would take, and there is no other way to reach them.
+	chmod  func(string, os.FileMode) error
+	remove func(string) error
 }
 
 func (s *Server) interval() time.Duration {
@@ -95,6 +102,20 @@ func (s *Server) clock() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s *Server) chmodFn() func(string, os.FileMode) error {
+	if s.chmod != nil {
+		return s.chmod
+	}
+	return os.Chmod
+}
+
+func (s *Server) removeFn() func(string) error {
+	if s.remove != nil {
+		return s.remove
+	}
+	return os.Remove
 }
 
 // clientCount reports how many clients are connected. It exists for the tests:
@@ -113,7 +134,7 @@ func (s *Server) Listen() error {
 	// A socket left by a killed process makes bind fail with EADDRINUSE. Two
 	// tun-manager processes cannot usefully coexist - they would both be
 	// driving the same tunnels - so the path is ours to take.
-	if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
+	if err := s.removeFn()(s.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale socket %s: %w", s.Path, err)
 	}
 
@@ -123,7 +144,7 @@ func (s *Server) Listen() error {
 		return fmt.Errorf("listen on %s: %w", s.Path, err)
 	}
 
-	if err := os.Chmod(s.Path, SocketMode); err != nil {
+	if err := s.chmodFn()(s.Path, SocketMode); err != nil {
 		return s.abandon(ln, fmt.Errorf("chmod %s: %w", s.Path, err))
 	}
 	if s.Owner.Demotable {
@@ -158,7 +179,7 @@ func (s *Server) Close() error {
 	s.mu.Unlock()
 
 	err := ln.Close()
-	if rmErr := os.Remove(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
+	if rmErr := s.removeFn()(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
 		err = rmErr
 	}
 	return err

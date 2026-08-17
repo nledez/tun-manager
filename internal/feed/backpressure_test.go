@@ -1,8 +1,10 @@
 package feed
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -120,5 +122,68 @@ func TestAViewPublishedBeforeServeIsStillRemembered(t *testing.T) {
 
 	if !s.haveView {
 		t.Error("the view was not remembered")
+	}
+}
+
+func TestListenFailsWhenRemoveFailsBeforeBind(t *testing.T) {
+	// If removing a stale socket fails for a reason other than "not exists",
+	// Listen fails and does not leave a half-built socket behind.
+	testErr := errors.New("permission denied")
+	s := &Server{
+		Path: socketPath(t),
+		remove: func(string) error {
+			return testErr
+		},
+	}
+
+	err := s.Listen()
+
+	if err == nil || !errors.Is(err, testErr) {
+		t.Errorf("Listen = %v, want the remove error", err)
+	}
+	if _, err := os.Stat(s.Path); err == nil {
+		t.Error("socket exists after Listen failed, want no leftover")
+	}
+}
+
+func TestListenFailsWhenChmodFails(t *testing.T) {
+	// If chmod fails after the socket is bound, Listen fails and removes the
+	// socket before returning, leaving no half-built socket behind.
+	testErr := errors.New("permission denied")
+	s := &Server{
+		Path: socketPath(t),
+		chmod: func(string, os.FileMode) error {
+			return testErr
+		},
+	}
+
+	err := s.Listen()
+
+	if err == nil || !errors.Is(err, testErr) {
+		t.Errorf("Listen = %v, want the chmod error", err)
+	}
+	if _, err := os.Stat(s.Path); err == nil {
+		t.Error("socket exists after Listen failed, want no leftover")
+	}
+}
+
+func TestCloseReturnsRemoveError(t *testing.T) {
+	// If Close's remove fails, Close returns the remove error. The socket
+	// was successfully closed (listener closed), only the cleanup failed.
+	s := &Server{Path: socketPath(t)}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	testErr := errors.New("I/O error")
+	s.remove = func(string) error {
+		return testErr
+	}
+
+	err := s.Close()
+
+	if err == nil || !errors.Is(err, testErr) {
+		t.Errorf("Close = %v, want the remove error", err)
 	}
 }
