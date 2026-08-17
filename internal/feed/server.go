@@ -70,14 +70,14 @@ type Server struct {
 	closed bool
 }
 
-func (s *Server) interval() time.Duration { //nolint:unused
+func (s *Server) interval() time.Duration {
 	if s.Interval > 0 {
 		return s.Interval
 	}
 	return sampleInterval
 }
 
-func (s *Server) clock() time.Time { //nolint:unused
+func (s *Server) clock() time.Time {
 	if s.Now != nil {
 		return s.Now()
 	}
@@ -111,7 +111,9 @@ func (s *Server) Listen() error {
 		}
 	}
 
+	s.mu.Lock()
 	s.ln = ln
+	s.mu.Unlock()
 	return nil
 }
 

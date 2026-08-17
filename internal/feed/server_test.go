@@ -56,6 +56,12 @@ func TestTheSocketIsHandedToThePreSudoUser(t *testing.T) {
 }
 
 func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		// Chowning to root succeeds when you are root, so there is no failure
+		// to observe. The whole program runs under sudo, so a suite run that
+		// way is not far-fetched.
+		t.Skip("this test proves a chown fails, which it cannot do as root")
+	}
 	// Leaving a root-owned socket behind would look like it worked and then
 	// serve nobody.
 	s := &Server{
