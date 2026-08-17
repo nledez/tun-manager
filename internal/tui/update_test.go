@@ -294,7 +294,7 @@ func TestABatchCountsItsStepsAsTheyReport(t *testing.T) {
 		if m.opDone != i {
 			t.Fatalf("opDone = %d after %d step(s)", m.opDone, i)
 		}
-		if got, want := m.status(), fmt.Sprintf("%s working %d/3", m.spinner(), i); got != want {
+		if got, want := m.activity(), fmt.Sprintf("%s working %d/3", m.spinner(), i); got != want {
 			t.Errorf("status = %q, want %q", got, want)
 		}
 	}
@@ -984,7 +984,7 @@ func TestTheCountdownIsMeasuredFromTheLastRefresh(t *testing.T) {
 	m.now = func() time.Time { return at.Add(42 * time.Second) }
 	m.lastRefresh = at
 
-	if got := m.status(); got != "next ⟳ 4m18s" {
+	if got := m.countdown(); got != "next ⟳ 4m18s" {
 		t.Errorf("status = %q, want the remainder of the interval", got)
 	}
 }
@@ -996,7 +996,7 @@ func TestTheCountdownStopsAtZero(t *testing.T) {
 	m.now = func() time.Time { return at.Add(time.Hour) }
 	m.lastRefresh = at
 
-	if got := m.status(); got != "next ⟳ 0s" {
+	if got := m.countdown(); got != "next ⟳ 0s" {
 		t.Errorf("status = %q, want it clamped to zero", got)
 	}
 }
@@ -1021,15 +1021,15 @@ func TestASingleLongStepStillAnimates(t *testing.T) {
 	m := loadedModel(threeRows...)
 	m.busy, m.opTotal = true, 1
 
-	first := m.status()
+	first := m.activity()
 	next, cmd := m.Update(heartbeatMsg{})
 	m = next.(Model)
 
 	if cmd == nil {
 		t.Error("no command returned, want the heartbeat to schedule the next one")
 	}
-	if m.status() == first {
-		t.Errorf("status is still %q, want the frame to change", first)
+	if m.activity() == first {
+		t.Errorf("activity is still %q, want the frame to change", first)
 	}
 }
 
@@ -1068,5 +1068,89 @@ func TestAModelWithoutAnApplicationPlansNothing(t *testing.T) {
 	}
 	if steps := m.upGroup(profile.GroupNeeded); len(steps) != 0 {
 		t.Errorf("upGroup planned %d step(s), want none", len(steps))
+	}
+}
+
+func TestTheActivitySitsBesideTheContext(t *testing.T) {
+	// Far right is where the eye goes last. Work in progress belongs next to
+	// what it is happening to.
+	m := loadedModel(threeRows...)
+	m.busy, m.opTotal, m.opDone = true, 8, 3
+
+	header := strings.Split(m.View(), "\n")[0]
+	ctx := strings.Index(header, "ctx:")
+	work := strings.Index(header, "working")
+
+	if ctx < 0 || work < 0 {
+		t.Fatalf("header has no context or no activity:\n%s", header)
+	}
+	if work < ctx {
+		t.Errorf("the activity comes before the context:\n%s", header)
+	}
+	if gap := work - ctx; gap > 60 {
+		t.Errorf("the activity is %d columns from the context, want it beside:\n%s", gap, header)
+	}
+}
+
+func TestTheCountdownStaysOnTheRight(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.now = func() time.Time { return m.lastRefresh.Add(42 * time.Second) }
+
+	header := strings.Split(m.View(), "\n")[0]
+
+	if !strings.Contains(header, "next ⟳") {
+		t.Fatalf("no countdown in the header:\n%s", header)
+	}
+	if at := strings.Index(header, "next ⟳"); at < len([]rune(header))/2 {
+		t.Errorf("the countdown is at column %d, want it on the right:\n%s", at, header)
+	}
+}
+
+func TestAnIdleHeaderShowsNoActivity(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	if got := m.activity(); got != "" {
+		t.Errorf("activity = %q, want none while idle", got)
+	}
+}
+
+func TestTheActivitySaysWhatIsHappening(t *testing.T) {
+	m := loadedModel(threeRows...)
+
+	m.busy, m.opTotal, m.opDone = true, 8, 3
+	if got := m.activity(); !strings.Contains(got, "working 3/8") {
+		t.Errorf("activity = %q, want the batch counted off", got)
+	}
+
+	m.busy, m.opTotal = true, 0
+	if got := m.activity(); !strings.Contains(got, "working") {
+		t.Errorf("activity = %q, want it to say it is working", got)
+	}
+
+	m.busy, m.pinging = false, true
+	if got := m.activity(); !strings.Contains(got, "pinging") {
+		t.Errorf("activity = %q, want it to say it is pinging", got)
+	}
+}
+
+func TestTheActivityCarriesTheSpinner(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.busy = true
+
+	first := m.activity()
+	m.beat++
+	if second := m.activity(); second == first {
+		t.Errorf("activity is still %q after a beat, want the spinner to turn", first)
+	}
+}
+
+func TestTheCountdownIsStillShownWhileWorking(t *testing.T) {
+	// The next automatic refresh is no less true for something being in flight.
+	m := loadedModel(threeRows...)
+	m.busy = true
+	m.now = func() time.Time { return m.lastRefresh.Add(time.Second) }
+
+	if !strings.Contains(m.View(), "next ⟳") {
+		t.Errorf("the countdown vanished while working:\n%s", m.View())
 	}
 }

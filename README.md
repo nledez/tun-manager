@@ -26,11 +26,11 @@ Handshake age, transferred bytes, latency, and which network you are on.
  r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · l logs · ? help · q quit
 ```
 
-While a batch runs, the header counts it off and a spinner turns, so a slow
-`wg-quick` is never mistaken for a hung program:
+While a batch runs, a spinner turns beside the context and the header counts the
+tunnels off, so a slow `wg-quick` is never mistaken for a hung program:
 
 ```
- tun-manager  ctx: office (en0 198.51.100.42)                     ⠙ working 3/8
+ tun-manager  ctx: office (en0 198.51.100.42)  ⠙ working 3/8      next ⟳ 4m12s
 ```
 
 ## Why root

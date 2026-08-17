@@ -25,6 +25,9 @@ var (
 	staleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	downStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "247", Dark: "241"})
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	// Work in progress is worth a colour of its own: it is the one thing on
+	// screen that is about to change.
+	activeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 )
 
 // column widths, everything but the endpoint which takes what is left
@@ -60,22 +63,30 @@ func (m Model) View() string {
 }
 
 func (m Model) header() string {
-	left := titleStyle.Render("tun-manager")
-	ctx := format.OrNone(m.view.Context.String())
-
-	right := m.status()
-	line := fmt.Sprintf("%s  %s", left, dimStyle.Render("ctx: "+ctx))
-
-	gap := m.width - lipgloss.Width(line) - lipgloss.Width(right)
-	if gap < 1 {
-		// Too narrow for both. The countdown is the expendable half: which
-		// network you are on decides what the table means.
-		return clamp(line, m.width) + "\n" + m.rule()
+	// What is happening now sits on the left, beside what it is happening to.
+	// Far right is where the eye goes last, and a batch of wg-quick runs is not
+	// something to hide there.
+	left := fmt.Sprintf("%s  %s",
+		titleStyle.Render("tun-manager"),
+		dimStyle.Render("ctx: "+format.OrNone(m.view.Context.String())),
+	)
+	if activity := m.activity(); activity != "" {
+		left += "  " + activeStyle.Render(activity)
 	}
-	return line + strings.Repeat(" ", gap) + dimStyle.Render(right) + "\n" + m.rule()
+
+	right := dimStyle.Render(m.countdown())
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		// Too narrow for both. The countdown is the expendable half: what the
+		// program is doing right now outranks when it will look again.
+		return clamp(left, m.width) + "\n" + m.rule()
+	}
+	return left + strings.Repeat(" ", gap) + right + "\n" + m.rule()
 }
 
-func (m Model) status() string {
+// activity is what the program is doing right now, or nothing at all when it is
+// only waiting.
+func (m Model) activity() string {
 	switch {
 	case m.busy && m.opTotal > 0:
 		return fmt.Sprintf("%s working %d/%d", m.spinner(), m.opDone, m.opTotal)
@@ -83,15 +94,22 @@ func (m Model) status() string {
 		return m.spinner() + " working"
 	case m.pinging:
 		return m.spinner() + " pinging"
-	case m.lastRefresh.IsZero():
-		return "loading…"
 	default:
-		next := m.refreshInterval() - m.clock().Sub(m.lastRefresh)
-		if next < 0 {
-			next = 0
-		}
-		return "next ⟳ " + next.Round(time.Second).String()
+		return ""
 	}
+}
+
+// countdown is when the table will refresh on its own, which stays true whether
+// or not something else is in flight.
+func (m Model) countdown() string {
+	if m.lastRefresh.IsZero() {
+		return "loading…"
+	}
+	next := m.refreshInterval() - m.clock().Sub(m.lastRefresh)
+	if next < 0 {
+		next = 0
+	}
+	return "next ⟳ " + next.Round(time.Second).String()
 }
 
 // spinnerFrames is what tells a slow operation apart from a hung one.
