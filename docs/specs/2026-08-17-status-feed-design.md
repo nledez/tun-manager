@@ -67,9 +67,10 @@ sudo tun-manager                      root, foreground, unchanged in behaviour
 Tun Manager.app                       the user's session, no privilege
 ```
 
-`internal/feed` depends on `internal/app` for the view and sample types and on
-`internal/privdrop` for the ownership handover. Nothing depends on `feed` except
-the composition root and `internal/tui`, which holds it behind an interface.
+`internal/feed` depends on `internal/wire` for the JSON vocabulary, on
+`internal/app` for the view and sample types, and on `internal/privdrop` for the
+ownership handover. Nothing depends on `feed` except the composition root and
+`internal/tui`, which holds it behind an interface.
 
 ## The socket
 
@@ -122,17 +123,25 @@ client asked for.
  "taken":"2026-08-17T10:00:00Z",
  "context":{"name":"office","interface":"en0","address":"198.51.100.42"},
  "tunnels":[
-   {"name":"alpha","group":"needed","health":"up",
-    "endpoint":"192.0.2.10:51820","device":"utun7",
-    "last_handshake":"2026-08-17T09:59:48Z","rx":1258291,"tx":4096},
+   {"name":"alpha","group":"needed","health":"up","device":"utun7",
+    "endpoint":"192.0.2.10:51820","check_ip":"10.20.30.1",
+    "last_handshake":"2026-08-17T09:59:48Z","rx_bytes":1258291,"tx_bytes":4096},
    {"name":"charlie","group":"extra","health":"down",
-    "endpoint":"charlie.example:51820"}
+    "endpoint":"charlie.example:51820","rx_bytes":0,"tx_bytes":0}
  ]}
 ```
 
-`health` is one of `up`, `stale`, `down`. A tunnel that is down carries no
-`device`, `last_handshake`, `rx` or `tx` — the same rule the table follows, where
-absence is drawn as blank rather than as zero.
+**This is the shape `status --json` already emits.** `internal/cli` has carried
+that vocabulary since the CLI was written; a feed inventing a second dialect for
+the same data would leave two things to keep in step forever. The types move to
+`internal/wire`, `cli` and `feed` both build from there, and the application can
+be developed against `sudo tun-manager status --json` before a single line of
+socket code is read.
+
+`health` is one of `up`, `stale`, `down`, and **it is the authority**. A tunnel
+that is down still carries `rx_bytes: 0`; the consumer draws blank because the
+tunnel is down, not because a field was missing. That is the rule the table
+already follows, and it keeps optional fields out of the decoder.
 
 `sample`, sent once a second for each watched tunnel.
 
@@ -241,10 +250,17 @@ func (s *Server) Requests() <-chan Request
 `Request` carries only `Kind: "refresh"` today. It is a type rather than a bare
 channel of nothing so that a second verb does not change every signature.
 
-Wire types are declared in the package and built from `app.View`. They are not
-`app.View` with tags: marshalling internal structs onto a wire makes every
-refactor a breaking protocol change, and it is how a field nobody meant to
-publish gets published.
+### New package `internal/wire`
+
+The JSON vocabulary, extracted from `internal/cli` where it already lives as
+`jsonView` / `jsonTunnel`, and used by both `status --json` and the feed. The
+extraction is a pure refactor: the bytes `status --json` produces do not change,
+and its tests are the proof.
+
+Wire types are declared there and built from `app.View`. They are not `app.View`
+with tags: marshalling internal structs onto a wire makes every refactor a
+breaking protocol change, and it is how a field nobody meant to publish gets
+published.
 
 ### `internal/tui`
 
@@ -290,7 +306,7 @@ marker to come out of this work.
 | bind, chown, mode | socket in `t.TempDir()`, `os.Stat` the result |
 | stale socket | create a file at the path first, then `Listen` |
 | `hello` / `state` / `bye` | connect with `net.Dial`, read lines, compare |
-| down tunnels omit counters | a view with a down row, assert the absent fields |
+| `status --json` is byte-identical after the extraction | its existing tests, unchanged |
 | `watch` / `unwatch` | a fake `Sampler` counting calls |
 | refcount across clients | two connections, one tunnel, one read per second |
 | ticker stops | unwatch everything, assert the fake stops being called |
