@@ -26,6 +26,10 @@ const (
 	DefaultWgQuick   = "/opt/homebrew/bin/wg-quick"
 	DefaultRefresh   = 5 * time.Minute
 
+	// DefaultFeedSocket is where the status feed binds. /var/run is cleared on
+	// reboot, which disposes of a socket left behind by a crash for free.
+	DefaultFeedSocket = "/var/run/tun-manager.sock"
+
 	// GroupAll is the reserved group holding every tunnel to shut down. It is
 	// never affected by overrides and never reported as a tunnel's own group.
 	GroupAll = "all"
@@ -48,12 +52,17 @@ type Config struct {
 	ConfigDir string `yaml:"config_dir"`
 	WgQuick   string `yaml:"wg_quick"`
 	// RunDir is where wg-quick records the interface name of each live tunnel.
-	RunDir          string              `yaml:"run_dir"`
-	RefreshInterval time.Duration       `yaml:"refresh_interval"`
-	Notify          bool                `yaml:"notify"`
-	Contexts        []netctx.Rule       `yaml:"contexts"`
-	Groups          map[string][]string `yaml:"groups"`
-	Overrides       []Override          `yaml:"overrides"`
+	RunDir          string        `yaml:"run_dir"`
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
+	Notify          bool          `yaml:"notify"`
+	// Feed publishes state on a unix socket for a menu bar application to
+	// read. Nothing on that socket can start or stop a tunnel.
+	Feed bool `yaml:"feed"`
+	// FeedSocket is where that socket is bound.
+	FeedSocket string              `yaml:"feed_socket"`
+	Contexts   []netctx.Rule       `yaml:"contexts"`
+	Groups     map[string][]string `yaml:"groups"`
+	Overrides  []Override          `yaml:"overrides"`
 
 	// Path is the file the configuration was read from, for `doctor`.
 	Path string `yaml:"-"`
@@ -71,6 +80,8 @@ func Default() *Config {
 		RunDir:          wg.DefaultRunDir,
 		RefreshInterval: DefaultRefresh,
 		Notify:          true,
+		Feed:            true,
+		FeedSocket:      DefaultFeedSocket,
 		Groups:          map[string][]string{},
 	}
 }
@@ -119,6 +130,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RunDir == "" {
 		c.RunDir = d.RunDir
+	}
+	if c.FeedSocket == "" {
+		c.FeedSocket = d.FeedSocket
 	}
 	if c.RefreshInterval <= 0 {
 		c.RefreshInterval = d.RefreshInterval

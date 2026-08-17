@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/netctx"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
@@ -79,6 +80,13 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 	// happens to be installed on the machine running them.
 	cfg.WgQuick = fakeExecutable(t)
 	cfg.RunDir = t.TempDir()
+	// The feed defaults to on and bound at /var/run/tun-manager.sock: off here so
+	// the TUI path in these tests never touches a real, non-hermetic socket, and
+	// pointed at a short path regardless of that, so a test that flips it back on
+	// still binds somewhere private rather than failing on this test's own long
+	// name overflowing a unix socket path.
+	cfg.Feed = false
+	cfg.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
 	cfg.Groups = map[string][]string{
 		profile.GroupNeeded: {"alpha", "bravo"},
 		profile.GroupAll:    {"alpha", "bravo"},
@@ -115,6 +123,20 @@ func fakeExecutable(t *testing.T) string {
 }
 
 func output(e *env) string { return e.out.(*strings.Builder).String() }
+
+// shortSocketDir returns a temporary directory short enough to bind a unix
+// socket under, unlike t.TempDir() here: it embeds this test's name, and a
+// long one pushes the path past the ~104-byte limit macOS enforces. See
+// internal/feed/server_test.go's socketPath for the same fix.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "tm")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
 
 func TestHelpIsPrintedWithoutTouchingTheSystem(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
@@ -360,7 +382,7 @@ func TestConfigPathSitsUnderTheRealUserHome(t *testing.T) {
 func TestTUIIsTheDefaultCommand(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var started bool
-	e.interactive = func(context.Context, *app.App, *notify.Notifier) error {
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error {
 		started = true
 		return nil
 	}
@@ -376,7 +398,7 @@ func TestTUIIsTheDefaultCommand(t *testing.T) {
 func TestTUIGetsANotifierBuiltFromTheConfiguration(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier) error {
+	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server) error {
 		got = n
 		return nil
 	}
@@ -398,7 +420,7 @@ func TestTUIUsesAnInjectedNotifier(t *testing.T) {
 	want := &notify.Notifier{Enabled: false}
 	e.notifier = want
 	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier) error {
+	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server) error {
 		got = n
 		return nil
 	}
@@ -414,7 +436,7 @@ func TestTUIUsesAnInjectedNotifier(t *testing.T) {
 func TestTUIFailureIsReported(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	boom := errors.New("no terminal")
-	e.interactive = func(context.Context, *app.App, *notify.Notifier) error { return boom }
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error { return boom }
 
 	if err := e.run(nil); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
@@ -424,13 +446,102 @@ func TestTUIFailureIsReported(t *testing.T) {
 func TestTUIBuildFailureStopsBeforeStarting(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	e.build = func() (*app.App, error) { return nil, errors.New("no wireguard socket") }
-	e.interactive = func(context.Context, *app.App, *notify.Notifier) error {
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error {
 		t.Fatal("the TUI started despite a failed build")
 		return nil
 	}
 
 	if err := e.run(nil); err == nil {
 		t.Fatal("run succeeded with a failed build, want an error")
+	}
+}
+
+func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	var got *feed.Server
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+		got = f
+		return nil
+	}
+
+	if err := e.run(nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got != nil {
+		t.Errorf("feed = %+v, want none when feed is off", got)
+	}
+}
+
+func TestTheInterfaceStartsWithAFeedWhenItIsOn(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	sock := filepath.Join(shortSocketDir(t), "f.sock")
+	baseBuild := e.build
+	e.build = func() (*app.App, error) {
+		a, err := baseBuild()
+		if err != nil {
+			return nil, err
+		}
+		a.Config.Feed = true
+		a.Config.FeedSocket = sock
+		return a, nil
+	}
+	var got *feed.Server
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+		got = f
+		// Checked here, not after e.run returns: runTUI closes the feed once
+		// this callback returns, and Close removes the socket file.
+		if f == nil {
+			t.Fatal("feed = nil, want one when feed is on")
+		}
+		if _, err := os.Stat(sock); err != nil {
+			t.Errorf("socket not created: %v", err)
+		}
+		return nil
+	}
+
+	if err := e.run(nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got == nil {
+		t.Error("feed = nil, want one when feed is on")
+	}
+}
+
+func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
+	// Losing the menu bar must never cost the ability to bring a tunnel up: a
+	// feed that cannot start is reported and stepped over, not fatal.
+	e := testEnv(t, &fakeRunner{})
+	baseBuild := e.build
+	e.build = func() (*app.App, error) {
+		a, err := baseBuild()
+		if err != nil {
+			return nil, err
+		}
+		a.Config.Feed = true
+		a.Config.FeedSocket = filepath.Join(shortSocketDir(t), "no-such-dir", "f.sock")
+		return a, nil
+	}
+	var got *feed.Server
+	var started bool
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+		got = f
+		started = true
+		return nil
+	}
+
+	if err := e.run(nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !started {
+		t.Fatal("the TUI never started: an unbindable feed must not be fatal")
+	}
+	if got != nil {
+		t.Errorf("feed = %+v, want none when the socket cannot bind", got)
+	}
+	if !strings.Contains(output(e), "status feed unavailable") {
+		t.Errorf("output = %q, want it to say the feed is unavailable", output(e))
 	}
 }
 
@@ -600,7 +711,7 @@ func TestRunTUIStopsWithItsContext(t *testing.T) {
 	cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- runTUI(ctx, nil, nil) }()
+	go func() { done <- runTUI(ctx, nil, nil, nil) }()
 
 	select {
 	case err := <-done:

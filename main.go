@@ -19,6 +19,7 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/cli"
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/probe"
@@ -62,7 +63,7 @@ type env struct {
 	// notifier is optional; without one the TUI posts no notification.
 	notifier *notify.Notifier
 	// interactive runs the TUI. It is a field so tests never start one.
-	interactive func(context.Context, *app.App, *notify.Notifier) error
+	interactive func(context.Context, *app.App, *notify.Notifier, *feed.Server) error
 }
 
 // NOT TESTED: this calls os.Exit, so covering it means starting a subprocess to
@@ -183,9 +184,8 @@ func build() (*app.App, error) {
 	}, nil
 }
 
-func runTUI(ctx context.Context, a *app.App, n *notify.Notifier) error {
-	// TODO(task 9): wire the feed server through here.
-	return tui.Run(ctx, a, n, nil)
+func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server) error {
+	return tui.Run(ctx, a, n, f)
 }
 
 func (e *env) runDoctor() error {
@@ -251,8 +251,10 @@ func (e *env) runTUI() error {
 	}
 
 	notifier := e.notifier
-	if notifier == nil {
-		if _, u, err := e.config(); err == nil {
+	var owner privdrop.User
+	if _, u, cfgErr := e.config(); cfgErr == nil {
+		owner = u
+		if notifier == nil {
 			n := notify.New(u, a.Config.Notify)
 			notifier = &n
 		}
@@ -260,7 +262,37 @@ func (e *env) runTUI() error {
 
 	ctx, stop := signalled()
 	defer stop()
-	return e.interactive(ctx, a, notifier)
+
+	f := e.startFeed(ctx, a, owner)
+	if f != nil {
+		defer f.Close() //nolint:errcheck // stopping, not reported; the TUI is already on its way out
+	}
+	return e.interactive(ctx, a, notifier, f)
+}
+
+// startFeed opens the status socket, or returns nil having said why.
+//
+// Losing the menu bar must never cost you the ability to bring a tunnel up, so
+// a feed that cannot start is reported and stepped over. The alternate screen
+// puts this back on the terminal when the interface exits, and `doctor` says
+// the same thing at any time.
+func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) *feed.Server {
+	if !a.Config.Feed {
+		return nil
+	}
+
+	f := &feed.Server{
+		Path:    a.Config.FeedSocket,
+		Owner:   owner,
+		Sampler: a,
+		Version: version,
+	}
+	if err := f.Listen(); err != nil { //nolint:contextcheck // Listen takes no context; Serve below does
+		fmt.Fprintf(e.out, "%s: status feed unavailable: %v\n", appName, err) //nolint:errcheck
+		return nil
+	}
+	go f.Serve(ctx) //nolint:errcheck // reported by doctor; not worth failing the TUI over
+	return f
 }
 
 func (e *env) runStatus(args []string) error {

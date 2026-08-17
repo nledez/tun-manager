@@ -135,6 +135,29 @@ responding, and `⏎` on another tunnel starts it there and then — batches
 overlap. The one thing refused is a second `wg-quick` on a tunnel that already
 has one, which is skipped rather than queued.
 
+### Status feed
+
+While `tun-manager` runs it publishes what it knows on a unix socket, so a
+menu bar application can show tunnel state, graph traffic and raise
+notifications without any privilege of its own.
+
+```yaml
+feed: true                              # default
+feed_socket: /var/run/tun-manager.sock  # default
+```
+
+The socket is created by root and handed to whoever ran `sudo tun-manager`,
+mode `0600`. It carries the same JSON as `tun-manager status --json`, one
+object per line, plus a `hello` on connect, a `sample` once a second for each
+tunnel a client asked to watch, and a `bye` on the way out.
+
+**Nothing on that socket can start or stop a tunnel.** A client may watch a
+tunnel's counters and ask for a refresh, and that is the whole vocabulary.
+
+It is only alive while `tun-manager` is: there is no daemon. Run
+`sudo tun-manager doctor` to see where the socket would bind and who could
+read it.
+
 ## How a tunnel's state is decided
 
 A tunnel is matched to its live interface through `/var/run/wireguard/<name>.name`,

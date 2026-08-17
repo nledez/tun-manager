@@ -263,3 +263,37 @@ func TestLoadReportsAReadFailureThatIsNotAMissingFile(t *testing.T) {
 		t.Fatal("Load succeeded on a directory, want an error")
 	}
 }
+
+func TestTheFeedIsOnByDefault(t *testing.T) {
+	// The socket is 0600 and owned by one person, so there is nothing to
+	// protect by making it opt-in, and an application that needs configuration
+	// before it works once is an application nobody runs twice.
+	cfg := Default()
+
+	if !cfg.Feed {
+		t.Error("Feed = false, want the feed available without configuration")
+	}
+	if cfg.FeedSocket != DefaultFeedSocket {
+		t.Errorf("FeedSocket = %q, want %q", cfg.FeedSocket, DefaultFeedSocket)
+	}
+}
+
+func TestTheFeedCanBeSwitchedOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("feed: false\nfeed_socket: /tmp/other.sock\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Feed {
+		t.Error("Feed = true, want it off")
+	}
+	if cfg.FeedSocket != "/tmp/other.sock" {
+		t.Errorf("FeedSocket = %q, want the configured path", cfg.FeedSocket)
+	}
+}

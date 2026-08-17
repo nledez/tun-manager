@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 )
@@ -53,6 +54,7 @@ func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string) []Ch
 		checkConfigFile(cfg),
 		checkGroups(cfg),
 		checkNotifications(u),
+		checkFeed(cfg, u),
 	}
 }
 
@@ -144,6 +146,35 @@ func checkNotifications(u privdrop.User) Check {
 		}
 	}
 	return Check{Name: "notifications", Status: Pass, Detail: "posted as " + u.Username}
+}
+
+// checkFeed reports whether the status feed can bind, and who would be allowed
+// to read it. It is the first thing to look at when the menu bar shows nothing.
+func checkFeed(cfg *profile.Config, u privdrop.User) Check {
+	if !cfg.Feed {
+		return Check{
+			Name: "status feed", Status: Warn,
+			Detail: "disabled (feed: false)",
+		}
+	}
+
+	dir := filepath.Dir(cfg.FeedSocket)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return Check{Name: "status feed", Status: Fail, Detail: fmt.Sprintf("%s: %v", dir, err)}
+	}
+	if !info.IsDir() {
+		return Check{Name: "status feed", Status: Fail, Detail: dir + " is not a directory"}
+	}
+
+	owner := "root"
+	if u.Demotable {
+		owner = u.Username
+	}
+	return Check{
+		Name: "status feed", Status: Pass,
+		Detail: fmt.Sprintf("%s, mode %o, readable by %s", cfg.FeedSocket, feed.SocketMode, owner),
+	}
 }
 
 // AllPassed reports whether no check failed. Warnings do not count as failures.

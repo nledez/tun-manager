@@ -31,6 +31,9 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 	// checks depend on whether WireGuard happens to be running on the machine.
 	cfg.RunDir = t.TempDir()
 	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
+	// Same reasoning: the default socket lives under /var/run, and whether the
+	// feed check passes must not depend on that directory happening to exist.
+	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
 
 	return cfg, privdrop.User{Username: "operator", HomeDir: "/home/operator", UID: 1000, Demotable: true}
 }
@@ -272,5 +275,81 @@ func TestDoctorFailsOnAConfigDirThatBreaksThePattern(t *testing.T) {
 	c, _ := findCheck(checks, "config dir")
 	if c.Status != Fail {
 		t.Errorf("config dir check status = %v, want %v", c.Status, Fail)
+	}
+}
+
+func TestDoctorReportsWhereTheFeedWouldBind(t *testing.T) {
+	// It is the first thing to look at when the menu bar shows nothing.
+	cfg, u := healthyEnv(t)
+	cfg.Feed = true
+	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	c, ok := findCheck(checks, "status feed")
+	if !ok {
+		t.Fatalf("no status feed check in %+v", checks)
+	}
+	if c.Status != Pass {
+		t.Errorf("status = %v (%s), want Pass on a writable directory", c.Status, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "operator") {
+		t.Errorf("detail = %q, want who the socket is handed to", c.Detail)
+	}
+}
+
+func TestDoctorSaysSoWhenTheFeedIsOff(t *testing.T) {
+	cfg, u := healthyEnv(t)
+	cfg.Feed = false
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	c, ok := findCheck(checks, "status feed")
+	if !ok {
+		t.Fatalf("no status feed check in %+v", checks)
+	}
+	if c.Status != Warn {
+		t.Errorf("status = %v, want Warn: the program works, just without a feed", c.Status)
+	}
+}
+
+func TestDoctorFailsWhenTheFeedHasNowhereToBind(t *testing.T) {
+	cfg, u := healthyEnv(t)
+	cfg.Feed = true
+	cfg.FeedSocket = filepath.Join(t.TempDir(), "no-such-dir", "f.sock")
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	c, ok := findCheck(checks, "status feed")
+	if !ok {
+		t.Fatalf("no status feed check in %+v", checks)
+	}
+	if c.Status != Fail {
+		t.Errorf("status = %v (%s), want Fail", c.Status, c.Detail)
+	}
+}
+
+func TestDoctorFailsWhenTheFeedSocketsDirectoryIsAFile(t *testing.T) {
+	// filepath.Dir of the configured socket resolves to something that stat
+	// succeeds on but that cannot hold a socket: a plain file, not a directory.
+	cfg, u := healthyEnv(t)
+	notADir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg.Feed = true
+	cfg.FeedSocket = filepath.Join(notADir, "f.sock")
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	c, ok := findCheck(checks, "status feed")
+	if !ok {
+		t.Fatalf("no status feed check in %+v", checks)
+	}
+	if c.Status != Fail {
+		t.Errorf("status = %v (%s), want Fail", c.Status, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "not a directory") {
+		t.Errorf("detail = %q, want it to say why", c.Detail)
 	}
 }
