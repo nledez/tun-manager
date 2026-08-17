@@ -96,10 +96,22 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 	}
 
 	var states atomic.Int64
+	started := make(chan struct{})
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
 		lines := bufio.NewScanner(attentive)
+
+		// Read the hello before signalling. Closing a channel on the way into
+		// the loop would only prove this goroutine was scheduled; having taken
+		// a line off the connection proves it is reading, which is what the
+		// burst below needs to be true.
+		if !lines.Scan() {
+			close(started)
+			return
+		}
+		close(started)
+
 		for lines.Scan() {
 			var msg struct {
 				Type string `json:"type"`
@@ -110,8 +122,7 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 		}
 	}()
 
-	// Give the drain goroutine a moment to start reading before publishing.
-	time.Sleep(10 * time.Millisecond)
+	<-started
 
 	publishUntil(t, s, 1)
 
