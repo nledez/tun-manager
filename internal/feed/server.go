@@ -81,6 +81,7 @@ type Server struct {
 	clients  map[*client]struct{}
 	view     app.View
 	haveView bool
+	sampling chan struct{}
 
 	// chmod and remove are the filesystem calls Listen and Close depend on.
 	// They are fields so a test can make them fail: the paths where the
@@ -300,8 +301,104 @@ func (s *Server) read(c *client) {
 	}
 }
 
-// onMessage grows in Tasks 6 and 7. Nothing here can act on a tunnel.
-func (s *Server) onMessage(c *client, msg clientMsg) {}
+// onMessage acts on one line from a client. Nothing here can act on a tunnel:
+// the vocabulary is watch, unwatch and refresh, and no more.
+func (s *Server) onMessage(c *client, msg clientMsg) {
+	switch msg.Type {
+	case "watch":
+		if msg.Tunnel == "" {
+			return
+		}
+		s.mu.Lock()
+		c.watch[msg.Tunnel] = true
+		s.mu.Unlock()
+		s.retick()
+	case "unwatch":
+		s.mu.Lock()
+		delete(c.watch, msg.Tunnel)
+		s.mu.Unlock()
+		s.retick()
+	}
+}
+
+// retick starts the sampling loop when the first tunnel is watched and stops it
+// when the last one is released. A timer waking every second for a graph nobody
+// is looking at is a timer waking for nothing.
+func (s *Server) retick() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch watched := s.watchedLocked(); {
+	case watched && s.sampling == nil:
+		stop := make(chan struct{})
+		s.sampling = stop
+		go s.sampleLoop(stop)
+	case !watched && s.sampling != nil:
+		close(s.sampling)
+		s.sampling = nil
+	}
+}
+
+// watchedLocked reports whether anybody is watching anything. The caller holds
+// the mutex.
+func (s *Server) watchedLocked() bool {
+	for c := range s.clients {
+		if len(c.watch) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) sampleLoop(stop <-chan struct{}) {
+	t := time.NewTicker(s.interval())
+	defer t.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.sampleOnce()
+		}
+	}
+}
+
+// sampleOnce reads the union of what is watched and delivers each reading only
+// to the clients that asked for that tunnel.
+func (s *Server) sampleOnce() {
+	s.mu.Lock()
+	view := s.view
+	watchers := map[string][]*client{}
+	for c := range s.clients {
+		for name := range c.watch {
+			watchers[name] = append(watchers[name], c)
+		}
+	}
+	s.mu.Unlock()
+
+	for name, cs := range watchers {
+		row, known := view.Row(name)
+		if !known {
+			// Either the tunnel is gone or no view has named it yet. The watch
+			// stands; the next round looks again.
+			continue
+		}
+		sample, taken := s.Sampler.Sample(row.Tunnel)
+		if !taken {
+			// A tunnel that is down has no counters. That is a fact rather
+			// than a failure, and a zero would draw as a tunnel doing nothing.
+			continue
+		}
+		msg := sampleMsg{
+			Type: "sample", Tunnel: name,
+			At: sample.At, Rx: sample.Rx, Tx: sample.Tx,
+		}
+		for _, c := range cs {
+			s.sendTo(c, msg)
+		}
+	}
+}
 
 // sendTo queues one message, dropping the client if it has fallen too far
 // behind.
@@ -338,6 +435,8 @@ func (s *Server) drop(c *client) {
 
 	close(c.out)
 	c.conn.Close() //nolint:errcheck
+	// The client's watches went with it; the loop stops if it held the last.
+	s.retick()
 }
 
 // shutdown says goodbye to everyone, stops listening and removes the socket.
@@ -365,6 +464,13 @@ func (s *Server) shutdown() {
 		// that stopped reading leaves it blocked in a write syscall.
 		c.conn.SetWriteDeadline(time.Now().Add(byeGrace)) //nolint:errcheck // the connection is going away regardless
 	}
+
+	s.mu.Lock()
+	if s.sampling != nil {
+		close(s.sampling)
+		s.sampling = nil
+	}
+	s.mu.Unlock()
 
 	s.Close() //nolint:errcheck
 }
