@@ -231,25 +231,29 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 	}
 }
 
-func TestRunWithAFeedWiresPublishingAndRequests(t *testing.T) {
-	// A live *feed.Server assigned through the concrete type must not panic
-	// when a view is published to it, and Run must listen on its Requests
-	// channel rather than leaving it nil - the wiring the composition root
-	// relies on.
-	a := testApp(t, &fakeRunner{}, alphaKey)
-	f := &feed.Server{}
+func TestAFeedIsWiredIntoTheModel(t *testing.T) {
+	f := &feed.Server{Path: filepath.Join(t.TempDir(), "f.sock")}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, a, nil, f, WithoutTerminal())
-	}()
+	m := newModel(nil, nil, f)
 
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after the context was cancelled")
+	if m.feed == nil {
+		t.Error("feed = nil, want the server the composition root passed")
+	}
+	if m.requests == nil {
+		t.Error("requests = nil, want the interface listening to the feed")
+	}
+}
+
+func TestAnInterfaceBuiltWithoutAFeedHoldsNoFeed(t *testing.T) {
+	// A nil *feed.Server assigned to the interface would leave a non-nil
+	// interface holding a nil pointer, and the first publish would panic.
+	m := newModel(nil, nil, nil)
+
+	if m.feed != nil {
+		t.Errorf("feed = %#v, want nothing", m.feed)
+	}
+	if m.requests != nil {
+		t.Error("requests is not nil, want no listener without a feed")
 	}
 }
 

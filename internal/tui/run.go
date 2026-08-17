@@ -22,6 +22,24 @@ func WithoutTerminal() Option {
 	}
 }
 
+// newModel builds the model Run drives, with the feed wired in when there is
+// one.
+//
+// It is separate from Run so the wiring can be asserted directly. Reaching it
+// through a running program means racing the event loop, which is how a test
+// ends up proving only that nothing panicked.
+func newModel(a *app.App, n *notify.Notifier, f *feed.Server) Model {
+	m := New(a, n)
+	if f == nil {
+		// Assigning a nil *feed.Server to the interface would leave a non-nil
+		// interface holding a nil pointer, and every publish would panic.
+		return m
+	}
+	m.feed = f
+	m.requests = f.Requests()
+	return m
+}
+
 // Run starts the interactive interface and blocks until the user quits or the
 // context is cancelled. A nil feed means nothing is published.
 func Run(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, opts ...Option) error {
@@ -30,14 +48,7 @@ func Run(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, op
 		o(&programOpts)
 	}
 
-	m := New(a, n)
-	if f != nil {
-		// Assigned through the concrete type rather than passed as an
-		// interface: a nil *feed.Server in an interface is not a nil
-		// interface, and every publish would panic.
-		m.feed = f
-		m.requests = f.Requests()
-	}
+	m := newModel(a, n, f)
 
 	_, err := tea.NewProgram(m, programOpts...).Run()
 	if ctx.Err() != nil {
