@@ -48,10 +48,15 @@ prompt for one. Two consequences are handled explicitly:
   through `SUDO_USER` instead;
 - root has no GUI session, so notifications are posted back as the pre-sudo user.
 
-Notifications carry the icon above when [`terminal-notifier`][tn] is installed
-(`brew install terminal-notifier`); AppleScript's `display notification` has no
-clause for an icon, so without it they fall back to `osascript` and whatever
-icon the sender has.
+Notifications show the logo above as a thumbnail when [`terminal-notifier`][tn]
+is installed (`brew install terminal-notifier`), and fall back to `osascript`
+without it.
+
+The icon on the left of a notification is not ours to set: since macOS 11 it is
+the icon of the `.app` bundle that sent the notification, so it shows whichever
+tool did the sending. `terminal-notifier` still accepts `-appIcon`, but macOS
+ignores it. `sudo tun-manager notify` posts a sample so you can see what your
+machine does with it.
 
 [tn]: https://github.com/julienXX/terminal-notifier
 

@@ -783,3 +783,15 @@ func TestNotifyStopsWhenTheConfigurationCannotBeRead(t *testing.T) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
 	}
 }
+
+func TestNotifyReportsAWriteFailure(t *testing.T) {
+	// `tun-manager notify | head` closes the pipe early; the exit code must not
+	// claim the notification was reported when nothing was written.
+	e := testEnv(t, &fakeRunner{})
+	e.notifier = &notify.Notifier{Binary: "/usr/bin/true"}
+	e.out = failingWriter{err: errors.New("broken pipe")}
+
+	if err := e.run([]string{"notify"}); err == nil {
+		t.Fatal("notify succeeded with a broken output, want the error reported")
+	}
+}

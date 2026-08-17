@@ -243,14 +243,20 @@ func TestAZeroNotifierStillNamesACommand(t *testing.T) {
 }
 
 func TestTerminalNotifierIsHandedTheIcon(t *testing.T) {
-	// osascript has no clause for an icon, so a notification through it shows
-	// whatever icon the sender has. terminal-notifier can be told.
+	// -contentImage rather than -appIcon: since macOS 11 the icon of a
+	// notification comes from the bundle that sent it, and -appIcon is accepted
+	// but ignored. -contentImage puts the image beside the text, which shows.
 	n := Notifier{Enabled: true, Binary: "/somewhere/terminal-notifier", Icon: "/tmp/icon.png"}
 
 	_, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
 
-	if !argsContain(args, "-appIcon", "/tmp/icon.png") {
-		t.Errorf("args = %v, want the icon passed", args)
+	if !argsContain(args, "-contentImage", "/tmp/icon.png") {
+		t.Errorf("args = %v, want the image passed", args)
+	}
+	for _, a := range args {
+		if a == "-appIcon" {
+			t.Errorf("args = %v, want no -appIcon: macOS ignores it", args)
+		}
 	}
 	if !argsContain(args, "-title", "tun-manager") {
 		t.Errorf("args = %v, want a title", args)
@@ -266,8 +272,8 @@ func TestTerminalNotifierWithoutAnIconStillPosts(t *testing.T) {
 	_, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
 
 	for _, a := range args {
-		if a == "-appIcon" {
-			t.Errorf("args = %v, want no icon flag when there is no icon", args)
+		if a == "-contentImage" {
+			t.Errorf("args = %v, want no image flag when there is no image", args)
 		}
 	}
 }
@@ -376,8 +382,8 @@ func TestTheInstalledCommandIsFoundOnThePath(t *testing.T) {
 	if path != fake {
 		t.Errorf("path = %q, want the one on PATH %q", path, fake)
 	}
-	if !argsContain(args, "-appIcon", "/tmp/icon.png") {
-		t.Errorf("args = %v, want the icon passed", args)
+	if !argsContain(args, "-contentImage", "/tmp/icon.png") {
+		t.Errorf("args = %v, want the image passed", args)
 	}
 }
 

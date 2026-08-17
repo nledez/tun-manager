@@ -124,7 +124,12 @@ func (n Notifier) notifierArgs(t Transition) []string {
 	title, body := t.Message()
 	args := []string{"-title", "tun-manager", "-subtitle", title, "-message", body}
 	if n.Icon != "" {
-		args = append(args, "-appIcon", n.Icon)
+		// -contentImage, not -appIcon. Since macOS 11 the icon of a
+		// notification is the icon of the .app bundle that sent it, and
+		// -appIcon is accepted but ignored: notifications sent through
+		// terminal-notifier show a terminal whatever is passed. -contentImage
+		// attaches the image beside the text instead, which does display.
+		args = append(args, "-contentImage", n.Icon)
 	}
 	return args
 }
