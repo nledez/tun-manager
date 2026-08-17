@@ -1,3 +1,6 @@
 /bin/
 /coverage.out
 /dist/
+
+# subagent-driven development scratch
+.superpowers/

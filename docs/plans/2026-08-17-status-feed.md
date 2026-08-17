@@ -914,7 +914,11 @@ import (
 
 // serving starts a server on a temporary socket and stops it when the test
 // ends. The interval is short so no test waits on a real second.
-func serving(t *testing.T, sampler Sampler) *Server {
+//
+// Anything a test needs to change on the server goes in a tweak, applied
+// before Serve starts: once the accept loop is running, writing a field is a
+// data race that -race will find.
+func serving(t *testing.T, sampler Sampler, tweaks ...func(*Server)) *Server {
 	t.Helper()
 
 	s := &Server{
@@ -922,6 +926,9 @@ func serving(t *testing.T, sampler Sampler) *Server {
 		Sampler:  sampler,
 		Version:  "v0.0.0-test",
 		Interval: 5 * time.Millisecond,
+	}
+	for _, tweak := range tweaks {
+		tweak(s)
 	}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -1403,12 +1410,50 @@ The publisher must never wait on a consumer. A stalled menu bar cannot be allowe
 package feed
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
 )
+
+// fatView makes a state message big enough that the kernel's socket buffer
+// cannot quietly swallow the whole backlog. Without it a "client that never
+// reads" is absorbed by the buffer and never falls behind at all, and the test
+// passes for the wrong reason.
+func fatView() app.View {
+	names := make([]string, 0, 40)
+	for i := range 40 {
+		names = append(names, fmt.Sprintf("tunnel-%02d", i))
+	}
+	return aView(names...)
+}
+
+// publishUntil publishes until the server is down to want clients. It is two
+// assertions at once: a Publish that blocks never returns, and a client that is
+// never dropped never brings the count down.
+func publishUntil(t *testing.T, s *Server, want int) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deadline := time.Now().Add(5 * time.Second)
+		for s.clientCount() > want && time.Now().Before(deadline) {
+			s.Publish(fatView())
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Publish blocked on a client that never reads")
+	}
+	if got := s.clientCount(); got != want {
+		t.Fatalf("clients = %d, want %d", got, want)
+	}
+}
 
 func TestAClientThatNeverReadsIsDroppedRatherThanWaitedFor(t *testing.T) {
 	// The program that manages the tunnels must not block on the program that
@@ -1422,24 +1467,7 @@ func TestAClientThatNeverReadsIsDroppedRatherThanWaitedFor(t *testing.T) {
 	}
 	defer silent.Close()
 
-	// Far past the queue, and each Publish must return promptly.
-	done := make(chan struct{})
-	go func() {
-		for range sendQueue * 4 {
-			s.Publish(aView("alpha"))
-		}
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Publish blocked on a client that never reads")
-	}
-
-	if got := s.clientCount(); got != 0 {
-		t.Errorf("clients = %d, want the silent one dropped", got)
-	}
+	publishUntil(t, s, 0)
 }
 
 func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
@@ -1454,10 +1482,11 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 	attentive := dial(t, s)
 	attentive.next(t)
 
-	for range sendQueue * 4 {
-		s.Publish(aView("alpha"))
-	}
+	// Down to the attentive one alone.
+	publishUntil(t, s, 1)
 
+	// It has a backlog of fat views to work through; every one of them is a
+	// state, and the point is that it is still being served at all.
 	if msg := attentive.next(t); msg["type"] != "state" {
 		t.Errorf("got %v, want the attentive client still served", msg)
 	}
@@ -1970,9 +1999,36 @@ Without it the menu bar shows state up to `refresh_interval` old — five minute
 package feed
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
+
+// fakeClock is a clock a test can move. It is guarded because the server reads
+// it from its own goroutines while the test writes it.
+type fakeClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+// stopped returns a server tweak installing a clock that does not move, so the
+// refresh floor is entirely under the test's control.
+func stopped(c *fakeClock) func(*Server) {
+	c.at = taken
+	return func(s *Server) { s.Now = c.now }
+}
 
 func TestAClientCanAskForAFreshView(t *testing.T) {
 	// A menu bar opened between two ticks would otherwise show state up to
@@ -1996,9 +2052,8 @@ func TestAClientCanAskForAFreshView(t *testing.T) {
 func TestRefreshesInQuickSuccessionAreCollapsed(t *testing.T) {
 	// Reading the whole system is not free, and a client is not allowed to
 	// turn the menu bar into a way of hammering it.
-	now := taken
-	s := serving(t, nil)
-	s.Now = func() time.Time { return now }
+	clock := &fakeClock{}
+	s := serving(t, nil, stopped(clock))
 	c := dial(t, s)
 	c.next(t)
 
@@ -2014,16 +2069,15 @@ func TestRefreshesInQuickSuccessionAreCollapsed(t *testing.T) {
 }
 
 func TestARefreshIsAllowedAgainOnceTheFloorHasPassed(t *testing.T) {
-	now := taken
-	s := serving(t, nil)
-	s.Now = func() time.Time { return now }
+	clock := &fakeClock{}
+	s := serving(t, nil, stopped(clock))
 	c := dial(t, s)
 	c.next(t)
 
 	c.send(t, `{"type":"refresh"}`)
 	<-s.Requests()
 
-	now = now.Add(refreshFloor + time.Second)
+	clock.advance(refreshFloor + time.Second)
 	c.send(t, `{"type":"refresh"}`)
 
 	select {
@@ -2039,16 +2093,14 @@ func TestARefreshIsAllowedAgainOnceTheFloorHasPassed(t *testing.T) {
 func TestRequestsNobodyReadsDoNotWedgeTheFeed(t *testing.T) {
 	// Nothing guarantees the interface is listening. A refresh that cannot be
 	// delivered is dropped, because the next one carries the same meaning.
-	now := taken
-	s := serving(t, nil)
-	s.Now = func() time.Time { return now }
+	clock := &fakeClock{}
+	s := serving(t, nil, stopped(clock))
 	c := dial(t, s)
 	c.next(t)
 
-	for i := range 5 {
-		now = now.Add(refreshFloor + time.Second)
+	for range 5 {
+		clock.advance(refreshFloor + time.Second)
 		c.send(t, `{"type":"refresh"}`)
-		_ = i
 	}
 
 	// The feed is still serving.
