@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,8 +51,64 @@ func TestListenCreatesTheSocketReadableByNobodyElse(t *testing.T) {
 }
 
 func TestTheSocketIsHandedToThePreSudoUser(t *testing.T) {
-	// Root creates it and the user's session has to open it. Chowning to the
-	// current uid is a real chown that an unprivileged test can make.
+	// What matters is which identity the socket goes to. A real chown cannot
+	// say: as an ordinary user it only succeeds for the identity the test
+	// already has, so it would pass with the wrong ids hard-coded, and under
+	// sudo - which is how this program runs - it succeeds for any of them.
+	var got struct {
+		path     string
+		uid, gid int
+		calls    int
+	}
+	s := &Server{
+		Path:  socketPath(t),
+		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
+		chown: func(path string, uid, gid int) error {
+			got.path, got.uid, got.gid, got.calls = path, uid, gid, got.calls+1
+			return nil
+		},
+	}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer s.Close()
+
+	if got.calls != 1 {
+		t.Fatalf("chown called %d time(s), want once", got.calls)
+	}
+	if got.path != s.Path || got.uid != 501 || got.gid != 20 {
+		t.Errorf("chown(%q, %d, %d), want the socket handed to operator", got.path, got.uid, got.gid)
+	}
+}
+
+func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
+	// Leaving a root-owned socket behind would look like it worked and then
+	// serve nobody.
+	boom := errors.New("operation not permitted")
+	s := &Server{
+		Path:  socketPath(t),
+		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
+		chown: func(string, int, int) error { return boom },
+	}
+
+	err := s.Listen()
+
+	if !errors.Is(err, boom) {
+		s.Close()
+		t.Fatalf("Listen = %v, want the handover failure", err)
+	}
+	if _, statErr := os.Stat(s.Path); !os.IsNotExist(statErr) {
+		t.Errorf("the socket outlived a failed Listen")
+	}
+}
+
+func TestWithoutAnInjectedChownTheRealOneIsUsed(t *testing.T) {
+	// All this proves is that the default resolves to the system call rather
+	// than to nothing: the identity is the one the test process already has,
+	// so it says nothing about which identity would be chosen. That part is
+	// pinned by TestTheSocketIsHandedToThePreSudoUser, which is why this test
+	// asserts so little.
 	s := &Server{
 		Path: socketPath(t),
 		Owner: privdrop.User{
@@ -62,38 +119,24 @@ func TestTheSocketIsHandedToThePreSudoUser(t *testing.T) {
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer s.Close()
-}
-
-func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		// Chowning to root succeeds when you are root, so there is no failure
-		// to observe. The whole program runs under sudo, so a suite run that
-		// way is not far-fetched.
-		t.Skip("this test proves a chown fails, which it cannot do as root")
-	}
-	// Leaving a root-owned socket behind would look like it worked and then
-	// serve nobody.
-	s := &Server{
-		Path:  socketPath(t),
-		Owner: privdrop.User{Username: "root", UID: 0, GID: 0, Demotable: true},
-	}
-
-	err := s.Listen()
-
-	if err == nil {
-		s.Close()
-		t.Fatal("Listen succeeded while chowning to root as an ordinary user")
-	}
-	if _, statErr := os.Stat(s.Path); !os.IsNotExist(statErr) {
-		t.Errorf("the socket outlived a failed Listen")
-	}
+	s.Close()
 }
 
 func TestASocketWithNoOneToHandItToStaysWhereItIs(t *testing.T) {
 	// A real root login rather than sudo: there is no user session to serve,
-	// so the socket stays root-owned rather than failing to start.
-	s := &Server{Path: socketPath(t), Owner: privdrop.User{Demotable: false, UID: 0}}
+	// so the socket stays root-owned rather than failing to start. The
+	// recorder proves the handover was skipped, not merely survived.
+	handed := 0
+	s := &Server{
+		Path:  socketPath(t),
+		Owner: privdrop.User{Demotable: false, UID: 0},
+		chown: func(string, int, int) error { handed++; return nil },
+	}
+	defer func() {
+		if handed != 0 {
+			t.Errorf("chown called %d time(s), want none", handed)
+		}
+	}()
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)

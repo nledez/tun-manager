@@ -90,6 +90,12 @@ type Server struct {
 	requests    chan Request
 	lastRefresh time.Time
 
+	// chown hands the socket to the pre-sudo user. Injected for the same
+	// reason as the two below, and one more: the real call is decided by who
+	// is running the suite. Asking for another identity fails as an ordinary
+	// user and succeeds under sudo, so the test would be measuring the tester.
+	chown func(path string, uid, gid int) error
+
 	// chmod and remove are the filesystem calls Listen and Close depend on.
 	// They are fields so a test can make them fail: the paths where the
 	// filesystem misbehaves between two operations are the ones a real
@@ -110,6 +116,13 @@ func (s *Server) clock() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s *Server) chownFn() func(string, int, int) error {
+	if s.chown != nil {
+		return s.chown
+	}
+	return os.Chown
 }
 
 func (s *Server) chmodFn() func(string, os.FileMode) error {
@@ -182,7 +195,7 @@ func (s *Server) Listen() error {
 		return s.abandon(ln, fmt.Errorf("chmod %s: %w", s.Path, err))
 	}
 	if s.Owner.Demotable {
-		if err := os.Chown(s.Path, s.Owner.UID, s.Owner.GID); err != nil {
+		if err := s.chownFn()(s.Path, s.Owner.UID, s.Owner.GID); err != nil {
 			return s.abandon(ln, fmt.Errorf("hand %s to %s: %w", s.Path, s.Owner.Username, err))
 		}
 	}

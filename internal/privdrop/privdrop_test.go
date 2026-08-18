@@ -2,6 +2,7 @@ package privdrop
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -148,13 +149,60 @@ func TestCommandIsRunnable(t *testing.T) {
 	}
 }
 
+// chownCall is one recorded handover.
+type chownCall struct {
+	path     string
+	uid, gid int
+}
+
+// recordingChown returns a chown that succeeds and remembers what it was asked.
+func recordingChown(calls *[]chownCall) func(string, int, int) error {
+	return func(path string, uid, gid int) error {
+		*calls = append(*calls, chownCall{path: path, uid: uid, gid: gid})
+		return nil
+	}
+}
+
 func TestChownGivesTheFileBackToTheRealUser(t *testing.T) {
+	// What is worth testing is which identity the file is handed to. The real
+	// syscall cannot say: as an ordinary user it only succeeds for the
+	// identity the test already has, so it would pass with the wrong ids
+	// hard-coded, and under sudo it succeeds for any of them.
+	var calls []chownCall
+	u := User{UID: 501, GID: 20, Demotable: true, chown: recordingChown(&calls)}
+
+	if err := u.Chown("/tmp/tun-manager.log"); err != nil {
+		t.Fatalf("Chown: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one", calls)
+	}
+	if calls[0] != (chownCall{path: "/tmp/tun-manager.log", uid: 501, gid: 20}) {
+		t.Errorf("chown%+v, want the pre-sudo uid and gid", calls[0])
+	}
+}
+
+func TestChownReportsWhatTheSystemSaid(t *testing.T) {
+	// The caller decides whether a failed handover matters; Chown does not get
+	// to swallow it.
+	boom := errors.New("operation not permitted")
+	u := User{UID: 501, GID: 20, Demotable: true, chown: func(string, int, int) error { return boom }}
+
+	if err := u.Chown("/tmp/tun-manager.log"); !errors.Is(err, boom) {
+		t.Errorf("Chown = %v, want %v", err, boom)
+	}
+}
+
+func TestWithoutAnInjectedChownTheRealOneIsUsed(t *testing.T) {
+	// All this proves is that the default resolves to the system call rather
+	// than to nothing. The identity is the one the test process already has,
+	// so it says nothing about which one would be chosen - that is pinned by
+	// TestChownGivesTheFileBackToTheRealUser.
 	path := filepath.Join(t.TempDir(), "log")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// Chowning to the current identity is the one case a test can exercise
-	// without root, and it still runs the real syscall.
 	u := User{UID: os.Getuid(), GID: os.Getgid(), Demotable: true}
 
 	if err := u.Chown(path); err != nil {
@@ -163,10 +211,16 @@ func TestChownGivesTheFileBackToTheRealUser(t *testing.T) {
 }
 
 func TestChownIsANoOpWithoutADemotableUser(t *testing.T) {
-	u := User{}
+	// Nobody to give the file to, so nothing is attempted: the recorder proves
+	// the syscall was not merely tolerated but skipped.
+	var calls []chownCall
+	u := User{chown: recordingChown(&calls)}
 
 	if err := u.Chown("/nonexistent/path"); err != nil {
 		t.Errorf("Chown = %v, want nil: there is nobody to give the file to", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("calls = %+v, want none", calls)
 	}
 }
 

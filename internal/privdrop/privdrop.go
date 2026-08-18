@@ -27,6 +27,20 @@ type User struct {
 	// It is false when the program was not started through sudo, or was started
 	// from a root shell.
 	Demotable bool
+
+	// chown is the call Chown makes. It is a field because a real chown can
+	// only ever be made to the identity the test process already has, which
+	// proves nothing about whether the right one was chosen - and asking for
+	// any other identity fails, unless the suite happens to run under sudo, in
+	// which case it succeeds instead. Neither outcome is a test.
+	chown func(path string, uid, gid int) error
+}
+
+func (u User) chownFn() func(string, int, int) error {
+	if u.chown != nil {
+		return u.chown
+	}
+	return os.Chown
 }
 
 // LookupFunc mirrors os/user.Lookup, so tests can inject a fake directory.
@@ -102,5 +116,5 @@ func (u User) Chown(path string) error {
 	if !u.Demotable {
 		return nil
 	}
-	return os.Chown(path, u.UID, u.GID)
+	return u.chownFn()(path, u.UID, u.GID)
 }
