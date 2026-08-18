@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -491,5 +493,61 @@ func TestShutdownClosesAConnectionThatNeverReads(t *testing.T) {
 
 	if _, err := peer.Read(make([]byte, 1)); err == nil {
 		t.Fatal("read succeeded, want the connection already closed")
+	}
+}
+
+func TestServeDoesNotReturnUntilShutdownHasFinished(t *testing.T) {
+	// Serve's own ctx watcher used to run shutdown() in a goroutine nobody
+	// waited for, so Serve (and whoever called it) could carry on before the
+	// clients had been told goodbye and the socket removed. remove is the
+	// last thing shutdown does through Close, so blocking it pins exactly the
+	// window Serve must not return inside.
+	var calls int32
+	unblock := make(chan struct{})
+	blocked := make(chan struct{})
+	s := &Server{
+		Path: socketPath(t),
+		remove: func(path string) error {
+			// The first call is Listen's stale-socket removal, before there is
+			// anything to block: only the one shutdown makes, through Close,
+			// should hold Serve up.
+			if atomic.AddInt32(&calls, 1) == 1 {
+				return os.Remove(path)
+			}
+			close(blocked)
+			<-unblock
+			return os.Remove(path)
+		},
+	}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx) }()
+
+	cancel()
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown never reached the blocked remove")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("Serve returned (err=%v) before shutdown's remove finished", err)
+	case <-time.After(100 * time.Millisecond):
+		// Still running, which is what this test is pinning.
+	}
+
+	close(unblock)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve = %v, want nil once shutdown finished", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after shutdown finished")
 	}
 }

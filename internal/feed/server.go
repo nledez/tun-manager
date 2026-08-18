@@ -27,12 +27,12 @@ const (
 	sendQueue = 16
 
 	// sampleInterval is how often a watched tunnel's counters are read.
-	sampleInterval = time.Second //nolint:unused
+	sampleInterval = time.Second
 
 	// refreshFloor is the shortest gap between two refreshes a client can ask
 	// for. Without it a client could turn the menu bar into a way of hammering
 	// the WireGuard control socket.
-	refreshFloor = 2 * time.Second //nolint:unused
+	refreshFloor = 2 * time.Second
 
 	// byeGrace is how long goodbye is worth waiting for. A client that cannot
 	// take a handful of small messages over a local socket in that time has
@@ -74,6 +74,11 @@ type Server struct {
 	Now func() time.Time
 
 	ln net.Listener
+	// socket is what Listen bound. Close removes only this, never whatever
+	// happens to be at the path: a second tun-manager unlinks ours and binds
+	// its own, and taking that one with us would leave it listening on a
+	// socket nobody can reach.
+	socket os.FileInfo
 
 	mu          sync.Mutex
 	closed      bool
@@ -166,6 +171,12 @@ func (s *Server) Listen() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.Path, err)
 	}
+	// net unlinks by path on Close by default, which would remove whatever is
+	// at Path even if a second tun-manager has since replaced it. Close below
+	// does its own, identity-checked removal instead.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 
 	if err := s.chmodFn()(s.Path, SocketMode); err != nil {
 		return s.abandon(ln, fmt.Errorf("chmod %s: %w", s.Path, err))
@@ -176,8 +187,14 @@ func (s *Server) Listen() error {
 		}
 	}
 
+	// Recorded so Close can tell this socket apart from whatever might be at
+	// the path by the time it runs: a stat failure here is not fatal to
+	// Listen, it just means Close falls back to removing by path alone.
+	info, _ := os.Stat(s.Path)
+
 	s.mu.Lock()
 	s.ln = ln
+	s.socket = info
 	s.mu.Unlock()
 	return nil
 }
@@ -189,8 +206,9 @@ func (s *Server) abandon(ln net.Listener, cause error) error {
 	return cause
 }
 
-// Close stops listening and removes the socket. It is safe to call on a server
-// that never listened, and safe to call twice.
+// Close stops listening and removes the socket, but only if the file still at
+// Path is the one Listen bound. It is safe to call on a server that never
+// listened, and safe to call twice.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed || s.ln == nil {
@@ -199,13 +217,31 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	ln := s.ln
+	socket := s.socket
 	s.mu.Unlock()
 
 	err := ln.Close()
-	if rmErr := s.removeFn()(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
-		err = rmErr
+	if s.ours(socket) {
+		if rmErr := s.removeFn()(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
+			err = rmErr
+		}
 	}
 	return err
+}
+
+// ours reports whether the file currently at Path is the one bound, so Close
+// never takes a second tun-manager's socket with it. A stat that fails, or one
+// Listen never recorded, is treated as ours: there is nothing safer to compare
+// against, and the alternative is a socket file left behind forever.
+func (s *Server) ours(bound os.FileInfo) bool {
+	if bound == nil {
+		return true
+	}
+	now, err := os.Stat(s.Path)
+	if err != nil {
+		return true
+	}
+	return os.SameFile(bound, now)
 }
 
 // client is one connection, with the queue its writer drains.
@@ -232,8 +268,12 @@ func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// done closes once shutdown has finished, so Serve can wait for it below
+	// instead of returning while it is still running in the background.
 	// Closing the listener is what unblocks Accept; there is no deadline on it.
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-ctx.Done()
 		s.shutdown()
 	}()
@@ -241,8 +281,15 @@ func (s *Server) Serve(ctx context.Context) error {
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil //nolint:nilerr // deliberate: cancellation is not an error
+			// Whether this is a shutdown or a real failure, the clients are
+			// owed their goodbye before Serve reports that it has stopped.
+			// stopped is read before cancel, so it reflects the caller's
+			// context rather than our own cancellation below.
+			stopped := ctx.Err() != nil
+			cancel()
+			<-done
+			if stopped {
+				return nil
 			}
 			return fmt.Errorf("accept on %s: %w", s.Path, err)
 		}
@@ -332,6 +379,16 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 			return
 		}
 		s.mu.Lock()
+		// A name is only taken on trust while no view is known: a client may
+		// watch before the first state lands. Once there is a view, a name
+		// that is not in it will never produce a reading, and keeping it would
+		// let a client grow this map without bound.
+		if s.haveView {
+			if _, known := s.view.Row(msg.Tunnel); !known {
+				s.mu.Unlock()
+				return
+			}
+		}
 		c.watch[msg.Tunnel] = true
 		s.mu.Unlock()
 		s.retick()
@@ -404,6 +461,11 @@ func (s *Server) sampleLoop(stop <-chan struct{}) {
 // sampleOnce reads the union of what is watched and delivers each reading only
 // to the clients that asked for that tunnel.
 func (s *Server) sampleOnce() {
+	if s.Sampler == nil {
+		// A server with nothing to sample has nothing to do.
+		return
+	}
+
 	s.mu.Lock()
 	view := s.view
 	watchers := map[string][]*client{}

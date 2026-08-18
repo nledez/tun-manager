@@ -263,9 +263,15 @@ func (e *env) runTUI() error {
 	ctx, stop := signalled()
 	defer stop()
 
-	f := e.startFeed(ctx, a, owner)
+	f, served := e.startFeed(ctx, a, owner)
 	if f != nil {
-		defer f.Close() //nolint:errcheck // stopping, not reported; the TUI is already on its way out
+		// Cancelling before waiting is the whole point: closing the socket
+		// first would break the accept loop out with clients still connected
+		// and the process gone before goodbye was sent. stop is safe twice.
+		defer func() {
+			stop()
+			<-served
+		}()
 	}
 	return e.interactive(ctx, a, notifier, f)
 }
@@ -276,9 +282,13 @@ func (e *env) runTUI() error {
 // a feed that cannot start is reported and stepped over. The alternate screen
 // puts this back on the terminal when the interface exits, and `doctor` says
 // the same thing at any time.
-func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) *feed.Server {
+//
+// The returned channel closes once Serve has returned, so the caller can wait
+// for the goodbye and the socket removal it is responsible for rather than
+// racing them.
+func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) (*feed.Server, <-chan struct{}) {
 	if !a.Config.Feed {
-		return nil
+		return nil, nil
 	}
 
 	f := &feed.Server{
@@ -289,10 +299,17 @@ func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) *f
 	}
 	if err := f.Listen(); err != nil { //nolint:contextcheck // Listen takes no context; Serve below does
 		fmt.Fprintf(e.out, "%s: status feed unavailable: %v\n", appName, err) //nolint:errcheck
-		return nil
+		return nil, nil
 	}
-	go f.Serve(ctx) //nolint:errcheck // reported by doctor; not worth failing the TUI over
-	return f
+
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		// Serve says goodbye and removes the socket on its way out. Its error
+		// is not actionable here: nothing is left to run once it returns.
+		_ = f.Serve(ctx)
+	}()
+	return f, served
 }
 
 func (e *env) runStatus(args []string) error {

@@ -489,8 +489,9 @@ func TestTheInterfaceStartsWithAFeedWhenItIsOn(t *testing.T) {
 	var got *feed.Server
 	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
 		got = f
-		// Checked here, not after e.run returns: runTUI closes the feed once
-		// this callback returns, and Close removes the socket file.
+		// Checked here, not after e.run returns: runTUI cancels the feed's
+		// context once this callback returns, and its own shutdown removes
+		// the socket file.
 		if f == nil {
 			t.Fatal("feed = nil, want one when feed is on")
 		}
@@ -542,6 +543,59 @@ func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
 	}
 	if !strings.Contains(output(e), "status feed unavailable") {
 		t.Errorf("output = %q, want it to say the feed is unavailable", output(e))
+	}
+}
+
+func TestStartFeedsServedChannelClosesOnlyOnceServeReturns(t *testing.T) {
+	// startFeed's contract is the whole reason runTUI can wait correctly: the
+	// channel it returns must stay open while Serve is still accepting, and
+	// close only once Serve has actually returned - not merely once the
+	// context has been cancelled, which is a different moment.
+	e := testEnv(t, &fakeRunner{})
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	a.Config.Feed = true
+	a.Config.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	f, served := e.startFeed(ctx, a, privdrop.User{})
+	if f == nil {
+		t.Fatal("feed = nil, want one when feed is on")
+	}
+
+	select {
+	case <-served:
+		t.Fatal("served closed before the context was ever cancelled")
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-served:
+	case <-time.After(2 * time.Second):
+		t.Fatal("served never closed after the context was cancelled")
+	}
+
+	if _, err := os.Stat(a.Config.FeedSocket); !os.IsNotExist(err) {
+		t.Error("socket still present once served closed, want Serve's own shutdown to have removed it")
+	}
+}
+
+func TestStartFeedReturnsNoChannelWhenThereIsNoFeed(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	a.Config.Feed = false
+
+	f, served := e.startFeed(context.Background(), a, privdrop.User{})
+
+	if f != nil || served != nil {
+		t.Errorf("startFeed = (%v, %v), want (nil, nil) when the feed is off", f, served)
 	}
 }
 

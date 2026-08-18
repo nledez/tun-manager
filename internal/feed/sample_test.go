@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,6 +194,37 @@ func TestWatchingATunnelNobodyHasHeardOfIsIgnored(t *testing.T) {
 	}
 }
 
+func TestWatchingUnknownTunnelsDoesNotGrowTheWatchSetWithoutBound(t *testing.T) {
+	// Once a view is known, a name that is not in it will never produce a
+	// reading. Keeping it anyway would let a client grow c.watch without
+	// bound, and sampleOnce rebuilds a map that size every second while
+	// holding s.mu - the same mutex Publish needs.
+	sampler := newSampler()
+	s := serving(t, sampler)
+	s.Publish(aView("alpha"))
+	c := dial(t, s)
+	c.next(t)
+	c.next(t)
+
+	for i := range 500 {
+		c.send(t, fmt.Sprintf(`{"type":"watch","tunnel":"nowhere-%d"}`, i))
+	}
+	// Give the reads a moment to land; there is nothing to wait on directly
+	// since none of them are supposed to do anything observable.
+	time.Sleep(100 * time.Millisecond)
+
+	s.mu.Lock()
+	var watch map[string]bool
+	for cl := range s.clients {
+		watch = cl.watch
+	}
+	n := len(watch)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Errorf("watch set = %d entries, want none for tunnels no view has ever named", n)
+	}
+}
+
 func TestWatchingWithNoTunnelDoesNotStartTheLoop(t *testing.T) {
 	// A watch with nothing named is not a watch on the empty string; it is
 	// dropped before it can register at all, so it must not be what starts the
@@ -231,6 +263,24 @@ func TestATunnelThatIsDownProducesNoSample(t *testing.T) {
 	if msg := c.next(t); msg["type"] != "state" {
 		t.Errorf("got %v, want no sample for a tunnel that is down", msg)
 	}
+}
+
+func TestSampleOnceWithNoSamplerDoesNotPanic(t *testing.T) {
+	// Only startFeed builds a server with a Sampler today, so this path is
+	// unreachable in production, but a nil Sampler is one field away and a
+	// panic in a process running as root is worth guarding against.
+	s := serving(t, nil)
+	s.Publish(aView("alpha"))
+	c := dial(t, s)
+	c.next(t)
+	c.next(t)
+
+	c.send(t, `{"type":"watch","tunnel":"alpha"}`)
+
+	// A panic in the sampling goroutine takes the whole test binary down with
+	// it; surviving past several intervals with nothing watching having
+	// crashed is the assertion.
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestAClientLeavingStopsTheReadingsItAskedFor(t *testing.T) {

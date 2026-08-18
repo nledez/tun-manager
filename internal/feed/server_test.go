@@ -148,6 +148,75 @@ func TestClosingAServerThatNeverListenedIsHarmless(t *testing.T) {
 	}
 }
 
+func TestCloseFallsBackToRemovingByPathWhenListenNeverRecordedWhichOneItBound(t *testing.T) {
+	// A stat failure right after bind is not fatal to Listen, but it leaves
+	// Close with nothing to compare against. Falling back to removing
+	// unconditionally is what stops a working socket from being left behind
+	// forever for want of one Stat call.
+	s := &Server{Path: socketPath(t)}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	s.mu.Lock()
+	s.socket = nil
+	s.mu.Unlock()
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(s.Path); !os.IsNotExist(err) {
+		t.Error("socket still present, want Close to remove it when it has nothing to compare against")
+	}
+}
+
+func TestCloseIsHarmlessWhenTheSocketIsAlreadyGone(t *testing.T) {
+	// Something else can remove the path between Listen and Close - the
+	// identity check must not turn that into a reported failure.
+	s := &Server{Path: socketPath(t)}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := os.Remove(s.Path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Errorf("Close = %v, want the missing socket treated as already gone", err)
+	}
+}
+
+func TestCloseRemovesOnlyTheSocketItBound(t *testing.T) {
+	// A second tun-manager can unlink a stale socket and bind its own at the
+	// same path - Listen deliberately allows exactly that. Close must not take
+	// the replacement with it: that would leave the second process listening
+	// on an unlinked inode nobody can reach, while doctor reports Pass.
+	s := &Server{Path: socketPath(t)}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	// Stand in for a second process: unlink what Listen bound and put a plain
+	// file where it was, playing the part of that process's own socket.
+	if err := os.Remove(s.Path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := os.WriteFile(s.Path, []byte("somebody else's socket"), 0o600); err != nil {
+		t.Fatalf("write replacement: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := os.ReadFile(s.Path)
+	if err != nil {
+		t.Fatalf("the replacement did not survive Close: %v", err)
+	}
+	if string(got) != "somebody else's socket" {
+		t.Errorf("path holds %q, want the replacement left untouched", got)
+	}
+}
+
 func TestCloseIsIdempotent(t *testing.T) {
 	s := &Server{Path: socketPath(t)}
 	if err := s.Listen(); err != nil {
