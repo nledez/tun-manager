@@ -56,8 +56,11 @@ install: build
 
 # The notification icon is carried in the binary, so an installed tun-manager
 # has one without an install step. Regenerate it after changing the artwork.
+#
+# Derived from assets/icon.png rather than the banner: the banner carries the
+# name and a tagline, which are unreadable at 256 pixels and absent noise at 16.
 icon:
-	sips -Z 256 assets/tun-manager.png --out internal/notify/icon.png >/dev/null
+	sips -Z 256 assets/icon.png --out internal/notify/icon.png >/dev/null
 	@ls -l internal/notify/icon.png
 
 # The licenses of every module linked into the binary. BSD-3-Clause clause 2

@@ -3,7 +3,7 @@
 # able to block a Go release.
 
 APP := build/Tun Manager.app
-ARTWORK := ../assets/tun-manager.png
+ARTWORK := ../assets/icon.png
 BUNDLE_ID := net.ledez.tun-manager.menubar
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -68,9 +68,9 @@ icon: build/AppIcon.icns
 # iconutil accepts these ten names and no others, and refuses a file whose
 # pixel size does not match its name.
 #
-# The artwork is 1126x1125, so this stretches it by 0.089% — under a pixel at
-# 1024, and a workaround rather than a fix. The real answer is square artwork
-# without its own rounded rectangle, since macOS draws one of its own.
+# assets/icon.png is square, so nothing is stretched. It is the emblem alone:
+# the banner beside it carries the name and a tagline, which say nothing at 32
+# pixels and are noise at 16.
 build/AppIcon.icns: $(ARTWORK)
 	rm -rf build/AppIcon.iconset
 	mkdir -p build/AppIcon.iconset
