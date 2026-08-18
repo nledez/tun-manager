@@ -1,5 +1,7 @@
 BIN := bin/tun-manager
 PREFIX ?= /usr/local
+APPDIR ?= /Applications
+APP_NAME := Tun Manager.app
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COVERAGE := coverage.out
 # Fail the build below this, so coverage cannot quietly rot. Set just under the
@@ -51,8 +53,35 @@ lint:
 run: build
 	sudo $(BIN)
 
-install: build
-	install -m 0755 $(BIN) $(PREFIX)/bin/tun-manager
+# Installs both halves: the command line tool and the menu bar application.
+#
+# Run it as yourself, not with sudo. The two destinations have different owners
+# — /Applications belongs to the admin group and needs no privileges, while
+# /usr/local/bin belongs to root — so only that one step asks for a password.
+# Running the whole thing as root would build as root too, and leave a tree full
+# of files you can no longer write.
+install: build macos-app
+	@if [ "$$(id -u)" -eq 0 ]; then \
+		echo "run this as yourself rather than with sudo: it would build as root"; \
+		echo "and leave root-owned files in your working tree. It asks for a"; \
+		echo "password by itself, for $(PREFIX)/bin alone."; \
+		exit 1; \
+	fi
+	@# A running application holds its own copy open; replacing the bundle
+	@# underneath it is how you get one that half works until the next login.
+	@if pkill -x tun-manager-menubar 2>/dev/null; then echo "quit the running $(APP_NAME)"; fi
+	rm -rf "$(APPDIR)/$(APP_NAME)"
+	@# ditto rather than cp -R: it is the tool that understands bundles, and it
+	@# carries the signature across intact.
+	ditto "macos/build/$(APP_NAME)" "$(APPDIR)/$(APP_NAME)"
+	codesign --verify --strict "$(APPDIR)/$(APP_NAME)"
+	@if [ -w "$(PREFIX)/bin" ]; then \
+		install -m 0755 $(BIN) "$(PREFIX)/bin/tun-manager"; \
+	else \
+		echo "$(PREFIX)/bin belongs to root, so this step asks for a password"; \
+		sudo install -m 0755 $(BIN) "$(PREFIX)/bin/tun-manager"; \
+	fi
+	@echo "installed $(PREFIX)/bin/tun-manager and $(APPDIR)/$(APP_NAME)"
 
 # The notification icon is carried in the binary, so an installed tun-manager
 # has one without an install step. Regenerate it after changing the artwork.

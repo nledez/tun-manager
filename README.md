@@ -74,15 +74,24 @@ Download the archive for your machine from the
 runs on both Intel and Apple Silicon — or build from source:
 
 ```sh
-make build              # ./bin/tun-manager
+make build              # ./bin/tun-manager alone
 make install            # /usr/local/bin/tun-manager
+                        #   + /Applications/Tun Manager.app
+
 mkdir -p ~/.config/tun-manager
 cp configs/config.example.yaml ~/.config/tun-manager/config.yaml
 ```
 
-The configuration file is where the groups live, so editing it is part of the
-install. Without one the binary still runs and lists every tunnel, but none
-belongs to a group and the group commands and keys have nothing to act on.
+`make install` builds both halves, so it needs the Swift toolchain as well as
+Go. `make build` and `make macos-app` do one each if you only want one.
+
+**Run it as yourself, not with `sudo`.** The two destinations have different
+owners — `/Applications` belongs to the admin group and needs no privileges,
+while `/usr/local/bin` belongs to root — so the target asks for a password by
+itself, for that one step. Running the whole thing as root would build as root
+and leave a working tree full of files you can no longer write.
+
+`PREFIX` and `APPDIR` both override.
 
 ## Usage
 
