@@ -14,8 +14,7 @@ private func snapshot(_ tunnels: TunnelStatus..., context: FeedContext = FeedCon
 }
 
 private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
-    MenuModelBuilder.build(
-        state: state, snapshot: view, publisherVersion: "v0.2.0", now: now, locale: english)
+    MenuModelBuilder.build(state: state, snapshot: view, now: now, locale: english)
 }
 
 @Test func theMenuNamesTheContextAndOmitsThePartsItWasNotGiven() {
@@ -79,8 +78,8 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
             TunnelStatus(name: "alpha", group: "needed", health: .up),
             TunnelStatus(name: "bravo", group: "extra", health: .down)))
 
-    #expect(model.sections.map(\.header) == ["extra", "needed"])
-    #expect(model.sections[1].rows.map(\.title) == ["alpha", "delta"])
+    #expect(model.sections.map(\.header) == ["needed", "extra"])
+    #expect(model.sections[0].rows.map(\.title) == ["alpha", "delta"])
 }
 
 @Test func tunnelsWithNoGroupAppearLastAndUnderNoHeader() {
@@ -132,4 +131,30 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
 
     #expect(model.sections.isEmpty)
     #expect(model.footnote == "Nothing known yet")
+}
+
+@Test func theAlwaysOnTunnelsComeFirst() {
+    // The same ranking internal/app gives the table: needed, then extra, then
+    // anything else, then whatever belongs to no group. Alphabetical order put
+    // `extra` above `needed`, which reads as though the optional tunnels were
+    // the important ones.
+    let model = build(
+        .live(sawState: true),
+        snapshot(
+            TunnelStatus(name: "loose", group: "", health: .up),
+            TunnelStatus(name: "zulu", group: "spare", health: .up),
+            TunnelStatus(name: "charlie", group: "extra", health: .up),
+            TunnelStatus(name: "alpha", group: "needed", health: .up)))
+
+    #expect(model.sections.map(\.header) == ["needed", "extra", "spare", nil])
+}
+
+@Test func groupsThisProgramHasNoOpinionAboutAreOrderedByName() {
+    let model = build(
+        .live(sawState: true),
+        snapshot(
+            TunnelStatus(name: "a", group: "zebra", health: .up),
+            TunnelStatus(name: "b", group: "aardvark", health: .up)))
+
+    #expect(model.sections.map(\.header) == ["aardvark", "zebra"])
 }

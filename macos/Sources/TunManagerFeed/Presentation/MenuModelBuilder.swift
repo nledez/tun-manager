@@ -5,7 +5,6 @@ public enum MenuModelBuilder {
     public static func build(
         state: LinkState,
         snapshot: Snapshot?,
-        publisherVersion: String?,
         now: Date,
         locale: Locale = .autoupdatingCurrent
     ) -> MenuModel {
@@ -13,8 +12,7 @@ public enum MenuModelBuilder {
             headline: headline(state: state, snapshot: snapshot),
             sections: sections(snapshot: snapshot, now: now, locale: locale),
             footnote: footnote(state: state, snapshot: snapshot, now: now),
-            canRefresh: state.isLive,
-            publisherVersion: publisherVersion)
+            canRefresh: state.isLive)
     }
 
     private static func headline(state: LinkState, snapshot: Snapshot?) -> String {
@@ -59,7 +57,13 @@ public enum MenuModelBuilder {
         // Ungrouped tunnels come last, under no heading: there is no group to
         // name and inventing one would be a lie.
         let byGroup = Dictionary(grouping: snapshot.tunnels, by: \.group)
-        let headers = byGroup.keys.filter { !$0.isEmpty }.sorted() + (byGroup[""] != nil ? [""] : [])
+        let headers =
+            byGroup.keys
+            .filter { !$0.isEmpty }
+            .sorted { left, right in
+                let (l, r) = (rank(of: left), rank(of: right))
+                return l == r ? left < right : l < r
+            } + (byGroup[""] != nil ? [""] : [])
 
         return headers.map { group in
             MenuModel.Section(
@@ -67,6 +71,17 @@ public enum MenuModelBuilder {
                 rows: (byGroup[group] ?? [])
                     .sorted { $0.name < $1.name }
                     .map { row($0, now: now, locale: locale) })
+        }
+    }
+
+    /// Keeps the always-on tunnels at the top, the way internal/app orders the
+    /// table. Alphabetically `extra` sorts above `needed`, which reads as
+    /// though the optional tunnels were the important ones.
+    private static func rank(of group: String) -> Int {
+        switch group {
+        case GroupName.needed: 0
+        case GroupName.extra: 1
+        default: 2
         }
     }
 

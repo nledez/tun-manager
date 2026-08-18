@@ -30,7 +30,4 @@ public struct MenuModel: Sendable, Equatable {
     public let footnote: String
     /// False while there is nothing to ask.
     public let canRefresh: Bool
-    /// Which tun-manager is on the other end, for the About item. The first
-    /// question anyone asks when the schemas disagree.
-    public let publisherVersion: String?
 }

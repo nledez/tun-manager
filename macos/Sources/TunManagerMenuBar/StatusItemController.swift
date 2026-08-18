@@ -57,8 +57,7 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private func redraw() {
         let glyph = StatusGlyph.of(state: supervisor.state, snapshot: supervisor.snapshot)
         model = MenuModelBuilder.build(
-            state: supervisor.state, snapshot: supervisor.snapshot,
-            publisherVersion: supervisor.publisherVersion, now: Date())
+            state: supervisor.state, snapshot: supervisor.snapshot, now: Date())
 
         let image = NSImage(systemSymbolName: glyph.symbol, accessibilityDescription: glyph.description)
         image?.isTemplate = true
@@ -96,13 +95,19 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(disabled(about(model)))
+        menu.addItem(action("About Tun Manager…", #selector(showAbout), key: ""))
         menu.addItem(action("Quit Tun Manager", #selector(quit), key: "q"))
     }
 
-    private func about(_ model: MenuModel) -> String {
-        let publisher = model.publisherVersion.map { "tun-manager \($0)" } ?? "tun-manager unknown"
-        return "\(publisher) · \(socketPath)"
+    /// Reads what `make app` stamped into the bundle, so a running application
+    /// can say exactly which build it is.
+    private var about: About {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return About(
+            appVersion: info["CFBundleShortVersionString"] as? String ?? "unknown",
+            build: info["NETLedezGitDescribe"] as? String ?? "unknown",
+            publisherVersion: supervisor.publisherVersion,
+            socketPath: socketPath)
     }
 
     private func entry(_ row: MenuModel.Row) -> NSMenuItem {
@@ -132,5 +137,18 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     @objc private func refresh() { supervisor.menuWillOpen() }
     @objc private func retry() { supervisor.userAskedToRetry() }
+    @objc private func showAbout() {
+        let about = self.about
+        let alert = NSAlert()
+        alert.messageText = about.title
+        alert.informativeText = about.details.joined(separator: "\n")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        // An accessory application has nothing frontmost, so without this the
+        // panel opens behind whatever the user is actually looking at.
+        NSApplication.shared.activate()
+        alert.runModal()
+    }
+
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 }
