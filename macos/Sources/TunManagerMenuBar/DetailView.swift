@@ -34,10 +34,21 @@ struct DetailView: View {
             if let detail = model.detail {
                 TunnelPane(detail: detail, model: model)
             } else {
-                OverviewPane(model: model, onPing: { onPing(nil) })
+                OverviewPane(model: model)
             }
         }
         .frame(minWidth: 720, minHeight: 380)
+        .toolbar {
+            // On the split view rather than in a pane, so it is there whichever
+            // one is showing. A round of probes costs packets sent by a process
+            // running as root, so it is asked for and never run on a timer.
+            //
+            // Bare "p", the key the terminal uses: this window has nothing to
+            // type into, so there is nothing for it to collide with.
+            Button("Ping", systemImage: "dot.radiowaves.left.and.right") { onPing(nil) }
+                .keyboardShortcut("p", modifiers: [])
+                .help("Ask tun-manager to probe every tunnel (p)")
+        }
     }
 
     private var selection: Binding<DetailSelection?> {
@@ -167,7 +178,6 @@ private struct TunnelPane: View {
 /// Every tunnel at once, in the four columns the terminal shows.
 private struct OverviewPane: View {
     @ObservedObject var model: DetailModel
-    let onPing: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -180,11 +190,6 @@ private struct OverviewPane: View {
             }
         }
         .navigationTitle("All tunnels")
-        .toolbar {
-            // A round of probes costs packets sent by a process running as
-            // root, so it is asked for rather than run on a timer.
-            Button("Ping", systemImage: "stopwatch", action: onPing)
-        }
     }
 
     private var table: some View {

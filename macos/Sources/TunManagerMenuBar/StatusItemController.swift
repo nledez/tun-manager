@@ -113,6 +113,13 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         menu.addItem(disabled(model.footnote))
         if model.canRefresh {
             menu.addItem(action("Refresh", #selector(refresh), key: "r"))
+            // The terminal's key for the same thing, and bare rather than
+            // command-p for the same reason it is bare there. A status menu's
+            // key equivalents are only dispatched while it is open, so this
+            // takes nothing away from any other application.
+            let ping = action("Ping", #selector(self.ping), key: "p")
+            ping.keyEquivalentModifierMask = []
+            menu.addItem(ping)
         } else {
             menu.addItem(action("Try Again", #selector(retry), key: "r"))
         }
@@ -169,6 +176,7 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     @objc private func refresh() { supervisor.menuWillOpen() }
     @objc private func retry() { supervisor.userAskedToRetry() }
+    @objc private func ping() { supervisor.askForPing() }
     @objc private func showDetail(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String,
             let tunnels = supervisor.snapshot?.tunnels
