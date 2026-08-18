@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -73,6 +74,8 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 		state = append(state, wg.Peer{PublicKey: k, Device: "utun7", LastHandshake: time.Now()})
 	}
 
+	home := t.TempDir()
+
 	cfg := profile.Default()
 	cfg.ConfigDir = dir
 	// The defaults point at a Homebrew wg-quick and at /var/run/wireguard.
@@ -96,7 +99,9 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 		out:  &strings.Builder{},
 		euid: 0,
 		config: func() (*profile.Config, privdrop.User, error) {
-			return cfg, privdrop.User{Username: "operator", HomeDir: "/home/operator"}, nil
+			// A real directory: notify.New writes the icon into the user's
+			// cache, and a test must not write outside its own tree.
+			return cfg, privdrop.User{Username: "operator", HomeDir: home}, nil
 		},
 		build: func() (*app.App, error) {
 			return &app.App{
@@ -858,6 +863,48 @@ func TestNotifyRunsWithoutRoot(t *testing.T) {
 	}
 }
 
+// TestMain neutralises the notification tools before any test runs. See
+// stubNotificationTools for why a per-test Binary is not enough.
+func TestMain(m *testing.M) {
+	dir, err := stubNotificationTools()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "stub the notification tools:", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	// Not deferred: os.Exit does not run deferred calls.
+	os.RemoveAll(dir) //nolint:errcheck // the suite is over either way
+	os.Exit(code)
+}
+
+// stubNotificationTools puts a harmless stand-in for terminal-notifier and
+// osascript on PATH, so no test in this package can reach the desktop.
+//
+// internal/notify picks its tool by looking both names up on PATH. A test that
+// builds a notifier without pointing Binary at a script of its own would
+// otherwise post a real notification onto the screen of whoever is running the
+// suite, with nothing failing to say so.
+func stubNotificationTools() (string, error) {
+	dir, err := os.MkdirTemp("", "notify-stubs")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"terminal-notifier", "osascript"} {
+		script := filepath.Join(dir, name)
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
+			return "", err
+		}
+	}
+	if err := os.Setenv("PATH", dir); err != nil {
+		os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
+		return "", err
+	}
+	return dir, nil
+}
+
 // fakeNotifierBinary is named after the real tool, because that name is what
 // decides the argument form and whether an icon can be shown.
 func fakeNotifierBinary(t *testing.T) string {
@@ -930,12 +977,20 @@ func TestNotifyBuildsItsOwnNotifierWhenNoneIsInjected(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	e.euid = 501
 	// Nothing is injected, so it has to resolve the user, the configuration and
-	// the command by itself. The command it finds may not exist on a runner,
-	// which is a failure worth reporting rather than a reason to skip.
+	// the command by itself. This is the test that used to put a real
+	// notification on the maintainer's screen: it is the one path through
+	// `notify` where no Binary is set, so it resolved whatever was installed
+	// and posted through it, icon and all. TestMain is what stops that now.
 	_ = e.run([]string{"notify"})
 
-	if !strings.Contains(output(e), "command") {
-		t.Errorf("output does not name the command it used:\n%s", output(e))
+	got := output(e)
+	if !strings.Contains(got, "command") {
+		t.Errorf("output does not name the command it used:\n%s", got)
+	}
+	// The guard, asserted rather than assumed: the tool it resolved has to be
+	// the stub TestMain put on PATH, not one installed on this machine.
+	if !strings.Contains(got, os.Getenv("PATH")) {
+		t.Errorf("the command came from outside the stub directory %q:\n%s", os.Getenv("PATH"), got)
 	}
 }
 

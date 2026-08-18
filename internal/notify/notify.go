@@ -53,8 +53,9 @@ func Diff(prev, next map[string]wg.Health) []Transition {
 // told which icon to show; osascript cannot - "display notification" has no
 // clause for one, so it shows whatever icon the sender happens to have.
 const (
-	preferred = "terminal-notifier"
-	fallback  = "/usr/bin/osascript"
+	preferred    = "terminal-notifier"
+	fallbackName = "osascript"
+	fallback     = "/usr/bin/" + fallbackName
 )
 
 // icon is carried in the binary so an installed tun-manager has one without an
@@ -107,17 +108,31 @@ func writeIcon(u privdrop.User) string {
 func (n Notifier) command(t Transition) (string, []string) {
 	path := n.Binary
 	if path == "" {
-		if found, err := exec.LookPath(preferred); err == nil {
-			path = found
-		} else {
-			path = fallback
-		}
+		path = resolve()
 	}
 
 	if strings.Contains(filepath.Base(path), preferred) {
 		return path, n.notifierArgs(t)
 	}
 	return path, osascriptArgs(t)
+}
+
+// resolve finds the tool to post with, preferring the one that can show an
+// icon.
+//
+// Both names go through PATH before the absolute path is tried. That is not for
+// production, where osascript is always at /usr/bin: it is so a test can
+// neutralise both tools by controlling PATH alone. Binary exists for the same
+// purpose, but it has to be remembered, and a test that forgets posts a real
+// notification onto the screen of whoever is running the suite - with nothing
+// failing and nothing logged to say so.
+func resolve() string {
+	for _, name := range []string{preferred, fallbackName} {
+		if found, err := exec.LookPath(name); err == nil {
+			return found
+		}
+	}
+	return fallback
 }
 
 func (n Notifier) notifierArgs(t Transition) []string {

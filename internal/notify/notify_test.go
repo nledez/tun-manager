@@ -387,6 +387,27 @@ func TestTheInstalledCommandIsFoundOnThePath(t *testing.T) {
 	}
 }
 
+func TestOsascriptIsTakenFromThePathWhenItIsThere(t *testing.T) {
+	// The usual macOS machine: no terminal-notifier installed, osascript on
+	// PATH at its normal place. Going through PATH for both names is what lets
+	// a test neutralise the pair by controlling PATH alone.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, fallbackName)
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	path, args := Notifier{}.command(Transition{Tunnel: "alpha"})
+
+	if path != fake {
+		t.Errorf("path = %q, want the one on PATH %q", path, fake)
+	}
+	if len(args) != 2 || args[0] != "-e" {
+		t.Errorf("args = %v, want the osascript form", args)
+	}
+}
+
 func TestWithoutTerminalNotifierItFallsBackToOsascript(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 

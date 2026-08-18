@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +25,47 @@ import (
 // lipgloss from the environment, which a golden file cannot depend on; the
 // colour decisions themselves are checked separately, further down, by forcing
 // a profile that emits them.
+// It also neutralises the notification tools: see stubNotificationTools.
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii)
-	os.Exit(m.Run())
+
+	dir, err := stubNotificationTools()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "stub the notification tools:", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	// Not deferred: os.Exit does not run deferred calls.
+	os.RemoveAll(dir) //nolint:errcheck // the suite is over either way
+	os.Exit(code)
+}
+
+// stubNotificationTools puts a harmless stand-in for terminal-notifier and
+// osascript on PATH, so no test in this package can reach the desktop.
+//
+// internal/notify picks its tool by looking both names up on PATH. A test that
+// builds a notifier without pointing Binary at a script of its own would
+// otherwise post a real notification onto the screen of whoever is running the
+// suite, with nothing failing to say so.
+func stubNotificationTools() (string, error) {
+	dir, err := os.MkdirTemp("", "notify-stubs")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"terminal-notifier", "osascript"} {
+		script := filepath.Join(dir, name)
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
+			return "", err
+		}
+	}
+	if err := os.Setenv("PATH", dir); err != nil {
+		os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
+		return "", err
+	}
+	return dir, nil
 }
 
 var frameTaken = time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
