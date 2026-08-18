@@ -60,10 +60,11 @@ public final class FeedSupervisor {
             retry = nil
         case .send(let command):
             connection?.send(command.line)
-        case .publish:
-            // The observer is told below, from whatever is current. Applying a
-            // diff here would make this a second source of truth.
-            break
+        case .publish(let snapshot, let diff):
+            // The drawing observer is told below, from whatever is current;
+            // this one carries the diff, which nothing current can reconstruct
+            // once the snapshot has been replaced.
+            observer?.linkDidPublish(snapshot: snapshot, diff: diff)
         }
     }
 

@@ -9,11 +9,13 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let supervisor: FeedSupervisor
     private let socketPath: String
+    private let notifications: NotificationPoster
     private var model: MenuModel?
 
-    init(supervisor: FeedSupervisor, socketPath: String) {
+    init(supervisor: FeedSupervisor, socketPath: String, notifications: NotificationPoster) {
         self.supervisor = supervisor
         self.socketPath = socketPath
+        self.notifications = notifications
         super.init()
 
         // What makes the position stick when the user drags the item around,
@@ -31,6 +33,10 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     func linkDidChange(state: LinkState, snapshot: Snapshot?, publisherVersion: String?) {
         redraw()
+    }
+
+    func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff) {
+        notifications.post(NotificationBuilder.requests(for: diff))
     }
 
     // MARK: - NSMenuDelegate

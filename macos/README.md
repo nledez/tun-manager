@@ -17,6 +17,25 @@ make run           # the above, then open it
 There is no Xcode project. Sources and the package manifest are text, so a
 change to this application reviews like a change to the rest of the repository.
 
+## Notifications
+
+A tunnel changing health raises a notification. macOS asks for permission the
+first time the application runs; refusing is remembered, and the application
+then says so in the log rather than asking again on every start.
+
+Only *changes* are announced. A tunnel appearing means a `.conf` was imported
+and one disappearing means it was removed — neither is news about the network —
+and the first view after a start has nothing to compare against, so it says
+nothing rather than firing a banner per tunnel at launch.
+
+The wording is the wording `tun-manager` itself uses in the terminal. Set
+`notify: false` in the tun-manager configuration once you run this, or every
+change is announced twice.
+
+Notifications need a real signature: they are unreliable under an ad-hoc one.
+`make app` prefers a Developer ID, then an Apple Development certificate, and
+only falls back to ad-hoc when the keychain holds neither.
+
 ## Running
 
 The socket exists only while `sudo tun-manager` is running — there is no

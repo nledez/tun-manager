@@ -7,11 +7,13 @@ import TunManagerFeed
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var supervisor: FeedSupervisor?
     private var statusItem: StatusItemController?
+    private let notifications = NotificationPoster()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let path = SocketPath.resolved()
         let supervisor = FeedSupervisor(transport: UnixSocketTransport(path: path))
-        let statusItem = StatusItemController(supervisor: supervisor, socketPath: path)
+        let statusItem = StatusItemController(
+            supervisor: supervisor, socketPath: path, notifications: notifications)
 
         supervisor.observer = statusItem
         self.supervisor = supervisor
@@ -25,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { supervisor?.systemDidWake() }
         }
 
+        notifications.requestPermission()
         supervisor.start()
     }
 

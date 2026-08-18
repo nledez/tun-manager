@@ -30,9 +30,10 @@ refresh_interval: 5m
 # macOS notifications when a tunnel goes up or down, posted through osascript as
 # the pre-sudo user because root has no GUI session to talk to.
 #
-# Off here. Note what that currently means: the menu bar application will one
-# day raise its own, with its own icon and without the demotion — but it does
-# not yet, so `false` means no notifications from anywhere.
+# Off here, because the menu bar application raises its own — from a signed
+# bundle, so they carry the application's icon rather than the terminal's, and
+# without demoting anything. Leave this on if you do not run it, or you will get
+# none from anywhere.
 notify: false
 
 # The status feed: a read-only unix socket, published while the TUI runs, that

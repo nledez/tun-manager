@@ -13,11 +13,18 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SHORT_VERSION := $(shell printf '%s' "$(VERSION)" | sed -E 's/^v//; s/-.*$$//; s/^[^0-9].*$$/0.0.0/')
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
-# Detected rather than configured: a machine holding a Developer ID uses it, and
-# a fresh clone with no keychain set up still builds ad-hoc. Override to pin one:
+# Detected rather than configured, best first: a Developer ID is the only thing
+# that lets the application travel, and an Apple Development certificate is
+# enough for it to work properly on this machine — which matters, because
+# notifications need a real signature and are unreliable under an ad-hoc one.
+# A fresh clone with an empty keychain still builds, ad-hoc. Override to pin:
 #   make app SIGN_IDENTITY="Apple Development: you (TEAMID)"
 SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null \
 	| sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+ifeq ($(strip $(SIGN_IDENTITY)),)
+SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null \
+	| sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
+endif
 ifeq ($(strip $(SIGN_IDENTITY)),)
 SIGN_IDENTITY := -
 endif

@@ -113,3 +113,30 @@ private func eventually(
         return false
     }
 }
+
+@MainActor
+@Test func theObserverIsHandedWhatChangedBetweenViews() async {
+    // The diff cannot be rebuilt from the current snapshot once it has replaced
+    // the one before it, so it travels with the publish rather than being
+    // recomputed by whoever wants it.
+    final class Recorder: FeedObserver {
+        var diffs: [SnapshotDiff] = []
+        func linkDidChange(state: LinkState, snapshot: Snapshot?, publisherVersion: String?) {}
+        func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff) { diffs.append(diff) }
+    }
+    let recorder = Recorder()
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+    ])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.observer = recorder
+
+    supervisor.start()
+
+    await eventually("the first publish") { !recorder.diffs.isEmpty }
+    // The first view has nothing to compare against, so every tunnel is an
+    // appearance and nothing is a health change — which is what keeps a burst
+    // of banners off the screen at launch.
+    #expect(recorder.diffs[0].appeared == ["alpha", "bravo"])
+    #expect(recorder.diffs[0].healthChanges.isEmpty)
+}
