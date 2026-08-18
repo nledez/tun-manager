@@ -68,6 +68,28 @@ Report what the commands printed. If something fails, say so with the output.
 pane redacts anything shaped like a WireGuard key. Keep it that way, and never
 commit a real endpoint, key or tunnel name.
 
+## The menu bar application
+
+`macos/` holds a Swift client of the status feed. It is built with SwiftPM and
+has no Xcode project, so every file in it reviews as text.
+
+The testing rules above apply, with one carve-out and one addition:
+
+- **The Go coverage floor does not apply to Swift.** They are separate
+  contracts, and `make all` deliberately does not build or test `macos/` — the
+  Go gate must not start requiring Xcode.
+- **`Sources/TunManagerMenuBar/` is untested on purpose**, argued for in
+  `macos/docs/coverage-gaps.md` the same way a `NOT TESTED:` marker is here.
+  That is only defensible because every decision lives in `TunManagerFeed`,
+  which does not link AppKit — so a decision cannot drift into an untested file
+  without the compiler noticing. **An `if` in the AppKit layer is a bug of
+  placement.**
+
+Fixtures follow the same rules: invented keys, RFC 5737 addresses, tunnels
+called `alpha`, `bravo`, `charlie`.
+
+Run it with `make macos-test` and `make macos-app`.
+
 ## Git
 
 Commit messages, PR titles and issues are in English. Say what changed and why

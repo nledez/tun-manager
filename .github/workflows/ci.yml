@@ -122,6 +122,26 @@ jobs:
           govulncheck ./...
 
   # A release must not be the first time a target build is attempted, nor the
+  # The menu bar client. A separate job rather than a step in `test`, because
+  # the two are separate contracts: a Swift failure should say "the application
+  # broke", not fail a run that was about Go. Nothing new is installed — every
+  # job here already runs on macOS, so the Swift toolchain is present.
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Test
+        run: make macos-test
+
+      # Proves the bundle still assembles: the plist patching, the icon
+      # conversion and the signature. Ad-hoc, since a runner has no keychain.
+      - name: Assemble the application
+        run: make macos-app
+
   # first time the release configuration runs.
   #
   # There is no architecture matrix: GoReleaser builds both darwin targets

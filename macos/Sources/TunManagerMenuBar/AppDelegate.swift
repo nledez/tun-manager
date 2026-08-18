@@ -1,0 +1,34 @@
+import AppKit
+import TunManagerFeed
+
+/// The composition root: builds the transport, the supervisor and the status
+/// item, and wires them to each other.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var supervisor: FeedSupervisor?
+    private var statusItem: StatusItemController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let path = SocketPath.resolved()
+        let supervisor = FeedSupervisor(transport: UnixSocketTransport(path: path))
+        let statusItem = StatusItemController(supervisor: supervisor, socketPath: path)
+
+        supervisor.observer = statusItem
+        self.supervisor = supervisor
+        self.statusItem = statusItem
+
+        // Waking is one of the three things that short-circuits the retry
+        // ladder, and the reason a thirty-second ceiling is defensible.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak supervisor] _ in
+            MainActor.assumeIsolated { supervisor?.systemDidWake() }
+        }
+
+        supervisor.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        supervisor?.stop()
+    }
+}

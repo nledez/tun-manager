@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Decided once and never changed: notification permission and login-item
+	     registration are both keyed off it, so changing it later silently
+	     resets whatever the user chose. -->
+	<key>CFBundleIdentifier</key>
+	<string>net.ledez.tun-manager.menubar</string>
+	<key>CFBundleName</key>
+	<string>Tun Manager</string>
+	<key>CFBundleDisplayName</key>
+	<string>Tun Manager</string>
+	<!-- The bundle carries a space and the executable does not: the first is
+	     what a person reads, the second is what a shell has to quote. -->
+	<key>CFBundleExecutable</key>
+	<string>tun-manager-menubar</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<!-- Both patched by `make app`. Launch Services requires one to three
+	     dot-separated integers here, which `git describe` is not. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<!-- The full `git describe`, shown by the About line, so the exact build
+	     is recoverable from a running application. -->
+	<key>NETLedezGitDescribe</key>
+	<string>dev</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<!-- Must match the platform floor in Package.swift, or the application
+	     launches on an older system and dies on a missing symbol. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<!-- No Dock icon and no application menu: this lives in the menu bar. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2026 Nicolas Ledez. BSD 3-Clause License.</string>
+</dict>
+</plist>

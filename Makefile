@@ -10,7 +10,7 @@ COVERAGE_MIN := 99
 # counting them would only dilute the number this floor guards.
 COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check run install clean release release-check
+.PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check run install clean release release-check macos-build macos-test macos-app
 
 all: vet lint test notices-check markers-check build
 
@@ -94,5 +94,18 @@ release-check:
 	@command -v goreleaser >/dev/null 2>&1 || { echo "goreleaser not installed: brew install goreleaser"; exit 1; }
 	goreleaser release --snapshot --clean
 
+# The menu bar client. Deliberately absent from `all`: the Go gate must not
+# start requiring Xcode, and a Swift regression must not be able to block a Go
+# release. Its suite and its coverage are a separate contract.
+macos-build:
+	$(MAKE) -C macos build
+
+macos-test:
+	$(MAKE) -C macos test
+
+macos-app:
+	$(MAKE) -C macos app
+
 clean:
 	rm -rf bin dist $(COVERAGE)
+	$(MAKE) -C macos clean
