@@ -4,3 +4,7 @@
 
 # subagent-driven development scratch
 .superpowers/
+
+# Swift build products
+macos/.build/
+macos/build/
