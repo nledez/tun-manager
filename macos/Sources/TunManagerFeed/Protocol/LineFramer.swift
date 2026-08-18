@@ -35,7 +35,12 @@ public struct LineFramer {
         var lines: [Data] = []
 
         while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-            let line = buffer[buffer.startIndex..<newline]
+            // Copied before the buffer is mutated, not after. A Data slice
+            // shares the buffer's storage, so building the Data once
+            // removeSubrange had run read memory that was no longer ours —
+            // which crashed inside malloc, at random, on whichever line
+            // happened to arrive.
+            let line = Data(buffer[buffer.startIndex..<newline])
             buffer.removeSubrange(buffer.startIndex...newline)
 
             if resyncing {
@@ -46,7 +51,7 @@ public struct LineFramer {
             }
             // Empty lines carry nothing and would only make the decoder say so.
             if !line.isEmpty {
-                lines.append(Data(line))
+                lines.append(line)
             }
         }
 

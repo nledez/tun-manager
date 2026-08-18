@@ -68,6 +68,18 @@ public final class UnixSocketConnection: FeedConnection {
     public let chunks: AsyncThrowingStream<Data, any Error>
 
     public init(descriptor: Int32) {
+        // Without this, writing to a socket whose peer has gone raises SIGPIPE,
+        // whose default disposition is to kill the process. The publisher comes
+        // and goes constantly — that is the normal condition, not an edge case
+        // — and this application sends a refresh the moment somebody opens the
+        // menu. So the one race that matters is: tun-manager exits, the user
+        // opens the menu, the write lands on a dead socket, and the menu bar
+        // item vanishes. With SO_NOSIGPIPE the write returns EPIPE instead, and
+        // the reader reports the end of stream a moment later, which is the
+        // path the state machine already handles.
+        var on: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+
         let queue = DispatchQueue(label: "net.ledez.tun-manager.feed.io")
         self.queue = queue
 
@@ -103,7 +115,17 @@ public final class UnixSocketConnection: FeedConnection {
                 return
             }
             if let data, !data.isEmpty {
-                continuation.yield(Data(data))
+                // Copied out explicitly rather than through Data's Sequence
+                // initialiser. The DispatchData handed to this handler is only
+                // guaranteed for the length of the call, and this is the one
+                // place in the program where memory owned by something else
+                // crosses a boundary — worth being obvious about rather than
+                // trusting an initialiser to do the right thing.
+                var copy = Data(count: data.count)
+                copy.withUnsafeMutableBytes { destination in
+                    _ = data.copyBytes(to: destination)
+                }
+                continuation.yield(copy)
             }
             if done {
                 continuation.finish()
@@ -124,6 +146,15 @@ public final class UnixSocketConnection: FeedConnection {
     }
 
     public func close() {
+        io.close(flags: DispatchIO.CloseFlags.stop)
+    }
+
+    deinit {
+        // A connection let go of without being closed would leave an armed read
+        // on a background queue, holding a descriptor and a continuation whose
+        // consumer has gone. Closing is idempotent, so this costs nothing on
+        // the ordinary path and closes the leak on the one where somebody
+        // forgot.
         io.close(flags: DispatchIO.CloseFlags.stop)
     }
 }

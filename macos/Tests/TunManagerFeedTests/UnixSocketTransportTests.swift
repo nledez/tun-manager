@@ -4,6 +4,22 @@ import Testing
 
 @testable import TunManagerFeed
 
+/// Serialised on purpose.
+///
+/// These are the only tests that open real descriptors, and swift-testing runs
+/// everything in parallel by default. A hundred tests creating and tearing down
+/// Dispatch channels at once trips libdispatch's own assertion about a
+/// descriptor going away under an active channel — reproducibly, a few runs in
+/// ten, with AddressSanitizer reporting nothing because it is a trap rather
+/// than a memory error.
+///
+/// It is a property of the harness and not of the program: in use there is one
+/// connection at a time, created and closed by the supervisor on the main
+/// actor. Serialising here makes the suite deterministic without pretending the
+/// program has a problem it does not.
+@Suite(.serialized)
+struct UnixSocketTransportTests {
+
 /// A connection built directly on one end of a socketpair, so these tests prove
 /// what only the kernel can prove without needing a path, a listener or a
 /// permission.
@@ -23,7 +39,7 @@ private func write(_ text: String, to fd: Int32) {
 @Test func bytesWrittenToOneEndOfASocketPairArriveAsChunksAtTheOther() async throws {
     let (mine, theirs) = try pair()
     let connection = UnixSocketConnection(descriptor: mine)
-    defer { close(theirs) }
+    defer { connection.close(); close(theirs) }
 
     write("hello\n", to: theirs)
     close(theirs)
@@ -34,29 +50,53 @@ private func write(_ text: String, to fd: Int32) {
     #expect(String(decoding: seen, as: UTF8.self) == "hello\n")
 }
 
-@Test func aLineWrittenOneByteAtATimeIsDeliveredAByteAtATime() async throws {
+@Test func aSingleByteIsDeliveredWithoutWaitingForMore() async throws {
     // This is the test that pins setLimit(lowWater: 1). Dispatch documents the
-    // default low-water mark as *unspecified*, so without that call the channel
-    // may sit on a complete state line waiting for more bytes — and since the
-    // publisher sends one every five minutes, the symptom would be a menu bar
-    // minutes behind, with no error anywhere.
+    // default low-water mark as *unspecified*, so the channel may sit on what
+    // it has while it waits for more bytes to arrive. The publisher sends one
+    // line every five minutes, so the symptom would be a menu bar minutes
+    // behind with no error anywhere.
+    //
+    // One byte is written and nothing follows it, so this cannot pass by
+    // accident on a machine that happened to be fast: either the channel hands
+    // over what it has, or nothing ever arrives.
     let (mine, theirs) = try pair()
     let connection = UnixSocketConnection(descriptor: mine)
+    defer { connection.close(); close(theirs) }
 
-    let reader = Task { () -> Int in
-        var chunks = 0
-        for try await _ in connection.chunks { chunks += 1 }
-        return chunks
-    }
+    write("x", to: theirs)
 
-    for byte in "abcdef" {
-        write(String(byte), to: theirs)
-        try await Task.sleep(for: .milliseconds(20))
+    let arrived = Task { () -> Bool in
+        for try await chunk in connection.chunks where !chunk.isEmpty { return true }
+        return false
     }
+    let deadline = Task { () -> Bool in
+        try await Task.sleep(for: .seconds(2))
+        connection.close()
+        return false
+    }
+    defer { deadline.cancel() }
+
+    #expect(try await arrived.value, "the byte was withheld rather than handed over")
+}
+
+@Test func aWriteToASocketWhosePeerHasGoneDoesNotKillTheProcess() async throws {
+    // Writing to a socket with no reader raises SIGPIPE, and its default
+    // disposition is to kill the process. tun-manager comes and goes
+    // constantly, and this application writes a refresh whenever the menu
+    // opens, so without SO_NOSIGPIPE the menu bar item would simply vanish the
+    // first time those two coincided.
+    let (mine, theirs) = try pair()
+    let connection = UnixSocketConnection(descriptor: mine)
+    defer { connection.close() }
     close(theirs)
 
-    let chunks = try await reader.value
-    #expect(chunks >= 4, "\(chunks) chunk(s): bytes were withheld rather than delivered as they arrived")
+    connection.send(ClientCommand.refresh.line)
+    try await Task.sleep(for: .milliseconds(100))
+
+    // Reaching this line at all is the assertion: a SIGPIPE would have taken
+    // the whole suite with it.
+    #expect(Bool(true))
 }
 
 @Test func closingTheWritingEndEndsTheStreamWithoutAnError() async throws {
@@ -87,7 +127,7 @@ private func write(_ text: String, to fd: Int32) {
 @Test func aRefreshWrittenToTheConnectionReachesTheOtherEnd() async throws {
     let (mine, theirs) = try pair()
     let connection = UnixSocketConnection(descriptor: mine)
-    defer { close(theirs) }
+    defer { connection.close(); close(theirs) }
 
     connection.send(ClientCommand.refresh.line)
     try await Task.sleep(for: .milliseconds(50))
@@ -114,4 +154,5 @@ private func write(_ text: String, to fd: Int32) {
     await #expect(throws: SocketPathTooLong.self) {
         _ = try await transport.connect()
     }
+}
 }

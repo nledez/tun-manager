@@ -10,7 +10,15 @@ import os
 public enum FeedDecoder {
     private static let log = Logger(subsystem: "net.ledez.tun-manager", category: "feed")
 
-    private static let decoder: JSONDecoder = {
+    /// Built per call, not shared.
+    ///
+    /// A JSONDecoder carries mutable state through a decode and is not safe to
+    /// use from two threads at once; a single shared instance corrupts its own
+    /// heap, and the crash surfaces somewhere else entirely — this was found as
+    /// intermittent failures inside Foundation's scanner, with nothing pointing
+    /// back here. Building one costs an allocation against a line that arrives
+    /// every few minutes.
+    private static func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -22,7 +30,7 @@ public enum FeedDecoder {
             return date
         }
         return decoder
-    }()
+    }
 
     /// Decodes one line, or returns nil for a line this client has nothing to
     /// do with.
@@ -32,6 +40,7 @@ public enum FeedDecoder {
     /// understand is how a client breaks itself against a publisher that only
     /// added a field.
     public static func decode(_ line: Data) -> FeedMessage? {
+        let decoder = makeDecoder()
         guard let envelope = try? decoder.decode(Envelope.self, from: line) else {
             return nil
         }
