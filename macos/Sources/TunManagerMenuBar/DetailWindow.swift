@@ -124,8 +124,12 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
         supervisor.askForPing(tunnel)
 
         if window == nil {
+            // Wide enough for the whole table without a horizontal scroll: six
+            // columns, and the last of them holds an endpoint, which can be an
+            // IPv6 address with a port on the end. A window that opens needing
+            // to be resized before it can be read is a window that opens wrong.
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 420),
+                contentRect: NSRect(x: 0, y: 0, width: 1280, height: 680),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false)
             window.title = "Tun Manager"
@@ -135,8 +139,16 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
                     onSelect: { [weak self] selection in self?.select(selection) },
                     onPing: { [weak self] name in self?.supervisor.askForPing(name) }))
             window.isReleasedWhenClosed = false
-            window.center()
             window.delegate = self
+
+            // Whatever size somebody settles on is theirs from then on; the
+            // default above only decides the first time. The name is the
+            // bundle's, so the development build cannot move the installed
+            // one's window.
+            window.setFrameAutosaveName(Bundle.main.bundleIdentifier.map { $0 + ".detail" } ?? "detail")
+            if !window.setFrameUsingName(window.frameAutosaveName) {
+                window.center()
+            }
             self.window = window
         }
 

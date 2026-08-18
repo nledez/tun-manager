@@ -37,7 +37,9 @@ struct DetailView: View {
                 OverviewPane(model: model)
             }
         }
-        .frame(minWidth: 720, minHeight: 380)
+        // The floor is what the six columns need side by side, plus the
+        // sidebar. Below it the table starts clipping rather than shrinking.
+        .frame(minWidth: 820, minHeight: 380)
         .toolbar {
             // On the split view rather than in a pane, so it is there whichever
             // one is showing. A round of probes costs packets sent by a process
