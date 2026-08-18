@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/cli"
@@ -43,6 +44,7 @@ Usage:
   sudo tun-manager down <name>...     bring tunnels down
   sudo tun-manager down --all         bring every tunnel down
   sudo tun-manager import NAME FILE   add a .conf and list it in the all group
+  sudo tun-manager backup             archive the configuration and every .conf
   tun-manager doctor                  check the environment
   tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
@@ -56,6 +58,10 @@ Configuration: ~/.config/tun-manager/config.yaml
 type env struct {
 	out  io.Writer
 	euid int
+
+	// now is the clock, so that a test can pin the timestamp an archive is
+	// named after.
+	now func() time.Time
 
 	// config loads the user configuration; doctor needs it without root.
 	config func() (*profile.Config, privdrop.User, error)
@@ -84,6 +90,7 @@ func newEnv() *env {
 		out:         os.Stdout,
 		euid:        os.Geteuid(),
 		config:      loadConfig,
+		now:         time.Now,
 		build:       build,
 		interactive: runTUI,
 	}
@@ -127,6 +134,8 @@ func (e *env) run(args []string) error {
 		return e.runDown(args)
 	case "import":
 		return e.runImport(args)
+	case "backup":
+		return e.runBackup(args)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
@@ -206,6 +215,24 @@ func (e *env) runImport(args []string) error {
 		return err
 	}
 	return cli.Import(e.out, cfg, u, fs.Arg(0), fs.Arg(1))
+}
+
+// runBackup archives everything that would be painful to lose.
+func (e *env) runBackup(args []string) error {
+	fs := newFlagSet("backup")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: sudo tun-manager backup")
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		return err
+	}
+	_, err = cli.Backup(e.out, cfg, e.now())
+	return err
 }
 
 func (e *env) runDoctor() error {

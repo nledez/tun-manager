@@ -94,6 +94,7 @@ sudo tun-manager up alpha bravo
 sudo tun-manager up --group needed  # resolved against the current network
 sudo tun-manager down --all
 sudo tun-manager import work ~/Downloads/work.conf
+sudo tun-manager backup             # tar.gz of the configuration and every .conf
 tun-manager doctor                  # environment check, works without root
 ```
 
@@ -209,6 +210,34 @@ goes through the YAML rather than through a re-serialised struct, so your
 comments and the order you wrote things in survive. Importing the same name
 twice does not list it twice, and an existing `<name>.conf` is never replaced —
 remove it first if that is what you mean.
+
+## Backups
+
+```sh
+sudo tun-manager backup
+```
+
+Writes `tun-manager-<date>-<time>.tar.gz` beside the configuration directory —
+`/private/wireguard/` by default, so it lands next to what it archives rather
+than inside it, where a `*.conf` glob would start finding archives. The name
+sorts by age, which is how a directory of them gets read.
+
+```
+tun-manager-20260818-142305.tar.gz
+├── config.yaml          your ~/.config/tun-manager/config.yaml
+└── config/alpha.conf    one per tunnel, original modes preserved
+    config/bravo.conf
+```
+
+**The archive holds every private key on the machine in one file.** It is
+created `0600` and stays root's — unlike the configuration, which `import`
+hands back to you. Keeping the file modes inside the archive means a restore
+puts a `0600` `.conf` back as `0600`, rather than as whatever the umask of the
+day decides.
+
+Two backups in the same second do not overwrite each other, and a backup that
+fails partway removes what it had written: half an archive is worse than none,
+because it looks like a backup.
 
 ## Configuration
 

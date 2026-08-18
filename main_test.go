@@ -1080,3 +1080,57 @@ func TestImportNeedsRoot(t *testing.T) {
 		t.Error("import ran without root")
 	}
 }
+
+func TestBackupArchivesEverythingWorthKeeping(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	cfg, _, _ := e.config()
+	e.now = func() time.Time { return time.Date(2026, 8, 18, 14, 23, 5, 0, time.UTC) }
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(cfg.Path, []byte("groups:\n  all: [alpha]\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := e.run([]string{"backup"}); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	dest := filepath.Join(filepath.Dir(cfg.ConfigDir), "tun-manager-20260818-142305.tar.gz")
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("the archive was not written: %v", err)
+	}
+	if !strings.Contains(output(e), dest) {
+		t.Errorf("output does not say where the archive went:\n%s", output(e))
+	}
+}
+
+func TestBackupTakesNoArguments(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	for _, args := range [][]string{{"backup", "extra"}, {"backup", "--nope"}} {
+		if err := e.run(args); err == nil {
+			t.Errorf("run(%v) succeeded, want the usage line", args)
+		}
+	}
+}
+
+func TestBackupStopsWhenTheConfigurationCannotBeRead(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("unreadable config")
+	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
+
+	if err := e.run([]string{"backup"}); !errors.Is(err, boom) {
+		t.Errorf("backup = %v, want %v", err, boom)
+	}
+}
+
+func TestBackupNeedsRoot(t *testing.T) {
+	// It reads the WireGuard configuration directory, which is root's.
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+
+	if err := e.run([]string{"backup"}); err == nil {
+		t.Error("backup ran without root")
+	}
+}
