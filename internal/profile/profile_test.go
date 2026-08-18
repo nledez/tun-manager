@@ -1,14 +1,21 @@
 package profile
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"ledez.net/tun-manager/internal/netctx"
 )
+
+// examplePath is the configuration shipped with the program, read as part of
+// the repository rather than as something the machine happens to have.
+const examplePath = "../../configs/config.example.yaml"
 
 // Every value below is invented. Addresses come from the ranges reserved for
 // documentation (RFC 5737).
@@ -385,5 +392,65 @@ func TestAFieldWrittenOutAsBlankFallsBackToItsDefault(t *testing.T) {
 	}
 	if cfg.Groups == nil {
 		t.Error("Groups is nil, want an empty map so the group commands have something to read")
+	}
+}
+
+// The shipped example is what a new user copies, so it is part of the program
+// rather than documentation about it. Nothing checked it until `feed:` was
+// missing from it for as long as the feed had existed — and every configuration
+// derived from it therefore had the feed off.
+func TestTheShippedExampleParses(t *testing.T) {
+	cfg, err := Load(examplePath)
+	if err != nil {
+		t.Fatalf("the example does not load: %v", err)
+	}
+
+	if cfg.ConfigDir == "" || cfg.WgQuick == "" {
+		t.Errorf("paths are empty: %+v", cfg)
+	}
+	if len(cfg.Groups[GroupAll]) == 0 {
+		t.Error("the example documents an `all` group and does not define one")
+	}
+	if len(cfg.Contexts) == 0 {
+		t.Error("the example documents contexts and defines none")
+	}
+	if len(cfg.Overrides) == 0 {
+		t.Error("the example documents overrides and defines none")
+	}
+}
+
+func TestTheShippedExampleTurnsOnWhatIsOnByDefault(t *testing.T) {
+	// Copying the example must not quietly disable something. A key it omits
+	// still gets its default now, but a key it sets to the wrong value would
+	// travel into every configuration derived from it.
+	cfg, err := Load(examplePath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.Feed {
+		t.Error("the example turns the feed off, so a copy of it has no menu bar")
+	}
+	if !cfg.Notify {
+		t.Error("the example turns notifications off")
+	}
+	if cfg.FeedSocket != DefaultFeedSocket {
+		t.Errorf("FeedSocket = %q, want the default %q", cfg.FeedSocket, DefaultFeedSocket)
+	}
+}
+
+func TestTheShippedExampleHasNoKeyThisProgramIgnores(t *testing.T) {
+	// A misspelled key is accepted in silence by default, which is how somebody
+	// sets `feeed: false` and spends an evening wondering why it did nothing.
+	data, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	var cfg Config
+	if err := decoder.Decode(&cfg); err != nil {
+		t.Errorf("the example carries a key the program does not know: %v", err)
 	}
 }

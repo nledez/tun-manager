@@ -23,8 +23,18 @@ run_dir: /var/run/wireguard
 # How often the TUI refreshes on its own.
 refresh_interval: 5m
 
-# macOS notifications when a tunnel goes up or down.
+# macOS notifications when a tunnel goes up or down. Turn this off if you run
+# the menu bar application, which raises its own with its own icon.
 notify: true
+
+# The status feed: a read-only unix socket, published while the TUI runs, that
+# the menu bar application subscribes to. Nothing sent to it can start or stop a
+# tunnel, which is why it needs no privileges of its own.
+#
+# The socket is created by root and handed to whoever ran `sudo tun-manager`,
+# mode 0600. It exists only while the TUI is running: there is no daemon.
+feed: true
+feed_socket: /var/run/tun-manager.sock
 
 # Recognisable networks. The first rule whose CIDR matches an address on one of
 # its interfaces wins; when none matches, the context is "default".
