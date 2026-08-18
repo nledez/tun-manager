@@ -29,15 +29,27 @@ func fatView() app.View {
 // publishUntil publishes until the server is down to want clients. It is two
 // assertions at once: a Publish that blocks never returns, and a client that is
 // never dropped never brings the count down.
-func publishUntil(t *testing.T, s *Server, want int) {
+//
+// send publishes one view and reports whether the clients that are meant to
+// survive kept up with it. A publisher running flat out outruns any reader on a
+// machine with no spare core, and the queue is only sixteen deep, so a test
+// that does not hold the publisher back drops the client it is watching for
+// losing a race rather than for the policy under test.
+func publishUntil(t *testing.T, s *Server, want int, send func() bool) {
 	t.Helper()
 
+	// Written on the publishing goroutine and read after done is closed, which
+	// is what orders the two.
+	kept := true
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		deadline := time.Now().Add(5 * time.Second)
 		for s.clientCount() > want && time.Now().Before(deadline) {
-			s.Publish(fatView())
+			if !send() {
+				kept = false
+				return
+			}
 		}
 	}()
 
@@ -45,6 +57,9 @@ func publishUntil(t *testing.T, s *Server, want int) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Publish blocked on a client that never reads")
+	}
+	if !kept {
+		t.Fatal("a client that was reading stopped taking messages off the wire")
 	}
 	if got := s.clientCount(); got != want {
 		t.Fatalf("clients = %d, want %d", got, want)
@@ -70,7 +85,11 @@ func TestAClientThatNeverReadsIsDroppedRatherThanWaitedFor(t *testing.T) {
 		return s.clientCount() == 1
 	})
 
-	publishUntil(t, s, 0)
+	// Nobody here is meant to survive, so there is nothing to hold back for.
+	publishUntil(t, s, 0, func() bool {
+		s.Publish(fatView())
+		return true
+	})
 }
 
 func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
@@ -138,7 +157,14 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 		return s.clientCount() == 2
 	})
 
-	publishUntil(t, s, 1)
+	publishUntil(t, s, 1, func() bool {
+		// Snapshot before publishing: reading the count afterwards could
+		// already include the message we are about to wait for, and the wait
+		// would then be for one that is never sent.
+		seen := states.Load()
+		s.Publish(fatView())
+		return waitFor(func() bool { return states.Load() > seen })
+	})
 
 	attentive.Close()
 	<-drained

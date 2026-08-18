@@ -46,14 +46,22 @@ func (deadSampler) Sample(wgconf.Tunnel) (app.Sample, bool) { return app.Sample{
 func eventually(t *testing.T, why string, cond func() bool) {
 	t.Helper()
 
+	if !waitFor(cond) {
+		t.Fatalf("timed out waiting for %s", why)
+	}
+}
+
+// waitFor is eventually for callers that are not the test's own goroutine: it
+// reports rather than fails, because failing from anywhere else is undefined.
+func waitFor(cond func() bool) bool {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
-			return
+			return true
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", why)
+	return false
 }
 
 func TestWatchingATunnelStartsItsSamples(t *testing.T) {
