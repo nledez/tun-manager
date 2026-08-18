@@ -4,6 +4,7 @@
 
 APP := build/Tun Manager.app
 ARTWORK := ../assets/icon.png
+SMALL_ARTWORK := ../assets/icon-small.png
 BUNDLE_ID := net.ledez.tun-manager.menubar
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -71,11 +72,18 @@ icon: build/AppIcon.icns
 # assets/icon.png is square, so nothing is stretched. It is the emblem alone:
 # the banner beside it carries the name and a tagline, which say nothing at 32
 # pixels and are noise at 16.
-build/AppIcon.icns: $(ARTWORK)
+build/AppIcon.icns: $(ARTWORK) $(SMALL_ARTWORK)
 	rm -rf build/AppIcon.iconset
 	mkdir -p build/AppIcon.iconset
-	@for pair in 16:icon_16x16 32:icon_16x16@2x 32:icon_32x32 64:icon_32x32@2x \
-		128:icon_128x128 256:icon_128x128@2x 256:icon_256x256 \
+	# The small slots come from a simplified drawing with heavier forms and more
+	# contrast. Measured rather than assumed: at 32 pixels it keeps a legible
+	# shield outline and T where the detailed one turns to mush. Both are
+	# square, so nothing is stretched.
+	@for pair in 16:icon_16x16 32:icon_16x16@2x 32:icon_32x32 64:icon_32x32@2x; do \
+		size=$${pair%%:*}; name=$${pair##*:}; \
+		sips -z $$size $$size "$(SMALL_ARTWORK)" --out "build/AppIcon.iconset/$$name.png" >/dev/null; \
+	done
+	@for pair in 128:icon_128x128 256:icon_128x128@2x 256:icon_256x256 \
 		512:icon_256x256@2x 512:icon_512x512 1024:icon_512x512@2x; do \
 		size=$${pair%%:*}; name=$${pair##*:}; \
 		sips -z $$size $$size "$(ARTWORK)" --out "build/AppIcon.iconset/$$name.png" >/dev/null; \
