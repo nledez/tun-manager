@@ -70,14 +70,6 @@ commit a real endpoint, key or tunnel name.
 
 ## Git
 
-Never rewrite history that has been pushed. Add each change as its own commit on
-top of what exists, so the next push stays a fast-forward. Check with:
-
-```sh
-git status -sb
-git merge-base --is-ancestor origin/main HEAD
-```
-
 Commit messages, PR titles and issues are in English. Say what changed and why
 the change is the right one; a message that only restates the diff is noise.
 
