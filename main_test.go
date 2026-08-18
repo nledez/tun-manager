@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +79,9 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 
 	cfg := profile.Default()
 	cfg.ConfigDir = dir
+	// Load always sets this; a hand-built configuration has to as well, or
+	// anything that writes the file writes to nowhere.
+	cfg.Path = filepath.Join(home, ".config", "tun-manager", "config.yaml")
 	// The defaults point at a Homebrew wg-quick and at /var/run/wireguard.
 	// Depending on either would make these tests pass or fail according to what
 	// happens to be installed on the machine running them.
@@ -1013,5 +1017,66 @@ func TestNotifyReportsAWriteFailure(t *testing.T) {
 
 	if err := e.run([]string{"notify"}); err == nil {
 		t.Fatal("notify succeeded with a broken output, want the error reported")
+	}
+}
+
+func TestImportAddsTheTunnelToTheConfiguration(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	cfg, _, _ := e.config()
+	source := filepath.Join(t.TempDir(), "downloaded.conf")
+	body := "[Peer]\nPublicKey = " + alphaKey + "\nEndpoint = 192.0.2.10:51820\n" +
+		"AllowedIPs = 10.20.30.0/24\n# TO_CHECK=10.20.30.1\n"
+	if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := e.run([]string{"import", "charlie", source}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(cfg.ConfigDir, "charlie.conf")); err != nil {
+		t.Errorf("the configuration was not copied: %v", err)
+	}
+	written, err := profile.Load(cfg.Path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Contains(written.Groups[profile.GroupAll], "charlie") {
+		t.Errorf("all = %v, want charlie in it", written.Groups[profile.GroupAll])
+	}
+	if !strings.Contains(output(e), "charlie") {
+		t.Errorf("output does not name the tunnel:\n%s", output(e))
+	}
+}
+
+func TestImportNeedsBothArguments(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	for _, args := range [][]string{
+		{"import"}, {"import", "charlie"}, {"import", "a", "b", "c"}, {"import", "--nope", "a", "b"},
+	} {
+		if err := e.run(args); err == nil {
+			t.Errorf("run(%v) succeeded, want the usage line", args)
+		}
+	}
+}
+
+func TestImportStopsWhenTheConfigurationCannotBeRead(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("unreadable config")
+	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
+
+	if err := e.run([]string{"import", "charlie", "whatever.conf"}); !errors.Is(err, boom) {
+		t.Errorf("import = %v, want %v", err, boom)
+	}
+}
+
+func TestImportNeedsRoot(t *testing.T) {
+	// It writes into the WireGuard configuration directory, which is root's.
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+
+	if err := e.run([]string{"import", "charlie", "whatever.conf"}); err == nil {
+		t.Error("import ran without root")
 	}
 }

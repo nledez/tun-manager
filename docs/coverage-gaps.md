@@ -164,6 +164,34 @@ devices". The hint moved, and a test now pins that opening the client needs no
 privilege, so a future wgctrl changing that would be caught rather than
 misreported.
 
+### profile.replace
+
+`internal/profile/group.go` renders the edited configuration back to YAML:
+
+```go
+err := enc.Encode(doc)
+if closeErr := enc.Close(); err == nil {
+	err = closeErr
+}
+if err != nil {
+```
+
+Neither call has a way to fail here. The document was parsed out of a file
+moments earlier, and it is written into a `bytes.Buffer`, which does not run
+out of room or refuse a write. Reaching that branch would mean the node tree
+assembled above it is malformed — a bug in this file rather than a condition
+the program can meet.
+
+The obvious handle, injecting the encoder, would exist only to reach a line
+that reports a bug that cannot happen, and would put a seam through the one
+function whose job is to be boring. The branch is kept because dropping the
+error on the floor is worse than not covering it.
+
+Everything around it is covered: a file that is not YAML, a configuration that
+is not a mapping, a `groups` key that is not a mapping, a temporary file that
+cannot be written, a directory that cannot be created, and a dangling symlink
+on the path.
+
 ## Two things the number hides
 
 **Cross-package attribution.** By default `go test` only credits the package

@@ -93,6 +93,7 @@ sudo tun-manager status --json      # for tmux, starship, scripts
 sudo tun-manager up alpha bravo
 sudo tun-manager up --group needed  # resolved against the current network
 sudo tun-manager down --all
+sudo tun-manager import work ~/Downloads/work.conf
 tun-manager doctor                  # environment check, works without root
 ```
 
@@ -186,6 +187,28 @@ probing it while a sibling is up would report a latency for both.
 `wg-quick` is not run. The address comes from a
 `# TO_CHECK=<ip>` comment in the `.conf`; without one it is inferred from the
 first single-host `AllowedIPs` entry, then from the endpoint host.
+
+## Adding a tunnel
+
+```sh
+sudo tun-manager import <name> <file.conf>
+```
+
+Copies the `.conf` into `config_dir` as `<name>.conf`, mode `0600` and owned by
+root — it holds a private key, and `wg-quick` reads it as root — then lists
+`<name>` under `groups: all` in your configuration.
+
+Everything is checked before anything is written, and the one check worth
+knowing about is that **the file must carry a `# TO_CHECK=<address>` comment**.
+Without one there is no address to ping, and a tunnel that is up while carrying
+nothing looks exactly like one that works. An inferred address is not enough
+here: the comment has to be there.
+
+The configuration is copied to `config.yaml.before-update` first, and the edit
+goes through the YAML rather than through a re-serialised struct, so your
+comments and the order you wrote things in survive. Importing the same name
+twice does not list it twice, and an existing `<name>.conf` is never replaced —
+remove it first if that is what you mean.
 
 ## Configuration
 

@@ -42,6 +42,7 @@ Usage:
   sudo tun-manager up --group NAME    bring a whole group up (needed, extra, all)
   sudo tun-manager down <name>...     bring tunnels down
   sudo tun-manager down --all         bring every tunnel down
+  sudo tun-manager import NAME FILE   add a .conf and list it in the all group
   tun-manager doctor                  check the environment
   tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
@@ -124,6 +125,8 @@ func (e *env) run(args []string) error {
 		return e.runUp(args)
 	case "down":
 		return e.runDown(args)
+	case "import":
+		return e.runImport(args)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", command, usage)
 	}
@@ -186,6 +189,23 @@ func build() (*app.App, error) {
 
 func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server) error {
 	return tui.Run(ctx, a, n, f)
+}
+
+// runImport adds a WireGuard configuration to the ones tun-manager manages.
+func (e *env) runImport(args []string) error {
+	fs := newFlagSet("import")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return errors.New("usage: sudo tun-manager import <name> <file.conf>")
+	}
+
+	cfg, u, err := e.config()
+	if err != nil {
+		return err
+	}
+	return cli.Import(e.out, cfg, u, fs.Arg(0), fs.Arg(1))
 }
 
 func (e *env) runDoctor() error {
