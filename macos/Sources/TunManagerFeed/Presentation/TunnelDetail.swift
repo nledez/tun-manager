@@ -19,7 +19,14 @@ public struct TunnelDetail: Sendable, Equatable {
     public let group: String
     public let facts: [Fact]
 
-    public init(_ tunnel: TunnelStatus, now: Date, locale: Locale = .autoupdatingCurrent) {
+    /// - Parameter latest: the most recent reading of this tunnel's counters,
+    ///   if it is being watched. The view's own counters are minutes old by the
+    ///   time anybody reads them, and showing those beside a chart drawn from
+    ///   fresher ones is the window disagreeing with itself.
+    public init(
+        _ tunnel: TunnelStatus, latest: Sample? = nil, now: Date,
+        locale: Locale = .autoupdatingCurrent
+    ) {
         name = tunnel.name
         health = tunnel.health
         group = tunnel.group.isEmpty ? "no group" : tunnel.group
@@ -41,9 +48,17 @@ public struct TunnelDetail: Sendable, Equatable {
         // wire, zero included, and a pair of zeroes under a down tunnel is
         // noise dressed as a measurement.
         if tunnel.health != .down {
+            // Two tunnels can be watched at once, so a reading is only taken
+            // when it is this tunnel's.
+            let reading = latest?.tunnel == tunnel.name ? latest : nil
             facts.append(
-                Fact(label: "Received", value: Formatting.bytes(tunnel.rxBytes, locale: locale)))
-            facts.append(Fact(label: "Sent", value: Formatting.bytes(tunnel.txBytes, locale: locale)))
+                Fact(
+                    label: "Received",
+                    value: Formatting.bytes(reading?.rx ?? tunnel.rxBytes, locale: locale)))
+            facts.append(
+                Fact(
+                    label: "Sent",
+                    value: Formatting.bytes(reading?.tx ?? tunnel.txBytes, locale: locale)))
         }
         if let check = tunnel.checkIP {
             facts.append(Fact(label: "Checks", value: check))

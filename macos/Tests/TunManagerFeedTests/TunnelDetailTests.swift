@@ -63,3 +63,41 @@ private func detail(_ tunnel: TunnelStatus) -> TunnelDetail {
 
     #expect(!got.facts.contains { $0.label == "Handshake" })
 }
+
+@Test func theCountersComeFromTheFreshestReadingWhenThereIsOne() {
+    // The state line arrives every few minutes; readings arrive every second
+    // and carry the same cumulative counters. Showing the older pair beside a
+    // chart drawn from the newer ones is the window disagreeing with itself.
+    let tunnel = TunnelStatus(
+        name: "alpha", group: "needed", health: .up, device: "utun7",
+        rxBytes: 1000, txBytes: 500)
+    let latest = Sample(tunnel: "alpha", at: now, rx: 184_320, tx: 92_160)
+
+    let got = TunnelDetail(tunnel, latest: latest, now: now, locale: english)
+
+    #expect(got.facts.first { $0.label == "Received" }?.value == "180 kB")
+    #expect(got.facts.first { $0.label == "Sent" }?.value == "90 kB")
+}
+
+@Test func withoutAReadingTheCountersComeFromTheView() {
+    let tunnel = TunnelStatus(
+        name: "alpha", group: "needed", health: .up, device: "utun7",
+        rxBytes: 184_320, txBytes: 92_160)
+
+    let got = TunnelDetail(tunnel, latest: nil, now: now, locale: english)
+
+    #expect(got.facts.first { $0.label == "Received" }?.value == "180 kB")
+}
+
+@Test func aReadingForAnotherTunnelIsNotBorrowed() {
+    // Two tunnels are watched at once while the window is open, so a reading
+    // arriving for the one not on screen must not be charged to this one.
+    let tunnel = TunnelStatus(
+        name: "alpha", group: "needed", health: .up, device: "utun7",
+        rxBytes: 1000, txBytes: 500)
+    let other = Sample(tunnel: "bravo", at: now, rx: 999_999, tx: 999_999)
+
+    let got = TunnelDetail(tunnel, latest: other, now: now, locale: english)
+
+    #expect(got.facts.first { $0.label == "Received" }?.value == "1000 bytes")
+}

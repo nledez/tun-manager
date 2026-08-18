@@ -90,6 +90,32 @@ called `alpha`, `bravo`, `charlie`.
 
 Run it with `make macos-test` and `make macos-app`.
 
+## Stand-in publishers
+
+Trying the menu bar application by hand needs something on the other end of the
+socket. **Never bind the default path**, `/var/run/tun-manager.sock`.
+
+A stand-in there is indistinguishable from the real thing: the application shows
+invented tunnels with no sign that they are invented, and one left running
+outlives the session that started it. This is not hypothetical — a fixture
+tunnel called `loose` was reported as a bug in the tunnel list, because from the
+outside that is exactly what it looked like.
+
+So:
+
+```sh
+# Bind somewhere private, and point the application at it.
+python3 /tmp/fake/publisher.py            # binds /tmp/fake/f.sock
+defaults write net.ledez.tun-manager.menubar FeedSocket /tmp/fake/f.sock
+
+# Afterwards, both halves. Leaving the key behind is the same failure.
+pkill -f fake/publisher.py
+defaults delete net.ledez.tun-manager.menubar
+```
+
+`About Tun Manager…` prints the socket in use, which is how to tell at a glance
+which one is being looked at.
+
 ## Git
 
 Commit messages, PR titles and issues are in English. Say what changed and why

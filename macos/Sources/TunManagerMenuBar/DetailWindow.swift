@@ -23,12 +23,15 @@ final class DetailModel: ObservableObject {
     /// Two minutes at a reading a second, which is as much as the chart can
     /// show without each point being narrower than a pixel.
     private var series: [String: RateSeries] = [:]
+    /// The most recent reading of each watched tunnel, so the totals on screen
+    /// are as fresh as the chart beside them.
+    private var latest: [String: Sample] = [:]
 
     var detail: TunnelDetail? {
         guard let selected, let tunnel = tunnels.first(where: { $0.name == selected }) else {
             return nil
         }
-        return TunnelDetail(tunnel, now: Date())
+        return TunnelDetail(tunnel, latest: latest[tunnel.name], now: Date())
     }
 
     func select(_ tunnel: String?) {
@@ -43,6 +46,7 @@ final class DetailModel: ObservableObject {
     func add(_ sample: Sample) {
         series[sample.tunnel, default: RateSeries(limit: 120)]
             .add(at: sample.at, rx: sample.rx, tx: sample.tx)
+        latest[sample.tunnel] = sample
         if sample.tunnel == selected {
             publishRates()
         }
@@ -53,6 +57,7 @@ final class DetailModel: ObservableObject {
     /// a gap and draw a spike that never happened.
     func forgetHistory() {
         series.removeAll()
+        latest.removeAll()
         publishRates()
     }
 
