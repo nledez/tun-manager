@@ -224,3 +224,104 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     }
     #expect(diff.appeared == ["bravo"])
 }
+
+// Watching a tunnel is a subscription held by the window, and a subscription
+// has to survive the link going away underneath it.
+
+@Test func askingToWatchATunnelSendsTheVerb() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+
+    #expect(machine.handle(.watch("alpha")) == [.send(.watch("alpha"))])
+}
+
+@Test func watchingASecondTunnelReleasesTheFirst() {
+    // The window shows one tunnel at a time. Leaving the old subscription open
+    // would have tun-manager reading counters nobody is looking at.
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    #expect(machine.handle(.watch("bravo")) == [.send(.unwatch("alpha")), .send(.watch("bravo"))])
+}
+
+@Test func watchingTheTunnelAlreadyWatchedSaysNothingTwice() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    #expect(machine.handle(.watch("alpha")).isEmpty)
+}
+
+@Test func closingTheWindowReleasesTheTunnel() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    #expect(machine.handle(.watchNothing) == [.send(.unwatch("alpha"))])
+    #expect(machine.handle(.watchNothing).isEmpty)
+}
+
+@Test func aWatchAskedForWhileTheLinkIsDownIsSentOnceItComesBack() {
+    // The window can be opened before tun-manager is running, and the
+    // subscription has to be waiting rather than lost.
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.connectFailed(ENOENT))
+
+    #expect(machine.handle(.watch("alpha")).isEmpty)
+
+    _ = machine.handle(.retryTimerFired)
+    let onHello = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+
+    #expect(onHello == [.send(.watch("alpha"))])
+}
+
+@Test func aWatchIsRenewedAfterTheLinkDropsAndComesBack() {
+    // The publisher forgets every watch when the connection ends, so a window
+    // left open across a restart would show a graph frozen at the moment the
+    // link died, with nothing saying why.
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    _ = machine.handle(.endOfStream)
+    _ = machine.handle(.retryTimerFired)
+    let onHello = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+
+    #expect(onHello == [.send(.watch("alpha"))])
+}
+
+@Test func nothingIsRenewedWhenNoWindowIsOpen() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+
+    #expect(machine.handle(.message(.hello(schema: 1, version: "v0.2.0"))).isEmpty)
+}
+
+@Test func aSampleForTheWatchedTunnelIsHandedOn() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    let sample = Sample(tunnel: "alpha", at: anInstant, rx: 100, tx: 50)
+    #expect(machine.handle(.message(.sample(sample))) == [.publishSample(sample)])
+}
+
+@Test func aSampleForATunnelNobodyIsWatchingIsDropped() {
+    // An unwatch and a reading can cross on the wire. Charting one for a tunnel
+    // the window has already left would draw it into the wrong graph.
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("alpha"))
+
+    let stray = Sample(tunnel: "bravo", at: anInstant, rx: 100, tx: 50)
+    #expect(machine.handle(.message(.sample(stray))).isEmpty)
+}

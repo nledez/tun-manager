@@ -17,9 +17,16 @@ public protocol FeedObserver: AnyObject {
     /// something new. Notifying from the first would announce a reconnection as
     /// though tunnels had changed.
     func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff)
+
+    /// One reading of the watched tunnel's counters. Cumulative, not a rate:
+    /// differencing them is the consumer's job, because it has to survive a
+    /// reading that never arrived anyway.
+    func linkDidSample(_ sample: Sample)
 }
 
 extension FeedObserver {
     /// Default: an observer that only draws has nothing to do with a diff.
     public func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff) {}
+    /// Default: nothing is watched unless somebody asked.
+    public func linkDidSample(_ sample: Sample) {}
 }

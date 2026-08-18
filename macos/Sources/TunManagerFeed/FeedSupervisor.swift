@@ -35,6 +35,12 @@ public final class FeedSupervisor {
     public func systemDidWake() { dispatch(.systemDidWake) }
     public func userAskedToRetry() { dispatch(.userAskedToRetry) }
 
+    /// The detail window is showing this tunnel. Replaces whatever it showed
+    /// before, and survives the link dropping: the subscription is sent again
+    /// when the next connection greets us.
+    public func watch(_ tunnel: String) { dispatch(.watch(tunnel)) }
+    public func watchNothing() { dispatch(.watchNothing) }
+
     private func dispatch(_ event: LinkEvent) {
         for action in machine.handle(event) {
             perform(action)
@@ -65,6 +71,9 @@ public final class FeedSupervisor {
             // this one carries the diff, which nothing current can reconstruct
             // once the snapshot has been replaced.
             observer?.linkDidPublish(snapshot: snapshot, diff: diff)
+
+        case .publishSample(let sample):
+            observer?.linkDidSample(sample)
         }
     }
 

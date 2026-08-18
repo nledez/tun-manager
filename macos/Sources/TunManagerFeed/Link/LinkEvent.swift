@@ -12,6 +12,11 @@ public enum LinkEvent: Sendable, Equatable {
     case userAskedToRetry
     case systemDidWake
     case menuWillOpen
+    /// The detail window is looking at this tunnel. Replaces whatever it was
+    /// looking at before: there is one window and it shows one tunnel.
+    case watch(String)
+    /// The window closed.
+    case watchNothing
 }
 
 /// Everything the machine can ask the world to do. The machine performs no I/O
@@ -24,4 +29,5 @@ public enum LinkAction: Sendable, Equatable {
     case cancelRetry
     case send(ClientCommand)
     case publish(Snapshot, SnapshotDiff)
+    case publishSample(Sample)
 }

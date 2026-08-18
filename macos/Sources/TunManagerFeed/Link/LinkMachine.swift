@@ -23,7 +23,17 @@ public struct LinkMachine {
     /// the whole shutdown.
     private var attempt = 0
 
+    /// The tunnel the detail window is showing, if it is open.
+    ///
+    /// Held here rather than by the window because it has to outlive the
+    /// connection: the publisher forgets every watch when a connection ends, so
+    /// a window left open across a restart needs the subscription sent again.
+    private var watching: String?
+
     public init() {}
+
+    /// What the window is watching, for whoever needs to route a reading.
+    public var watched: String? { watching }
 
     public var isLive: Bool {
         if case .live = state { return true }
@@ -63,7 +73,9 @@ public struct LinkMachine {
             }
             attempt = 0
             state = .live(sawState: false)
-            return []
+            // A window opened before tun-manager was running, or left open
+            // across a restart, is waiting for exactly this.
+            return watching.map { [.send(.watch($0))] } ?? []
 
         // Accepted, then closed without a hello: tun-manager is going away.
         case (.connecting, .endOfStream), (.connecting, .streamFailed):
@@ -88,10 +100,25 @@ public struct LinkMachine {
             // asking at the moment somebody looks is safe.
             return [.send(.refresh)]
 
-        // Version 1 never watches anything, so this cannot arrive. Ignoring it
-        // costs nothing; crashing on it would be a poor way to meet a feature.
-        case (.live, .message(.sample)):
-            return []
+        case (.live, .message(.sample(let sample))):
+            // An unwatch and a reading can cross on the wire. Charting one for
+            // a tunnel the window has already left would draw it into the
+            // wrong graph.
+            guard sample.tunnel == watching else { return [] }
+            return [.publishSample(sample)]
+
+        case (_, .watch(let tunnel)):
+            guard tunnel != watching else { return [] }
+            let release = watching.map { [LinkAction.send(.unwatch($0))] } ?? []
+            watching = tunnel
+            // Nothing to send while there is no connection; the hello above
+            // sends it once there is one.
+            return isLive ? release + [.send(.watch(tunnel))] : []
+
+        case (_, .watchNothing):
+            guard let tunnel = watching else { return [] }
+            watching = nil
+            return isLive ? [.send(.unwatch(tunnel))] : []
 
         case (.retrying, .retryTimerFired),
             (.retrying, .userAskedToRetry),
