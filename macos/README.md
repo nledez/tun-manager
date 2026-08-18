@@ -31,33 +31,69 @@ defaults write net.ledez.tun-manager.menubar FeedSocket /path/to.sock
 
 `sudo tun-manager doctor` prints the path in use.
 
-## Signing, and what it means
+## Signing
 
-The default is an ad-hoc signature, so a fresh clone builds on any Mac with no
-keychain set up. For one that survives being moved:
+`make app` detects a **Developer ID Application** certificate in the keychain
+and uses it. With none it signs ad-hoc, so a fresh clone builds on any Mac with
+nothing set up. Pin one explicitly if you prefer:
 
 ```sh
-make app SIGN_IDENTITY="Apple Development: you (TEAMID)"
+make app SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 ```
 
-**This application cannot be given to anybody.** Notarisation needs a
-`Developer ID Application` certificate, which this project does not have. Built
-locally it launches fine; the moment it travels through a zip, AirDrop or a
-download it acquires the quarantine attribute and Gatekeeper refuses it with
-"damaged and can't be opened" — the misleading message rather than the honest
-one. If you move it to another machine of your own:
+`--timestamp` is always passed. Without it a signature stops validating the day
+its certificate expires — about a year for an Apple Development one — and the
+application you built today would refuse to launch next year with nothing to
+explain the refusal.
+
+## Giving it to somebody
+
+An ad-hoc or Apple Development signature is fine on the machine that made it.
+The moment the bundle travels through a zip, a download or AirDrop it acquires
+the quarantine attribute, and Gatekeeper refuses it as "damaged and can't be
+opened" — the misleading message rather than the honest one.
+
+Notarising is what removes that. It needs a paid Apple Developer Program
+membership and two things set up once:
+
+**1. A Developer ID Application certificate.** Xcode → Settings → Accounts →
+your team → Manage Certificates → **+** → *Developer ID Application*. Only the
+Account Holder can create one, and Apple allows five per account, so export the
+private key to a `.p12` and keep it somewhere safe: losing it means burning one
+of the five.
+
+**2. Notarisation credentials in the keychain.**
+
+```sh
+xcrun notarytool store-credentials tun-manager \
+  --apple-id you@example.com --team-id TEAMID \
+  --password <app-specific-password>
+```
+
+The app-specific password comes from appleid.apple.com → Sign-In and Security.
+An App Store Connect API key (`--key`, `--key-id`, `--issuer`) works too and is
+the better choice for anything automated: it does not stop working when the
+Apple ID password changes.
+
+Then:
+
+```sh
+make notarize     # signs, submits, waits, staples, verifies
+```
+
+It refuses with an explanation if no Developer ID is in the keychain, rather
+than producing a bundle that fails on somebody else's Mac.
+
+`make verify` runs the checks on their own: `codesign --verify --strict`,
+`spctl --assess`, and `stapler validate`. **`spctl` is deliberately not part of
+`make app`** — without a Developer ID it can never pass, and a permanently red
+gate is one somebody eventually deletes.
+
+If you do move an un-notarised build to another machine of your own:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Tun Manager.app"
 ```
-
-`--timestamp` is passed at signing on purpose: without it the signature stops
-validating the day the certificate expires, and the application you built today
-would refuse to launch a year from now with nothing to explain why.
-
-There is no `spctl` check in the Makefile, and that is deliberate. Without a
-Developer ID it could never pass, and a permanently red gate is one somebody
-eventually deletes.
 
 ## Layout
 

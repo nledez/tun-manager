@@ -13,12 +13,22 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SHORT_VERSION := $(shell printf '%s' "$(VERSION)" | sed -E 's/^v//; s/-.*$$//; s/^[^0-9].*$$/0.0.0/')
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
-# Ad-hoc by default, so a fresh clone builds on any Mac with no keychain set up.
-# Override for a signature that survives being moved:
+# Detected rather than configured: a machine holding a Developer ID uses it, and
+# a fresh clone with no keychain set up still builds ad-hoc. Override to pin one:
 #   make app SIGN_IDENTITY="Apple Development: you (TEAMID)"
-SIGN_IDENTITY ?= -
+SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null \
+	| sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+ifeq ($(strip $(SIGN_IDENTITY)),)
+SIGN_IDENTITY := -
+endif
 
-.PHONY: all build test app run icon sign clean
+# The keychain item holding the notarisation credentials. Created once with:
+#   xcrun notarytool store-credentials tun-manager \
+#     --apple-id <your-apple-id> --team-id <TEAMID> --password <app-specific>
+NOTARY_PROFILE ?= tun-manager
+ZIP := build/TunManager.zip
+
+.PHONY: all build test app run icon sign notarize verify clean
 
 all: test app
 
@@ -63,6 +73,39 @@ sign:
 
 run: app
 	open "$(APP)"
+
+# Notarises and staples, which is the only thing that lets the application run
+# on somebody else's Mac. Everything before this point works without it; this
+# is what removes the "damaged and can't be opened" dialog after the bundle has
+# travelled through a zip, a download or AirDrop.
+notarize: app
+	@case "$(SIGN_IDENTITY)" in \
+		"Developer ID Application:"*) ;; \
+		*) echo "signed as '$(SIGN_IDENTITY)', which Gatekeeper will not accept."; \
+		   echo "Create the certificate: Xcode > Settings > Accounts >"; \
+		   echo "  your team > Manage Certificates > + > Developer ID Application"; \
+		   exit 1;; \
+	esac
+	rm -f "$(ZIP)"
+	# ditto, not zip: a plain zip loses the bundle's symlinks and extended
+	# attributes, and the submission is rejected for a reason that does not
+	# mention either.
+	ditto -c -k --keepParent "$(APP)" "$(ZIP)"
+	xcrun notarytool submit "$(ZIP)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	# Stapled to the application rather than to the zip, so the ticket travels
+	# inside the bundle and validates on a machine that is offline.
+	xcrun stapler staple "$(APP)"
+	rm -f "$(ZIP)"
+	ditto -c -k --keepParent "$(APP)" "$(ZIP)"
+	@$(MAKE) verify
+	@echo "notarised: $(ZIP) can be given to somebody"
+
+# The real gate, and only meaningful once notarised — which is why spctl lives
+# here and not in `app`, where it could never pass.
+verify:
+	codesign --verify --strict --verbose=2 "$(APP)"
+	spctl --assess --type execute --verbose=4 "$(APP)"
+	xcrun stapler validate "$(APP)"
 
 icon: build/AppIcon.icns
 
