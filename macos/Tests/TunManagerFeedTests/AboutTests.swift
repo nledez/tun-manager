@@ -33,3 +33,20 @@ import Testing
 
     #expect(!about.details.contains { $0.hasPrefix("Build") })
 }
+
+@Test func aDevelopmentBuildSaysSoInItsTitle() {
+    // So a screenshot of the panel carries the answer to "which one was that".
+    let about = About(
+        appVersion: "0.4.0", build: "v0.4.0", publisherVersion: nil,
+        socketPath: "/tmp/f.sock", flavour: .development)
+
+    #expect(about.title.contains("development"))
+}
+
+@Test func aReleaseTitleIsJustTheName() {
+    let about = About(
+        appVersion: "0.4.0", build: "v0.4.0", publisherVersion: nil,
+        socketPath: "/var/run/tun-manager.sock")
+
+    #expect(about.title == "Tun Manager 0.4.0")
+}

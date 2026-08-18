@@ -11,6 +11,7 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private let socketPath: String
     private let notifications: NotificationPoster
     private let details: DetailWindowController
+    private let flavour = Flavour(bundleIdentifier: Bundle.main.bundleIdentifier)
     private var model: MenuModel?
 
     init(supervisor: FeedSupervisor, socketPath: String, notifications: NotificationPoster) {
@@ -22,7 +23,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
         // What makes the position stick when the user drags the item around,
         // and what remembers that they hid it. If they hid it, do not fight it.
-        item.autosaveName = "net.ledez.tun-manager.menubar.status"
+        // Per flavour, or the installed application and the one being worked on
+        // fight over the same remembered position.
+        item.autosaveName = flavour.statusItemAutosaveName
 
         let menu = NSMenu()
         // Otherwise AppKit decides enablement itself from whether an item has a
@@ -70,9 +73,16 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
             state: supervisor.state, snapshot: supervisor.snapshot, now: Date())
 
         let image = NSImage(systemSymbolName: glyph.symbol, accessibilityDescription: glyph.description)
-        image?.isTemplate = true
-        item.button?.image = image?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 15, weight: .regular))
+        image?.isTemplate = !flavour.isTinted
+        var configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        if flavour.isTinted {
+            // Deliberately against the rule the release follows. With two
+            // identical shields in the menu bar, colour is the only thing that
+            // says which one is being looked at.
+            configuration = configuration.applying(
+                NSImage.SymbolConfiguration(paletteColors: [.systemPink]))
+        }
+        item.button?.image = image?.withSymbolConfiguration(configuration)
         item.button?.appearsDisabled = glyph.dimmed
         item.button?.toolTip = glyph.description
 
@@ -117,7 +127,8 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
             appVersion: info["CFBundleShortVersionString"] as? String ?? "unknown",
             build: info["NETLedezGitDescribe"] as? String ?? "unknown",
             publisherVersion: supervisor.publisherVersion,
-            socketPath: socketPath)
+            socketPath: socketPath,
+            flavour: flavour)
     }
 
     /// A tunnel row. Clicking it opens the window rather than a submenu: the

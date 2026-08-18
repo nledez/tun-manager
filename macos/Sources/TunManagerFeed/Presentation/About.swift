@@ -10,15 +10,25 @@ public struct About: Sendable, Equatable {
     /// What tun-manager announced in its hello, or nil before one arrived.
     public let publisherVersion: String?
     public let socketPath: String
+    public let flavour: Flavour
 
-    public init(appVersion: String, build: String, publisherVersion: String?, socketPath: String) {
+    public init(
+        appVersion: String, build: String, publisherVersion: String?, socketPath: String,
+        flavour: Flavour = .release
+    ) {
         self.appVersion = appVersion
         self.build = build
         self.publisherVersion = publisherVersion
         self.socketPath = socketPath
+        self.flavour = flavour
     }
 
-    public var title: String { "Tun Manager \(appVersion)" }
+    /// A development build says so in its title, so a screenshot of the panel
+    /// carries the answer to "which one was that".
+    public var title: String {
+        guard let label = flavour.label else { return "Tun Manager \(appVersion)" }
+        return "Tun Manager \(appVersion) — \(label)"
+    }
 
     /// Two programs are involved here and they version separately, so both
     /// answers are given and both are labelled.

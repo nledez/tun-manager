@@ -17,6 +17,28 @@ make run           # the above, then open it
 There is no Xcode project. Sources and the package manifest are text, so a
 change to this application reviews like a change to the rest of the repository.
 
+## Two flavours
+
+```sh
+make app                  # Tun Manager.app — the one that gets installed
+make app FLAVOUR=dev      # Tun Manager (dev).app — cannot disturb it
+```
+
+They can run at the same time. The bundle identifier is what keeps them apart,
+and it is not cosmetic: macOS keys the notification permission, the remembered
+menu bar position and the `defaults` domain on it, so two builds sharing one
+would share all three — including a `FeedSocket` pointed at a stand-in
+publisher, which is exactly the confusion this avoids.
+
+The development build carries the same artwork with its hue rotated, so it is
+recognisably this application and not mistakable for the installed one in the
+Dock or in Command-Tab. Its menu bar glyph is tinted rather than a template,
+which breaks the rule the release follows on purpose: with two identical shields
+up there, colour is the only thing that says which is which, and the cost of an
+occasionally hard-to-read icon is paid by nobody but the person who built it.
+`About Tun Manager…` says which flavour it is, so a screenshot carries the
+answer too.
+
 ## Notifications
 
 A tunnel changing health raises a notification. macOS asks for permission the
