@@ -1,0 +1,124 @@
+import Foundation
+
+/// Turns what is known into what the menu shows.
+public enum MenuModelBuilder {
+    public static func build(
+        state: LinkState,
+        snapshot: Snapshot?,
+        publisherVersion: String?,
+        now: Date,
+        locale: Locale = .autoupdatingCurrent
+    ) -> MenuModel {
+        MenuModel(
+            headline: headline(state: state, snapshot: snapshot),
+            sections: sections(snapshot: snapshot, now: now, locale: locale),
+            footnote: footnote(state: state, snapshot: snapshot, now: now),
+            canRefresh: state.isLive,
+            publisherVersion: publisherVersion)
+    }
+
+    private static func headline(state: LinkState, snapshot: Snapshot?) -> String {
+        switch state {
+        case .idle, .connecting:
+            return "Connecting to tun-manager…"
+        case .retrying(let because):
+            return sentence(for: because)
+        case .blocked(let theirSchema):
+            return "tun-manager speaks schema \(theirSchema); this app understands "
+                + "\(LinkMachine.schema). Update whichever is older."
+        case .live:
+            guard let snapshot else { return "Connected — waiting for the first refresh" }
+            return Formatting.context(snapshot.context)
+        }
+    }
+
+    /// Each reason gets its own sentence, because each has its own remedy.
+    private static func sentence(for reason: Disconnection) -> String {
+        switch reason {
+        case .notRunning:
+            return "tun-manager is not running"
+        case .refused:
+            return "A socket is there but nothing is listening — tun-manager was killed"
+        case .notPermitted:
+            return "The socket belongs to root — start tun-manager with sudo, not as root"
+        case .rejected, .goodbye:
+            return "tun-manager is shutting down"
+        case .lost:
+            return "Lost the connection to tun-manager"
+        case .failed(let code):
+            return "Cannot reach tun-manager (error \(code))"
+        }
+    }
+
+    private static func sections(snapshot: Snapshot?, now: Date, locale: Locale)
+        -> [MenuModel.Section]
+    {
+        guard let snapshot, !snapshot.tunnels.isEmpty else { return [] }
+
+        // Grouped, then sorted by name inside each group, matching the table.
+        // Ungrouped tunnels come last, under no heading: there is no group to
+        // name and inventing one would be a lie.
+        let byGroup = Dictionary(grouping: snapshot.tunnels, by: \.group)
+        let headers = byGroup.keys.filter { !$0.isEmpty }.sorted() + (byGroup[""] != nil ? [""] : [])
+
+        return headers.map { group in
+            MenuModel.Section(
+                header: group.isEmpty ? nil : group,
+                rows: (byGroup[group] ?? [])
+                    .sorted { $0.name < $1.name }
+                    .map { row($0, now: now, locale: locale) })
+        }
+    }
+
+    private static func row(_ tunnel: TunnelStatus, now: Date, locale: Locale) -> MenuModel.Row {
+        var details: [String] = []
+        if let device = tunnel.device {
+            details.append("Interface: \(device)")
+        }
+        if let endpoint = tunnel.endpoint {
+            details.append("Endpoint: \(endpoint)")
+        }
+        if let handshake = tunnel.lastHandshake {
+            details.append("Handshake: \(Formatting.age(now.timeIntervalSince(handshake))) ago")
+        }
+        // Only for a tunnel that is carrying something: the counters are always
+        // on the wire, zero included, and showing "— / —" for a tunnel that is
+        // down is noise.
+        if tunnel.health != .down {
+            details.append(
+                "Received: \(Formatting.bytes(tunnel.rxBytes, locale: locale))"
+                    + "   Sent: \(Formatting.bytes(tunnel.txBytes, locale: locale))")
+        }
+        if let check = tunnel.checkIP {
+            details.append("Checks: \(check)")
+        }
+
+        return MenuModel.Row(title: tunnel.name, symbol: symbol(for: tunnel.health), details: details)
+    }
+
+    private static func symbol(for health: Health) -> String {
+        switch health {
+        case .up: "checkmark.circle.fill"
+        case .stale: "exclamationmark.triangle.fill"
+        case .down: "xmark.circle"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    private static func footnote(state: LinkState, snapshot: Snapshot?, now: Date) -> String {
+        guard let snapshot else { return "Nothing known yet" }
+        let age = Formatting.age(now.timeIntervalSince(snapshot.taken))
+        // A view kept across a disconnection has to say so, or it reads as
+        // current — which is the failure this whole application exists to
+        // avoid.
+        return state.isLive ? "Updated \(age) ago" : "Last known \(age) ago"
+    }
+}
+
+extension LinkState {
+    /// Whether the feed is currently answering.
+    public var isLive: Bool {
+        if case .live = self { return true }
+        return false
+    }
+}
