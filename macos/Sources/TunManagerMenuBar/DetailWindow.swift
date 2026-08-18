@@ -16,9 +16,13 @@ final class DetailModel: ObservableObject {
     @Published var peakDown: Double = 0
     @Published var peakUp: Double = 0
 
+    /// One history per tunnel, kept for as long as the window is open. The
+    /// subscriptions stay open too, so switching away and back shows a
+    /// continuous graph rather than a gap where nobody was looking.
+    ///
     /// Two minutes at a reading a second, which is as much as the chart can
     /// show without each point being narrower than a pixel.
-    private var series = RateSeries(limit: 120)
+    private var series: [String: RateSeries] = [:]
 
     var detail: TunnelDetail? {
         guard let selected, let tunnel = tunnels.first(where: { $0.name == selected }) else {
@@ -30,22 +34,33 @@ final class DetailModel: ObservableObject {
     func select(_ tunnel: String?) {
         guard tunnel != selected else { return }
         selected = tunnel
-        // The history belongs to the tunnel that was showing. Carrying it over
-        // would difference one tunnel's counters against another's.
-        series.clear()
         publishRates()
     }
 
+    /// Every reading is recorded, not only the one on screen: the tunnels left
+    /// behind keep filling, which is what makes coming back to one show an
+    /// unbroken graph.
     func add(_ sample: Sample) {
-        guard sample.tunnel == selected else { return }
-        series.add(at: sample.at, rx: sample.rx, tx: sample.tx)
+        series[sample.tunnel, default: RateSeries(limit: 120)]
+            .add(at: sample.at, rx: sample.rx, tx: sample.tx)
+        if sample.tunnel == selected {
+            publishRates()
+        }
+    }
+
+    /// Everything is forgotten when the window closes, along with the
+    /// subscriptions: a graph resumed hours later would join two points across
+    /// a gap and draw a spike that never happened.
+    func forgetHistory() {
+        series.removeAll()
         publishRates()
     }
 
     private func publishRates() {
-        rates = series.points
-        peakDown = series.peakDown
-        peakUp = series.peakUp
+        let showing = selected.flatMap { series[$0] }
+        rates = showing?.points ?? []
+        peakDown = showing?.peakDown ?? 0
+        peakUp = showing?.peakUp ?? 0
     }
 }
 
@@ -83,8 +98,11 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
             self.window = window
         }
 
-        // An accessory application has nothing frontmost, so without this the
-        // window opens behind whatever the user is looking at.
+        // An accessory application has no Dock icon, no Command-Tab entry, and
+        // nothing frontmost — so its windows open behind whatever the user is
+        // actually looking at. Becoming a regular application while a window is
+        // up fixes all three, and the status item is unaffected either way.
+        NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
         window?.makeKeyAndOrderFront(nil)
     }
@@ -101,10 +119,11 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
 
     private func select(_ tunnel: String?) {
         model.select(tunnel)
+        // No unwatch: the tunnel being left keeps its subscription so its
+        // history goes on filling. They are all released when the window
+        // closes.
         if let tunnel {
             supervisor.watch(tunnel)
-        } else {
-            supervisor.watchNothing()
         }
     }
 
@@ -114,5 +133,9 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
         // Nobody is looking any more, so tun-manager should stop reading
         // counters for us: the same rule the terminal's graph pane follows.
         supervisor.watchNothing()
+        model.forgetHistory()
+        // Back to living in the menu bar alone. The status item stays; only the
+        // Dock icon and the Command-Tab entry go.
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 }

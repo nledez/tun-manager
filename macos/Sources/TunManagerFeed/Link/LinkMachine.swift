@@ -23,17 +23,21 @@ public struct LinkMachine {
     /// the whole shutdown.
     private var attempt = 0
 
-    /// The tunnel the detail window is showing, if it is open.
+    /// Every tunnel the detail window has looked at while it has been open.
+    ///
+    /// A set rather than one name: switching tunnels keeps the old one's
+    /// history growing, so going back to it shows an unbroken graph instead of
+    /// a gap. They are released together when the window closes.
     ///
     /// Held here rather than by the window because it has to outlive the
     /// connection: the publisher forgets every watch when a connection ends, so
-    /// a window left open across a restart needs the subscription sent again.
-    private var watching: String?
+    /// a window left open across a restart needs them sent again.
+    private var watching: Set<String> = []
 
     public init() {}
 
     /// What the window is watching, for whoever needs to route a reading.
-    public var watched: String? { watching }
+    public var watched: Set<String> { watching }
 
     public var isLive: Bool {
         if case .live = state { return true }
@@ -74,8 +78,9 @@ public struct LinkMachine {
             attempt = 0
             state = .live(sawState: false)
             // A window opened before tun-manager was running, or left open
-            // across a restart, is waiting for exactly this.
-            return watching.map { [.send(.watch($0))] } ?? []
+            // across a restart, is waiting for exactly this. Sorted so the
+            // order is the same every time rather than a set's whim.
+            return watching.sorted().map { .send(.watch($0)) }
 
         // Accepted, then closed without a hello: tun-manager is going away.
         case (.connecting, .endOfStream), (.connecting, .streamFailed):
@@ -104,21 +109,23 @@ public struct LinkMachine {
             // An unwatch and a reading can cross on the wire. Charting one for
             // a tunnel the window has already left would draw it into the
             // wrong graph.
-            guard sample.tunnel == watching else { return [] }
+            guard watching.contains(sample.tunnel) else { return [] }
             return [.publishSample(sample)]
 
         case (_, .watch(let tunnel)):
-            guard tunnel != watching else { return [] }
-            let release = watching.map { [LinkAction.send(.unwatch($0))] } ?? []
-            watching = tunnel
+            // The previous tunnel keeps its subscription: its history goes on
+            // filling, so coming back to it shows a continuous graph rather
+            // than a gap where nobody was looking.
+            guard watching.insert(tunnel).inserted else { return [] }
             // Nothing to send while there is no connection; the hello above
-            // sends it once there is one.
-            return isLive ? release + [.send(.watch(tunnel))] : []
+            // sends them all once there is one.
+            return isLive ? [.send(.watch(tunnel))] : []
 
         case (_, .watchNothing):
-            guard let tunnel = watching else { return [] }
-            watching = nil
-            return isLive ? [.send(.unwatch(tunnel))] : []
+            guard !watching.isEmpty else { return [] }
+            let released = watching.sorted()
+            watching = []
+            return isLive ? released.map { .send(.unwatch($0)) } : []
 
         case (.retrying, .retryTimerFired),
             (.retrying, .userAskedToRetry),

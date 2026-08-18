@@ -236,15 +236,17 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     #expect(machine.handle(.watch("alpha")) == [.send(.watch("alpha"))])
 }
 
-@Test func watchingASecondTunnelReleasesTheFirst() {
-    // The window shows one tunnel at a time. Leaving the old subscription open
-    // would have tun-manager reading counters nobody is looking at.
+@Test func watchingASecondTunnelKeepsTheFirst() {
+    // Switching tunnels in the window must not cost the first one's history:
+    // going back to it should show a continuous graph, not a gap where nobody
+    // happened to be looking.
     var machine = LinkMachine()
     _ = machine.handle(.start)
     _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
     _ = machine.handle(.watch("alpha"))
 
-    #expect(machine.handle(.watch("bravo")) == [.send(.unwatch("alpha")), .send(.watch("bravo"))])
+    #expect(machine.handle(.watch("bravo")) == [.send(.watch("bravo"))])
+    #expect(machine.watched == ["alpha", "bravo"])
 }
 
 @Test func watchingTheTunnelAlreadyWatchedSaysNothingTwice() {
@@ -256,14 +258,33 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     #expect(machine.handle(.watch("alpha")).isEmpty)
 }
 
-@Test func closingTheWindowReleasesTheTunnel() {
+@Test func closingTheWindowReleasesEveryTunnelItLookedAt() {
+    // Nobody is looking any more, so tun-manager should stop reading counters
+    // for any of them.
     var machine = LinkMachine()
     _ = machine.handle(.start)
     _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("bravo"))
     _ = machine.handle(.watch("alpha"))
 
-    #expect(machine.handle(.watchNothing) == [.send(.unwatch("alpha"))])
+    #expect(machine.handle(.watchNothing) == [.send(.unwatch("alpha")), .send(.unwatch("bravo"))])
+    #expect(machine.watched.isEmpty)
     #expect(machine.handle(.watchNothing).isEmpty)
+}
+
+@Test func everyWatchedTunnelIsRenewedTogetherAfterAReconnection() {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+    _ = machine.handle(.watch("bravo"))
+    _ = machine.handle(.watch("alpha"))
+
+    _ = machine.handle(.endOfStream)
+    _ = machine.handle(.retryTimerFired)
+
+    #expect(
+        machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
+            == [.send(.watch("alpha")), .send(.watch("bravo"))])
 }
 
 @Test func aWatchAskedForWhileTheLinkIsDownIsSentOnceItComesBack() {
@@ -322,6 +343,6 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0")))
     _ = machine.handle(.watch("alpha"))
 
-    let stray = Sample(tunnel: "bravo", at: anInstant, rx: 100, tx: 50)
+    let stray = Sample(tunnel: "charlie", at: anInstant, rx: 100, tx: 50)
     #expect(machine.handle(.message(.sample(stray))).isEmpty)
 }

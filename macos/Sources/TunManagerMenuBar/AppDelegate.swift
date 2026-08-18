@@ -31,6 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         supervisor.start()
     }
 
+    /// Closing the window leaves the application in the menu bar, which is
+    /// where it lives. Quitting is the Quit item, and nothing else.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         supervisor?.stop()
     }
