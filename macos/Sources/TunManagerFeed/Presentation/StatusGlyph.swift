@@ -36,6 +36,11 @@ public struct StatusGlyph: Sendable, Equatable {
         }
     }
 
+    /// The needed group is what has to work; extra is offered rather than
+    /// expected, and a tunnel in it being off is the ordinary state of affairs.
+    /// Judging every tunnel alike showed a crossed shield because an optional
+    /// tunnel was down, which is the menu bar crying wolf — and the only value
+    /// a status icon has is that it is believed.
     private static func live(_ snapshot: Snapshot) -> StatusGlyph {
         let tunnels = snapshot.tunnels
         guard !tunnels.isEmpty else {
@@ -45,21 +50,44 @@ public struct StatusGlyph: Sendable, Equatable {
                 symbol: "shield", dimmed: false, description: "Tun Manager: no tunnels configured")
         }
 
-        let up = tunnels.filter { $0.health == .up }.count
-        if tunnels.contains(where: { $0.health == .down }) {
+        let needed = tunnels.filter { $0.group == GroupName.needed }
+        // With no needed group at all, "every needed tunnel is up" would be
+        // true because there are none, and a configuration that defines no
+        // groups would show all-clear with everything down.
+        let judged = needed.isEmpty ? tunnels : needed
+        let others = needed.isEmpty ? [] : tunnels.filter { $0.group != GroupName.needed }
+
+        let up = judged.filter { $0.health == .up }.count
+        let othersDown = others.filter { $0.health != .up }.count
+        let what = needed.isEmpty ? "tunnels" : "needed"
+
+        if judged.contains(where: { $0.health == .down }) {
             return StatusGlyph(
                 symbol: "xmark.shield.fill", dimmed: false,
-                description: "Tun Manager: \(up) of \(tunnels.count) tunnels up")
+                description: describe(up, of: judged.count, what, othersDown))
         }
-        if tunnels.contains(where: { $0.health != .up }) {
-            // Stale, or a health this build does not know. Either way it is not
-            // a promise that traffic is flowing.
+        if judged.contains(where: { $0.health != .up }) {
+            // Stale, or a health this build does not know. Up, and nothing
+            // getting through: not down, and not fine either.
             return StatusGlyph(
                 symbol: "exclamationmark.shield.fill", dimmed: false,
-                description: "Tun Manager: \(up) of \(tunnels.count) tunnels up")
+                description: describe(up, of: judged.count, what, othersDown))
         }
         return StatusGlyph(
-            symbol: "checkmark.shield.fill", dimmed: false,
-            description: "Tun Manager: all \(tunnels.count) tunnels up")
+            // Outlined rather than filled when something optional is off. Worth
+            // seeing at a glance, not worth an alarm.
+            symbol: othersDown == 0 ? "checkmark.shield.fill" : "checkmark.shield",
+            dimmed: false,
+            description: describe(up, of: judged.count, what, othersDown))
+    }
+
+    private static func describe(_ up: Int, of total: Int, _ what: String, _ othersDown: Int)
+        -> String
+    {
+        var sentence = "Tun Manager: \(up) of \(total) \(what) tunnels up"
+        if othersDown > 0 {
+            sentence += ", \(othersDown) other\(othersDown == 1 ? "" : "s") down"
+        }
+        return sentence
     }
 }
