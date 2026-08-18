@@ -197,3 +197,35 @@ private func eventually(
 
     #expect(recorder.samples[0].rx == 9)
 }
+
+@MainActor
+@Test func askingForAPingPutsTheVerbOnTheWire() async {
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n"])])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.start()
+    await eventually("the link to go live") { supervisor.state == .live(sawState: false) }
+
+    supervisor.askForPing("alpha")
+
+    // Through the JSON rather than the bytes: field order carries no meaning
+    // there, the publisher unmarshals into a struct, and JSONEncoder sorts.
+    await eventually("the verb to be sent") { !transport.sent.isEmpty }
+    let fields = transport.sent.map {
+        (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: String]
+    }
+    #expect(fields.contains(["type": "ping", "tunnel": "alpha"]))
+}
+
+@MainActor
+@Test func aRoundOfProbesReachesWhoeverDraws() async {
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n"])])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.start()
+    await eventually("the link to go live") { supervisor.state == .live(sawState: false) }
+
+    transport.push(Fixtures.ping + "\n")
+    await eventually("the round of probes") { supervisor.pings["alpha"] != nil }
+
+    #expect(supervisor.pings["alpha"]?.rtt == .milliseconds(18.4))
+    #expect(supervisor.pings["bravo"]?.error == "timeout")
+}

@@ -24,6 +24,12 @@ enum Fixtures {
         "taken":"2026-08-17T14:03:11.123456789+02:00","tunnels":[]}
         """
 
+    /// A round of probes: one that answered, one that did not.
+    static let ping = """
+        {"type":"ping","results":[{"tunnel":"alpha","rtt_ms":18.4},\
+        {"tunnel":"bravo","error":"timeout"}]}
+        """
+
     static let bye = #"{"type":"bye"}"#
 
     static func line(_ text: String) -> Data { Data(text.utf8) }

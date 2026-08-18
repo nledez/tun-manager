@@ -28,6 +28,8 @@ public final class FeedSupervisor {
     public var state: LinkState { machine.state }
     public var snapshot: Snapshot? { machine.snapshot }
     public var publisherVersion: String? { machine.publisherVersion }
+    /// The most recent probe of each tunnel, keyed by name.
+    public var pings: [String: Ping] { machine.pings }
 
     public func start() { dispatch(.start) }
     public func stop() { dispatch(.stop) }
@@ -40,6 +42,17 @@ public final class FeedSupervisor {
     /// when the next connection greets us.
     public func watch(_ tunnel: String) { dispatch(.watch(tunnel)) }
     public func watchNothing() { dispatch(.watchNothing) }
+
+    /// Asks tun-manager to probe a tunnel's check address, or every one it
+    /// knows when the name is nil.
+    ///
+    /// This is the one thing this application asks for that has an effect
+    /// outside the publisher's process. It names a tunnel, never an address:
+    /// what gets probed comes from that tunnel's configuration, so nothing sent
+    /// from here can reach somewhere tun-manager was not already told about.
+    /// Dropped while there is no connection, and floored by the publisher at
+    /// one round every two seconds.
+    public func askForPing(_ tunnel: String? = nil) { dispatch(.askForPing(tunnel)) }
 
     private func dispatch(_ event: LinkEvent) {
         for action in machine.handle(event) {

@@ -54,6 +54,8 @@ public enum FeedDecoder {
                 return .state(try decoder.decode(WireState.self, from: line).snapshot)
             case "sample":
                 return .sample(try decoder.decode(WireSample.self, from: line).sample)
+            case "ping":
+                return .ping(try decoder.decode(WirePing.self, from: line).pings)
             case "bye":
                 return .bye
             default:
@@ -127,6 +129,34 @@ private struct WireTunnel: Decodable {
             name: name, group: group, health: Health(wire: health),
             device: device, endpoint: endpoint, checkIP: checkIP,
             lastHandshake: lastHandshake, rxBytes: rxBytes, txBytes: txBytes)
+    }
+}
+
+private struct WirePing: Decodable {
+    /// Not optional, for the same reason a state line's tunnels are not: the
+    /// publisher builds this slice explicitly so it marshals as [] rather than
+    /// null, which makes a null a broken line rather than an empty round.
+    let results: [WirePingResult]
+
+    var pings: [Ping] { results.map(\.value) }
+}
+
+private struct WirePingResult: Decodable {
+    let tunnel: String
+    /// Milliseconds, and absent when the probe failed.
+    let rttMs: Double?
+    let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case tunnel, error
+        case rttMs = "rtt_ms"
+    }
+
+    var value: Ping {
+        Ping(
+            tunnel: tunnel,
+            rtt: rttMs.map { .milliseconds($0) },
+            error: error)
     }
 }
 

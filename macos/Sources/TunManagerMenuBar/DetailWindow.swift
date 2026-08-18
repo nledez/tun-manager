@@ -7,11 +7,25 @@ import TunManagerFeed
 // RateSeries turns counters into rates. See macos/docs/coverage-gaps.md,
 // "the menu bar target".
 
+/// What the sidebar is pointing at.
+///
+/// An enum rather than an optional name, because "the overview" is a thing to
+/// select and not the absence of a selection — and a sentinel string would
+/// collide with a tunnel unlucky enough to be called that.
+enum DetailSelection: Hashable {
+    case overview
+    case tunnel(String)
+}
+
 /// What the window is showing, shared with the SwiftUI view.
 @MainActor
 final class DetailModel: ObservableObject {
     @Published var tunnels: [TunnelStatus] = []
-    @Published var selected: String?
+    @Published var selection: DetailSelection = .overview
+    /// The most recent probe of each tunnel, as tun-manager measured it. This
+    /// application never probes anything itself: the check addresses are
+    /// reachable only through the tunnels, which belong to the root process.
+    @Published var pings: [String: Ping] = [:]
     @Published var rates: [Rate] = []
     @Published var peakDown: Double = 0
     @Published var peakUp: Double = 0
@@ -27,16 +41,29 @@ final class DetailModel: ObservableObject {
     /// are as fresh as the chart beside them.
     private var latest: [String: Sample] = [:]
 
+    /// The tunnel on screen, or nil while the overview is.
+    var selected: String? {
+        guard case .tunnel(let name) = selection else { return nil }
+        return name
+    }
+
     var detail: TunnelDetail? {
         guard let selected, let tunnel = tunnels.first(where: { $0.name == selected }) else {
             return nil
         }
-        return TunnelDetail(tunnel, latest: latest[tunnel.name], now: Date())
+        return TunnelDetail(
+            tunnel, latest: latest[tunnel.name], ping: pings[tunnel.name], now: Date())
     }
 
-    func select(_ tunnel: String?) {
-        guard tunnel != selected else { return }
-        selected = tunnel
+    /// Every tunnel as a row of the table — the same four columns the terminal
+    /// shows. Built here rather than in the view so the choices are testable.
+    var rows: [TunnelRow] {
+        TunnelTable.rows(tunnels, pings: pings, latest: latest, now: Date())
+    }
+
+    func select(_ selection: DetailSelection) {
+        guard selection != self.selection else { return }
+        self.selection = selection
         publishRates()
     }
 
@@ -81,11 +108,20 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    /// Shows the window with this tunnel selected, creating it the first time.
-    func show(tunnel: String, tunnels: [TunnelStatus]) {
+    /// Shows the window, creating it the first time.
+    ///
+    /// - Parameter tunnel: what to select, or nil for the overview.
+    func show(tunnel: String?, tunnels: [TunnelStatus]) {
         model.tunnels = tunnels
-        model.select(tunnel)
-        supervisor.watch(tunnel)
+        model.pings = supervisor.pings
+        model.select(tunnel.map(DetailSelection.tunnel) ?? .overview)
+        if let tunnel {
+            supervisor.watch(tunnel)
+        }
+        // One round on opening, so the latency column is not blank on arrival.
+        // The publisher accepts at most one every two seconds, which is what
+        // makes asking at the moment somebody looks safe.
+        supervisor.askForPing(tunnel)
 
         if window == nil {
             let window = NSWindow(
@@ -94,9 +130,10 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
                 backing: .buffered, defer: false)
             window.title = "Tun Manager"
             window.contentView = NSHostingView(
-                rootView: DetailView(model: model, onSelect: { [weak self] name in
-                    self?.select(name)
-                }))
+                rootView: DetailView(
+                    model: model,
+                    onSelect: { [weak self] selection in self?.select(selection) },
+                    onPing: { [weak self] name in self?.supervisor.askForPing(name) }))
             window.isReleasedWhenClosed = false
             window.center()
             window.delegate = self
@@ -114,21 +151,29 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
 
     func update(tunnels: [TunnelStatus]) {
         model.tunnels = tunnels
-        // The tunnel being shown may have gone from the configuration.
+        model.pings = supervisor.pings
+        // The tunnel being shown may have gone from the configuration. Falling
+        // back to the overview rather than to another tunnel: silently
+        // switching to a neighbour is how somebody reads the wrong graph.
         if let selected = model.selected, !tunnels.contains(where: { $0.name == selected }) {
-            select(tunnels.first?.name)
+            select(.overview)
         }
     }
 
+    /// A round of probes arrived, or the link moved. Either way the numbers on
+    /// screen come from the supervisor rather than from anything kept here.
+    func refreshPings() { model.pings = supervisor.pings }
+
     func add(_ sample: Sample) { model.add(sample) }
 
-    private func select(_ tunnel: String?) {
-        model.select(tunnel)
+    private func select(_ selection: DetailSelection) {
+        model.select(selection)
         // No unwatch: the tunnel being left keeps its subscription so its
         // history goes on filling. They are all released when the window
         // closes.
-        if let tunnel {
-            supervisor.watch(tunnel)
+        if case .tunnel(let name) = selection {
+            supervisor.watch(name)
+            supervisor.askForPing(name)
         }
     }
 
@@ -139,6 +184,9 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
         // counters for us: the same rule the terminal's graph pane follows.
         supervisor.watchNothing()
         model.forgetHistory()
+        // Back to the overview, so reopening does not land on whatever was last
+        // looked at with an empty graph under it.
+        model.select(.overview)
         // Back to living in the menu bar alone. The status item stays; only the
         // Dock icon and the Command-Tab entry go.
         NSApplication.shared.setActivationPolicy(.accessory)

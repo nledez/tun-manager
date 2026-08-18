@@ -41,6 +41,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     func linkDidChange(state: LinkState, snapshot: Snapshot?, publisherVersion: String?) {
         redraw()
+        // A round of probes arrives as a change like any other: the machine
+        // keeps the results, and whoever draws reads them from it.
+        details.refreshPings()
     }
 
     func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff) {

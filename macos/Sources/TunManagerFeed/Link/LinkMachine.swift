@@ -34,6 +34,10 @@ public struct LinkMachine {
     /// a window left open across a restart needs them sent again.
     private var watching: Set<String> = []
 
+    /// The most recent probe of each tunnel, kept across a disconnection for
+    /// the same reason the snapshot is: what was last known beats a blank.
+    public private(set) var pings: [String: Ping] = [:]
+
     public init() {}
 
     /// What the window is watching, for whoever needs to route a reading.
@@ -90,7 +94,26 @@ public struct LinkMachine {
             let diff = SnapshotDiff.between(snapshot, and: view)
             snapshot = view
             state = .live(sawState: true)
+            // A tunnel that has left the configuration takes its last measured
+            // latency with it, so a name reused later cannot inherit it.
+            let names = Set(view.tunnels.map(\.name))
+            pings = pings.filter { names.contains($0.key) }
             return [.publish(view, diff)]
+
+        case (.live, .message(.ping(let round))):
+            // Merged rather than replaced: a round covering one tunnel must not
+            // blank out what is known about the others.
+            for ping in round {
+                pings[ping.tunnel] = ping
+            }
+            return []
+
+        case (_, .askForPing(let tunnel)):
+            // Nothing to queue while the link is down. A watch is restored on
+            // the next hello because it is a standing subscription; a probe is
+            // a question about right now, and answering it two minutes later
+            // would be answering a different question.
+            return isLive ? [.send(.ping(tunnel))] : []
 
         case (.live, .message(.bye)):
             return [.closeConnection] + retry(because: .goodbye)

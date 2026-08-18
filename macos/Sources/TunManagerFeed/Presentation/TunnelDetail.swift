@@ -19,12 +19,15 @@ public struct TunnelDetail: Sendable, Equatable {
     public let group: String
     public let facts: [Fact]
 
-    /// - Parameter latest: the most recent reading of this tunnel's counters,
-    ///   if it is being watched. The view's own counters are minutes old by the
-    ///   time anybody reads them, and showing those beside a chart drawn from
-    ///   fresher ones is the window disagreeing with itself.
+    /// - Parameters:
+    ///   - latest: the most recent reading of this tunnel's counters, if it is
+    ///     being watched. The view's own counters are minutes old by the time
+    ///     anybody reads them, and showing those beside a chart drawn from
+    ///     fresher ones is the window disagreeing with itself.
+    ///   - ping: the most recent probe of its check address, if anybody asked
+    ///     for one.
     public init(
-        _ tunnel: TunnelStatus, latest: Sample? = nil, now: Date,
+        _ tunnel: TunnelStatus, latest: Sample? = nil, ping: Ping? = nil, now: Date,
         locale: Locale = .autoupdatingCurrent
     ) {
         name = tunnel.name
@@ -63,6 +66,18 @@ public struct TunnelDetail: Sendable, Equatable {
         if let check = tunnel.checkIP {
             facts.append(Fact(label: "Checks", value: check))
         }
+        // Only when somebody asked. A blank row would read as "no answer",
+        // which is a different thing from "never probed".
+        if let ping, tunnel.health != .down {
+            facts.append(Fact(label: "Ping", value: Self.latency(ping)))
+        }
         self.facts = facts
+    }
+
+    /// Whole milliseconds, as the terminal shows them: a tenth of a millisecond
+    /// over a tunnel is noise dressed as precision.
+    private static func latency(_ ping: Ping) -> String {
+        guard let rtt = ping.rtt else { return ping.error ?? "no answer" }
+        return "\(Int((rtt / .milliseconds(1)).rounded()))ms"
     }
 }

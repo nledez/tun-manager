@@ -17,6 +17,10 @@ public enum LinkEvent: Sendable, Equatable {
     case watch(String)
     /// The window closed.
     case watchNothing
+    /// Somebody asked for a probe of this tunnel, or of every tunnel when the
+    /// name is nil. Dropped while there is no connection: unlike a watch there
+    /// is nothing to restore, because a measurement is wanted now or not at all.
+    case askForPing(String?)
 }
 
 /// Everything the machine can ask the world to do. The machine performs no I/O

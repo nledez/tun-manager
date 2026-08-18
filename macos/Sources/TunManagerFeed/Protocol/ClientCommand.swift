@@ -2,7 +2,7 @@ import Foundation
 
 /// The verbs this client may send.
 ///
-/// The publisher accepts these three and no others, and none of them can start
+/// The publisher accepts these four and no others, and none of them can start
 /// or stop a tunnel — which is the whole reason the socket needs no
 /// authorisation.
 public enum ClientCommand: Sendable, Equatable {
@@ -15,6 +15,16 @@ public enum ClientCommand: Sendable, Equatable {
     /// ignored, silently.
     case watch(String)
     case unwatch(String)
+    /// Asks the publisher to probe a tunnel's check address, or every one it
+    /// knows when the name is nil.
+    ///
+    /// This is the one verb with an effect outside the publisher: honouring it
+    /// makes a process running as root send packets. What bounds it is that
+    /// this names a *tunnel* — the address comes from that tunnel's
+    /// configuration, so nothing sent from here can reach an address the
+    /// publisher was not already told about. Accepted at most once every two
+    /// seconds, and answered by a `ping` line or not at all.
+    case ping(String?)
 
     public var line: Data {
         // Encoded rather than interpolated. Tunnel names come from file names
@@ -44,6 +54,8 @@ private struct Wire: Encodable {
             (type, tunnel) = ("watch", name)
         case .unwatch(let name):
             (type, tunnel) = ("unwatch", name)
+        case .ping(let name):
+            (type, tunnel) = ("ping", name)
         }
     }
 

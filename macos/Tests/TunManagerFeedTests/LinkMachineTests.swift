@@ -346,3 +346,91 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     let stray = Sample(tunnel: "charlie", at: anInstant, rx: 100, tx: 50)
     #expect(machine.handle(.message(.sample(stray))).isEmpty)
 }
+
+// MARK: - Pings
+
+/// A machine that has connected and been greeted.
+private func aLiveMachine() -> LinkMachine {
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.4.0")))
+    return machine
+}
+
+@Test func askingForAPingSendsTheVerbWhileTheLinkIsLive() {
+    var machine = aLiveMachine()
+
+    #expect(machine.handle(.askForPing("alpha")) == [.send(.ping("alpha"))])
+}
+
+@Test func aPingEventWithNoNameSendsTheVerbWithNoName() {
+    var machine = aLiveMachine()
+
+    #expect(machine.handle(.askForPing(nil)) == [.send(.ping(nil))])
+}
+
+@Test func askingForAPingWhileDisconnectedIsDroppedRatherThanQueued() {
+    // A watch is restored on the next hello because it is a standing
+    // subscription. A probe is a question about right now, and answering it two
+    // minutes later would answer a different question.
+    var machine = LinkMachine()
+    _ = machine.handle(.start)
+    _ = machine.handle(.connectFailed(ENOENT))
+
+    #expect(machine.handle(.askForPing("alpha")).isEmpty)
+}
+
+@Test func aPingIsNotResentOnTheNextHelloTheWayAWatchIs() {
+    var machine = aLiveMachine()
+    _ = machine.handle(.askForPing("alpha"))
+    _ = machine.handle(.endOfStream)
+    _ = machine.handle(.retryTimerFired)
+
+    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.4.0")))
+
+    #expect(onHello.isEmpty)
+}
+
+@Test func aRoundOfProbesIsKeptForWhoeverDraws() {
+    var machine = aLiveMachine()
+
+    _ = machine.handle(.message(.ping([Ping(tunnel: "alpha", rtt: .milliseconds(18))])))
+
+    #expect(machine.pings["alpha"]?.rtt == .milliseconds(18))
+}
+
+@Test func aRoundCoveringOneTunnelDoesNotBlankTheOthers() {
+    // Asking about one tunnel is the common case: the window is showing it.
+    var machine = aLiveMachine()
+    _ = machine.handle(
+        .message(
+            .ping([
+                Ping(tunnel: "alpha", rtt: .milliseconds(18)),
+                Ping(tunnel: "bravo", rtt: .milliseconds(31)),
+            ])))
+
+    _ = machine.handle(.message(.ping([Ping(tunnel: "alpha", rtt: .milliseconds(20))])))
+
+    #expect(machine.pings["alpha"]?.rtt == .milliseconds(20))
+    #expect(machine.pings["bravo"]?.rtt == .milliseconds(31))
+}
+
+@Test func aTunnelThatLeavesTheConfigurationTakesItsLatencyWithIt() {
+    // Otherwise a name reused later inherits a measurement of something else.
+    var machine = aLiveMachine()
+    _ = machine.handle(.message(.state(aSnapshot("alpha", "bravo"))))
+    _ = machine.handle(.message(.ping([Ping(tunnel: "bravo", rtt: .milliseconds(31))])))
+
+    _ = machine.handle(.message(.state(aSnapshot("alpha"))))
+
+    #expect(machine.pings["bravo"] == nil)
+}
+
+@Test func aMeasuredLatencySurvivesADisconnectionTheWayTheSnapshotDoes() {
+    var machine = aLiveMachine()
+    _ = machine.handle(.message(.ping([Ping(tunnel: "alpha", rtt: .milliseconds(18))])))
+
+    _ = machine.handle(.endOfStream)
+
+    #expect(machine.pings["alpha"]?.rtt == .milliseconds(18))
+}

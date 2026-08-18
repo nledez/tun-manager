@@ -101,3 +101,31 @@ private func detail(_ tunnel: TunnelStatus) -> TunnelDetail {
 
     #expect(got.facts.first { $0.label == "Received" }?.value == "1000 bytes")
 }
+
+@Test func aProbedTunnelShowsItsLatency() {
+    let tunnel = TunnelStatus(name: "alpha", group: "needed", health: .up)
+
+    let detail = TunnelDetail(
+        tunnel, ping: Ping(tunnel: "alpha", rtt: .milliseconds(18.4)), now: Date())
+
+    #expect(detail.facts.contains(TunnelDetail.Fact(label: "Ping", value: "18ms")))
+}
+
+@Test func aProbeThatGotNoAnswerSaysWhyRatherThanShowingZero() {
+    let tunnel = TunnelStatus(name: "alpha", group: "needed", health: .up)
+
+    let detail = TunnelDetail(
+        tunnel, ping: Ping(tunnel: "alpha", error: "timeout"), now: Date())
+
+    #expect(detail.facts.contains(TunnelDetail.Fact(label: "Ping", value: "timeout")))
+}
+
+@Test func aTunnelNobodyProbedHasNoLatencyRowAtAll() {
+    // A blank row reads as "no answer", which is a different thing from
+    // "never asked".
+    let tunnel = TunnelStatus(name: "alpha", group: "needed", health: .up)
+
+    let detail = TunnelDetail(tunnel, now: Date())
+
+    #expect(!detail.facts.contains { $0.label == "Ping" })
+}
