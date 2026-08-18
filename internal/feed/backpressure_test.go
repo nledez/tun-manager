@@ -63,6 +63,13 @@ func TestAClientThatNeverReadsIsDroppedRatherThanWaitedFor(t *testing.T) {
 	}
 	defer silent.Close()
 
+	// net.Dial returns once the connection is established, which is before the
+	// accept loop has registered it. Publishing at that point sees no clients,
+	// does nothing, and then fails when the client turns up a moment later.
+	eventually(t, "the silent client to be registered", func() bool {
+		return s.clientCount() == 1
+	})
+
 	publishUntil(t, s, 0)
 }
 
@@ -123,6 +130,13 @@ func TestDroppingOneClientLeavesTheOthersServed(t *testing.T) {
 	}()
 
 	<-started
+
+	// Waiting for the attentive client's hello says nothing about whether the
+	// silent one has been registered yet; without this, publishUntil can
+	// equally start against a count of 1 and finish against 2.
+	eventually(t, "both clients to be registered", func() bool {
+		return s.clientCount() == 2
+	})
 
 	publishUntil(t, s, 1)
 
