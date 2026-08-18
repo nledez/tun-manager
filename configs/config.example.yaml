@@ -36,9 +36,10 @@ refresh_interval: 5m
 # none from anywhere.
 notify: false
 
-# The status feed: a read-only unix socket, published while the TUI runs, that
-# the menu bar application subscribes to. Nothing sent to it can start or stop a
-# tunnel, which is why it needs no privileges of its own.
+# The status feed: a unix socket, published while the TUI runs, that the menu bar
+# application subscribes to. Nothing sent to it can start or stop a tunnel, which
+# is why it needs no privileges of its own. A client can ask for a ping, which
+# probes an address this file already names - never one the client chose.
 #
 # The socket is created by root and handed to whoever ran `sudo tun-manager`,
 # mode 0600. It exists only while the TUI is running: there is no daemon.

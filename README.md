@@ -160,10 +160,19 @@ feed_socket: /var/run/tun-manager.sock  # default
 The socket is created by root and handed to whoever ran `sudo tun-manager`,
 mode `0600`. It carries the same JSON as `tun-manager status --json`, one
 object per line, plus a `hello` on connect, a `sample` once a second for each
-tunnel a client asked to watch, and a `bye` on the way out.
+tunnel a client asked to watch, a `ping` when a probe round finishes, and a
+`bye` on the way out.
 
 **Nothing on that socket can start or stop a tunnel.** A client may watch a
-tunnel's counters and ask for a refresh, and that is the whole vocabulary.
+tunnel's counters, ask for a refresh, and ask for a ping. That is the whole
+vocabulary.
+
+The ping is the one verb with an effect outside the process: honouring it makes
+`tun-manager`, which runs as root, send packets. What bounds it is that a client
+names a *tunnel*, never an address — the address comes from that tunnel's
+`# TO_CHECK=` line, so no name arriving on the socket can make `tun-manager`
+reach somewhere it was not already configured to reach. Rounds are rate-limited
+to one every two seconds, as refreshes are.
 
 It is only alive while `tun-manager` is: there is no daemon. Run
 `sudo tun-manager doctor` to see where the socket would bind and who could

@@ -4,13 +4,16 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
+	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wg"
+	"ledez.net/tun-manager/internal/wire"
 )
 
 var errRefresh = errors.New("read the control socket: permission denied")
@@ -19,12 +22,19 @@ var errRefresh = errors.New("read the control socket: permission denied")
 type recorder struct {
 	mu    sync.Mutex
 	views []app.View
+	pings [][]wire.Ping
 }
 
 func (r *recorder) Publish(v app.View) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.views = append(r.views, v)
+}
+
+func (r *recorder) PublishPings(p []wire.Ping) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pings = append(r.pings, p)
 }
 
 func (r *recorder) count() int {
@@ -157,5 +167,93 @@ func TestNextRequestReturnsWhatArrived(t *testing.T) {
 	}
 	if msg.req.Kind != feed.RequestRefresh {
 		t.Errorf("req = %+v, want a refresh", msg.req)
+	}
+}
+
+func TestAProbeRoundIsPublished(t *testing.T) {
+	// The measurement exists in the interface either way; publishing it is what
+	// lets a second program show the same number rather than take its own.
+	rec := &recorder{}
+	m := loadedModel(threeRows...)
+	m.feed = rec
+
+	_, cmd := m.Update(pingMsg{results: map[string]probe.Result{
+		"10.20.30.a": {RTT: 18 * time.Millisecond},
+	}})
+	run(cmd)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.pings) != 1 {
+		t.Fatalf("published %d round(s), want one", len(rec.pings))
+	}
+	if got := rec.pings[0]; len(got) != 1 || got[0].Tunnel != "alpha" || got[0].RTT != 18 {
+		t.Errorf("pings = %+v, want alpha at 18ms", got)
+	}
+}
+
+func TestAProbeRoundThatMeasuredNothingIsNotPublished(t *testing.T) {
+	// An empty round is what a probe of a tunnel that is down produces. Sending
+	// it would clear whatever a client is showing, which is not what was
+	// learned.
+	rec := &recorder{}
+	m := loadedModel(threeRows...)
+	m.feed = rec
+
+	_, cmd := m.Update(pingMsg{results: map[string]probe.Result{}})
+	run(cmd)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.pings) != 0 {
+		t.Errorf("published %+v, want nothing", rec.pings)
+	}
+}
+
+func TestARequestedPingProbesRatherThanRefreshes(t *testing.T) {
+	// A ping and a refresh cost different things and answer different
+	// questions: asking for one must not run the other.
+	reqs := make(chan feed.Request, 1)
+	m := loadedModel(threeRows...)
+	m.requests = reqs
+
+	next, cmd := m.Update(requestMsg{req: feed.Request{Kind: feed.RequestPing}, from: reqs})
+
+	if next.(Model).refreshing {
+		t.Error("refreshing = true, want a ping rather than a refresh")
+	}
+	if !next.(Model).pinging {
+		t.Error("pinging = false, want the probe started")
+	}
+	if cmd == nil {
+		t.Error("cmd = nil, want the probe and the next request listened for")
+	}
+}
+
+func TestARequestedPingProbesOnlyTheTunnelItNamed(t *testing.T) {
+	// A client asking about one tunnel must not make the publisher send packets
+	// to every address it knows.
+	view := viewOf(threeRows...)
+
+	if got := pingTargets(view, "alpha"); len(got) != 1 || got[0] != "10.20.30.a" {
+		t.Errorf("targets = %v, want alpha's check address alone", got)
+	}
+}
+
+func TestAPingThatNamesNoTunnelProbesThemAll(t *testing.T) {
+	view := viewOf(row("alpha", profile.GroupNeeded, wg.Up), row("bravo", profile.GroupNeeded, wg.Up))
+
+	if got := pingTargets(view, ""); len(got) != 2 {
+		t.Errorf("targets = %v, want every tunnel that is up", got)
+	}
+}
+
+func TestAPingForATunnelThatIsDownProbesNothing(t *testing.T) {
+	// Its address is unreachable by construction, and the timeout would be read
+	// as a fault rather than as the tunnel being off.
+	view := viewOf(row("bravo", profile.GroupNeeded, wg.Down))
+
+	if got := pingTargets(view, "bravo"); len(got) != 0 {
+		t.Errorf("targets = %v, want nothing to probe", got)
 	}
 }

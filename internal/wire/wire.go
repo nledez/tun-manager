@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/wg"
 )
 
@@ -38,6 +39,20 @@ type Tunnel struct {
 	LastHandshake string `json:"last_handshake,omitempty"`
 	RxBytes       int64  `json:"rx_bytes"`
 	TxBytes       int64  `json:"tx_bytes"`
+}
+
+// Ping is one probe of a tunnel's check address.
+//
+// Keyed by tunnel rather than by address: the publisher already knows which
+// address belongs to which tunnel, and making every consumer redo that mapping
+// is how the two drift apart.
+type Ping struct {
+	Tunnel string `json:"tunnel"`
+	// Milliseconds. Absent when the probe failed, because zero is a
+	// measurement and "no answer" is not.
+	RTT float64 `json:"rtt_ms,omitempty"`
+	// Why it failed, when it did.
+	Error string `json:"error,omitempty"`
 }
 
 // View is the whole picture at one instant.
@@ -77,6 +92,29 @@ func Of(v app.View) View {
 			t.LastHandshake = r.Peer.LastHandshake.Format(time.RFC3339)
 		}
 		out.Tunnels = append(out.Tunnels, t)
+	}
+	return out
+}
+
+// PingsOf pairs a round of probes with the tunnels they were run for.
+//
+// Only tunnels that were actually probed appear. A tunnel that is down, or that
+// has no check address, was never asked — and an entry for it would read as a
+// probe that found nothing.
+func PingsOf(view app.View, results map[string]probe.Result) []Ping {
+	out := make([]Ping, 0, len(results))
+	for _, row := range view.Rows {
+		result, probed := results[row.Tunnel.CheckIP]
+		if row.Tunnel.CheckIP == "" || !probed {
+			continue
+		}
+		ping := Ping{Tunnel: row.Tunnel.Name}
+		if result.Err != nil {
+			ping.Error = result.Err.Error()
+		} else {
+			ping.RTT = float64(result.RTT) / float64(time.Millisecond)
+		}
+		out = append(out, ping)
 	}
 	return out
 }

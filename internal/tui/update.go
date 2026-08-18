@@ -6,9 +6,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/notify"
+	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/rate"
+	"ledez.net/tun-manager/internal/wire"
 )
 
 // Update advances the state machine. It performs no I/O: everything that talks
@@ -34,7 +37,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for host, res := range msg.results {
 			m.pings[host] = res
 		}
-		return m, nil
+		return m, m.publishPings(msg.results)
 
 	case eventMsg:
 		return m.onEvent(msg)
@@ -68,6 +71,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Listening again first: whatever this request turns into, the next one
 		// still has to be heard.
 		listen := nextRequest(msg.from)
+		if msg.req.Kind == feed.RequestPing {
+			if m.pinging {
+				return m, listen
+			}
+			m.pinging = true
+			return m, tea.Batch(m.probe(pingTargets(m.view, msg.req.Tunnel)), m.heartbeat(), listen)
+		}
 		if m.refreshing {
 			return m, listen
 		}
@@ -75,6 +85,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh(), m.heartbeat(), listen)
 	}
 	return m, nil
+}
+
+// publishPings puts a round of probes on the feed, so that a program watching
+// the socket shows the number this interface measured rather than taking its
+// own — two answers to one question is one too many.
+//
+// A round that measured nothing is not published: it is what a probe of a
+// tunnel that is down produces, and sending it would clear what a client is
+// showing rather than tell it anything.
+func (m Model) publishPings(results map[string]probe.Result) tea.Cmd {
+	if m.feed == nil || len(results) == 0 {
+		return nil
+	}
+	f, pings := m.feed, wire.PingsOf(m.view, results)
+	return func() tea.Msg {
+		f.PublishPings(pings)
+		return nil
+	}
 }
 
 func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {

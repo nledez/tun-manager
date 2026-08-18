@@ -2,12 +2,14 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/netctx"
+	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/wg"
 	"ledez.net/tun-manager/internal/wgconf"
 )
@@ -108,5 +110,77 @@ func TestAViewWithNoRowsMarshalsAsAnEmptyListNotNull(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"tunnels":[]`) {
 		t.Errorf("got %s, want an empty list", out)
+	}
+}
+
+func TestAPingCarriesTheRoundTripItMeasured(t *testing.T) {
+	view := app.View{Rows: []app.Row{{
+		Tunnel: wgconf.Tunnel{Name: "alpha", CheckIP: "10.20.30.1"},
+		Health: wg.Up,
+	}}}
+	results := map[string]probe.Result{"10.20.30.1": {RTT: 18 * time.Millisecond}}
+
+	got := PingsOf(view, results)
+
+	if len(got) != 1 {
+		t.Fatalf("pings = %+v, want one", got)
+	}
+	if got[0].Tunnel != "alpha" || got[0].RTT != 18 {
+		t.Errorf("ping = %+v, want alpha at 18ms", got[0])
+	}
+	if got[0].Error != "" {
+		t.Errorf("error = %q, want none", got[0].Error)
+	}
+}
+
+func TestAPingIsKeyedByTunnelRatherThanByAddress(t *testing.T) {
+	// The publisher knows which address belongs to which tunnel; making every
+	// consumer redo that mapping is how the two drift.
+	view := app.View{Rows: []app.Row{
+		{Tunnel: wgconf.Tunnel{Name: "alpha", CheckIP: "10.20.30.1"}, Health: wg.Up},
+		{Tunnel: wgconf.Tunnel{Name: "bravo", CheckIP: "10.20.31.1"}, Health: wg.Up},
+	}}
+	results := map[string]probe.Result{
+		"10.20.30.1": {RTT: 18 * time.Millisecond},
+		"10.20.31.1": {RTT: 31 * time.Millisecond},
+	}
+
+	got := PingsOf(view, results)
+
+	if len(got) != 2 || got[0].Tunnel != "alpha" || got[1].Tunnel != "bravo" {
+		t.Errorf("pings = %+v, want one per tunnel in view order", got)
+	}
+}
+
+func TestAPingThatFailedSaysWhyRatherThanReportingZero(t *testing.T) {
+	// Zero milliseconds is a measurement. "no answer" is not.
+	view := app.View{Rows: []app.Row{{
+		Tunnel: wgconf.Tunnel{Name: "alpha", CheckIP: "10.20.30.1"},
+		Health: wg.Up,
+	}}}
+	results := map[string]probe.Result{"10.20.30.1": {Err: errors.New("timed out")}}
+
+	got := PingsOf(view, results)
+
+	if got[0].Error != "timed out" {
+		t.Errorf("error = %q, want the reason", got[0].Error)
+	}
+	if got[0].RTT != 0 {
+		t.Errorf("rtt = %v, want none alongside an error", got[0].RTT)
+	}
+}
+
+func TestATunnelNobodyPingedIsNotReported(t *testing.T) {
+	// A tunnel that is down, or has no check address, was never probed. An
+	// entry for it would read as a probe that found nothing.
+	view := app.View{Rows: []app.Row{
+		{Tunnel: wgconf.Tunnel{Name: "alpha", CheckIP: "10.20.30.1"}, Health: wg.Up},
+		{Tunnel: wgconf.Tunnel{Name: "charlie"}, Health: wg.Down},
+	}}
+
+	got := PingsOf(view, map[string]probe.Result{"10.20.30.1": {RTT: time.Millisecond}})
+
+	if len(got) != 1 || got[0].Tunnel != "alpha" {
+		t.Errorf("pings = %+v, want only the tunnel that was probed", got)
 	}
 }

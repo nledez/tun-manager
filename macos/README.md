@@ -2,9 +2,11 @@
 
 A menu bar item showing what `tun-manager` knows about your tunnels.
 
-It is a **read-only** consumer of the status feed: it subscribes to the unix
-socket `tun-manager` publishes and displays what arrives. Nothing it can send
-starts or stops a tunnel, which is why it needs no privileges of its own.
+It is a consumer of the status feed: it subscribes to the unix socket
+`tun-manager` publishes and displays what arrives. Nothing it can send starts or
+stops a tunnel, which is why it needs no privileges of its own. The one thing it
+asks for rather than reads is a ping, and even then it names a tunnel while the
+address probed comes from that tunnel's configuration.
 
 ## Building
 

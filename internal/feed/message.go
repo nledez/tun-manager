@@ -41,6 +41,13 @@ type sampleMsg struct {
 	Tx     int64     `json:"tx"`
 }
 
+// pingMsg is a round of probes. A list rather than a map keyed by tunnel: it
+// arrives in the order the view holds, and JSON object keys have none.
+type pingMsg struct {
+	Type    string      `json:"type"`
+	Results []wire.Ping `json:"results"`
+}
+
 // byeMsg is the last line before the publisher goes away, so that a client can
 // tell a shutdown from a crash.
 type byeMsg struct {
@@ -48,7 +55,7 @@ type byeMsg struct {
 }
 
 // clientMsg is anything a client sends. There is one shape for all of them:
-// the vocabulary is three verbs wide and will not grow a payload.
+// the vocabulary is four verbs wide and will not grow a payload.
 type clientMsg struct {
 	Type   string `json:"type"`
 	Tunnel string `json:"tunnel,omitempty"`

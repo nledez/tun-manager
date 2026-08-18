@@ -1,8 +1,8 @@
 # Status feed — design
 
-A read-only stream of tunnel state, published by the running TUI over a unix
-socket, so that a native macOS menu bar application can show status, draw
-graphs and raise notifications without any privilege of its own.
+A stream of tunnel state, published by the running TUI over a unix socket, so
+that a native macOS menu bar application can show status, draw graphs and raise
+notifications without any privilege of its own.
 
 ## Why
 
@@ -26,6 +26,25 @@ The application never starts or stops a tunnel. That is the whole reason this
 design is small: with no control verb on the wire there is no authorisation
 question to answer, no privileged helper to install, and no way to turn the
 socket into a way of cutting somebody's VPN.
+
+### The one verb with an outward effect
+
+`ping` is the exception, and it is worth stating rather than burying. Honouring
+it makes the publisher — which runs as root — send packets. Everything else on
+this wire is the publisher describing what it already knows.
+
+What keeps it bounded is that **a client names a tunnel, never an address.** The
+address probed comes from that tunnel's `# TO_CHECK=` line, so the set of
+destinations a client can reach is exactly the set the configuration already
+names. A tunnel that is not in the current view names nothing and the request is
+dropped, which is what stops a name arriving on the wire from ever reaching the
+code that resolves one. Rounds are floored at one every two seconds, as
+refreshes are.
+
+The alternative was to let each client run its own probe. It cannot: the check
+addresses are only reachable through the tunnel, and the tunnel belongs to the
+root process. Two programs answering the same question differently is worse than
+one answering it once and publishing the answer.
 
 ## Non-goals
 
@@ -185,6 +204,27 @@ Without it a menu bar opened between two ticks would show state up to
 refresh arriving within two seconds of the last one, so a client cannot turn
 this into a way of hammering `wgctrl`.
 
+`ping` asks for a round of probes. With no `tunnel` it covers every tunnel that
+is up and has a check address; with one, only that tunnel.
+
+```json
+{"type":"ping"}
+{"type":"ping","tunnel":"alpha"}
+```
+
+The results come back as one `ping` message, keyed by tunnel because the
+publisher already knows which address belongs to which name:
+
+```json
+{"type":"ping","results":[{"tunnel":"alpha","rtt_ms":18.4},{"tunnel":"bravo","error":"timeout"}]}
+```
+
+`rtt_ms` is absent when the probe failed — zero milliseconds is a measurement
+and "no answer" is not. Unlike a view, a round is **not** replayed to whoever
+connects next: a view keeps its meaning for minutes, a round-trip time does not.
+The floor is its own rather than shared with `refresh`, because the two verbs
+cost different things and asking for a fresh view must not silence a ping.
+
 ## Semantics that are easy to get wrong
 
 **Sampling is refcounted across clients, not per client.** The sampler reads the
@@ -247,8 +287,11 @@ func (s *Server) Publish(v app.View)
 func (s *Server) Requests() <-chan Request
 ```
 
-`Request` carries only `Kind: "refresh"` today. It is a type rather than a bare
-channel of nothing so that a second verb does not change every signature.
+`Request` carries a `Kind` and, for the verbs that take one, a `Tunnel`. It is a
+type rather than a bare channel of nothing so that a second verb does not change
+every signature — which is what `ping` then went on to prove. The name it
+carries has already been checked against the last view, so a consumer receives a
+tunnel that exists or nothing at all.
 
 ### New package `internal/wire`
 
@@ -314,6 +357,10 @@ marker to come out of this work.
 | slow client dropped | a connection that never reads, publish past the queue |
 | unknown message | send garbage, assert the connection survives |
 | refresh floor | two refreshes in a row, assert one request |
+| ping floor | two pings in a row, assert one request |
+| ping floor is its own | refresh then ping, assert the ping still travels |
+| ping for an unknown tunnel | assert the name is not passed on |
+| pings are not replayed | publish, connect, assert hello then state and no ping |
 | TUI publishes | a recorder `Feed`, assert the command publishes the view |
 | TUI honours requests | push a request, assert the refresh command comes back |
 

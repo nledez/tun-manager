@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,6 +20,7 @@ import (
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/rate"
 	"ledez.net/tun-manager/internal/wg"
+	"ledez.net/tun-manager/internal/wire"
 )
 
 // maxLogs bounds the log pane: it is a tail, not an archive.
@@ -81,6 +83,7 @@ type (
 // works unchanged.
 type Feed interface {
 	Publish(app.View)
+	PublishPings([]wire.Ping)
 }
 
 // Model is the TUI state.
@@ -194,8 +197,32 @@ func (m Model) refresh() tea.Cmd {
 	}
 }
 
+// pingTargets is the set of addresses one request covers: a named tunnel's
+// check address, or every one the view offers.
+//
+// A name that is in no view, or names a tunnel that is down or has no check
+// address, covers nothing. That is the containment: a request chooses among
+// addresses the configuration already holds, and can never introduce one.
+func pingTargets(v app.View, tunnel string) []string {
+	hosts := v.CheckIPs()
+	if tunnel == "" {
+		return hosts
+	}
+	// CheckIPs is the authority on what is worth probing at all, so a named
+	// tunnel is filtered through it rather than read straight off the row.
+	row, known := v.Row(tunnel)
+	if !known || !slices.Contains(hosts, row.Tunnel.CheckIP) {
+		return nil
+	}
+	return []string{row.Tunnel.CheckIP}
+}
+
 func (m Model) ping() tea.Cmd {
-	a, hosts := m.app, m.view.CheckIPs()
+	return m.probe(m.view.CheckIPs())
+}
+
+func (m Model) probe(hosts []string) tea.Cmd {
+	a := m.app
 	return func() tea.Msg {
 		if a == nil {
 			return pingMsg{results: map[string]probe.Result{}}

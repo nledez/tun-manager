@@ -34,6 +34,11 @@ const (
 	// the WireGuard control socket.
 	refreshFloor = 2 * time.Second
 
+	// pingFloor is the shortest gap between two rounds of probes a client can
+	// ask for. Its own, rather than shared with the refresh: the two verbs cost
+	// different things, and asking for a fresh view must not silence a ping.
+	pingFloor = 2 * time.Second
+
 	// byeGrace is how long goodbye is worth waiting for. A client that cannot
 	// take a handful of small messages over a local socket in that time has
 	// stopped reading, and waiting on it forever costs a goroutine and a file
@@ -47,10 +52,26 @@ type Sampler interface {
 }
 
 // Request is something a client asked for that the feed cannot do itself.
-type Request struct{ Kind string }
+//
+// Tunnel is the name a request applies to, and is empty for one that applies
+// to everything. It has already been checked against the last view, so it names
+// a tunnel that exists or nothing at all.
+type Request struct {
+	Kind   string
+	Tunnel string
+}
 
 // RequestRefresh asks whoever owns the refresh to take a fresh view.
 const RequestRefresh = "refresh"
+
+// RequestPing asks whoever owns the network to probe a tunnel's check address.
+//
+// This is the one verb with an effect outside the process: honouring it makes
+// the publisher, which runs as root, send packets. What keeps it bounded is
+// that the client chooses a tunnel, never an address — the address comes from
+// the configuration, so no name on the wire can turn the publisher into a way
+// of reaching somewhere it was not already told to reach.
+const RequestPing = "ping"
 
 // Server publishes views and samples to whoever connects.
 //
@@ -89,6 +110,7 @@ type Server struct {
 	sampling    chan struct{}
 	requests    chan Request
 	lastRefresh time.Time
+	lastPing    time.Time
 
 	// chown hands the socket to the pre-sudo user. Injected for the same
 	// reason as the two below, and one more: the real call is decided by who
@@ -327,6 +349,26 @@ func (s *Server) Publish(v app.View) {
 	}
 }
 
+// PublishPings fans a round of probes out to every client.
+//
+// Unlike a view it is not remembered for whoever connects next: a view keeps
+// its meaning for minutes, a round-trip time does not, and showing a client a
+// measurement taken before it connected is worse than showing it none.
+func (s *Server) PublishPings(pings []wire.Ping) {
+	msg := pingMsg{Type: "ping", Results: pings}
+
+	s.mu.Lock()
+	clients := make([]*client, 0, len(s.clients))
+	for c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.mu.Unlock()
+
+	for _, c := range clients {
+		s.sendTo(c, msg)
+	}
+}
+
 func (s *Server) add(conn net.Conn) {
 	c := &client{conn: conn, out: make(chan any, sendQueue), watch: map[string]bool{}}
 
@@ -411,20 +453,42 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 		s.mu.Unlock()
 		s.retick()
 	case "refresh":
+		s.request(Request{Kind: RequestRefresh}, &s.lastRefresh, refreshFloor)
+	case "ping":
 		s.mu.Lock()
-		now := s.clock()
-		if !s.lastRefresh.IsZero() && now.Sub(s.lastRefresh) < refreshFloor {
-			s.mu.Unlock()
-			return
+		// Same reasoning as watch: a name that is in no view names no address,
+		// so there is nothing to probe. Dropping it here is what keeps a name
+		// off the wire from ever reaching the code that resolves one.
+		if msg.Tunnel != "" && s.haveView {
+			if _, known := s.view.Row(msg.Tunnel); !known {
+				s.mu.Unlock()
+				return
+			}
 		}
-		s.lastRefresh = now
-		reqs := s.requestsLocked()
 		s.mu.Unlock()
+		s.request(Request{Kind: RequestPing, Tunnel: msg.Tunnel}, &s.lastPing, pingFloor)
+	}
+}
 
-		select {
-		case reqs <- Request{Kind: RequestRefresh}:
-		default:
-		}
+// request passes something on unless it comes too soon after the last one of
+// its kind. The floor is per verb, so last points at that verb's own stamp.
+//
+// Dropped rather than queued: a client that asked twice in a second wants the
+// current answer, and a second one behind the first would only arrive late.
+func (s *Server) request(req Request, last *time.Time, floor time.Duration) {
+	s.mu.Lock()
+	now := s.clock()
+	if !last.IsZero() && now.Sub(*last) < floor {
+		s.mu.Unlock()
+		return
+	}
+	*last = now
+	reqs := s.requestsLocked()
+	s.mu.Unlock()
+
+	select {
+	case reqs <- req:
+	default:
 	}
 }
 
