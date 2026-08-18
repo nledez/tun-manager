@@ -250,7 +250,13 @@ because it looks like a backup.
 
 ## Configuration
 
-See [`configs/config.example.yaml`](configs/config.example.yaml). The part worth
+See [`configs/config.example.yaml`](configs/config.example.yaml). Every field is
+optional and a key left out gets its default, but **a key tun-manager does not
+recognise is refused**, naming the file and the line — a misspelling that did
+nothing in silence would be indistinguishable from a setting that does not work.
+The cost is that a configuration written for a newer tun-manager will not load
+on an older one, which is a clear failure at startup rather than a setting that
+quietly does not apply. The part worth
 understanding is `overrides`: a tunnel's group can depend on the detected
 network, so a tunnel that reaches a LAN you are sometimes sitting on can be
 *needed* when away and merely *extra* when already there.

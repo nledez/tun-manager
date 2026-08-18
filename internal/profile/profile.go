@@ -6,8 +6,10 @@
 package profile
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"time"
@@ -122,7 +124,16 @@ func Load(path string) (*Config, error) {
 	// default, and the menu bar reported "tun-manager is not running" while
 	// tun-manager was running. `notify:` had the same hole for longer.
 	cfg := Default()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	// A key this program does not know is refused rather than ignored. yaml
+	// ignores one by default, which is how somebody writes `feeed: false`,
+	// watches nothing happen, and has no way at all to find out why. The cost
+	// is that a configuration written for a newer tun-manager will not load on
+	// an older one — which is a clear failure at startup naming the key, and
+	// better than the setting quietly not applying.
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+		// io.EOF is an empty file: somebody created it and has not filled it in.
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.Path = path

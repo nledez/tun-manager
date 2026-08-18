@@ -419,10 +419,15 @@ func TestTheShippedExampleParses(t *testing.T) {
 	}
 }
 
-func TestTheShippedExampleTurnsOnWhatIsOnByDefault(t *testing.T) {
-	// Copying the example must not quietly disable something. A key it omits
-	// still gets its default now, but a key it sets to the wrong value would
-	// travel into every configuration derived from it.
+func TestTheShippedExampleLeavesTheFeedOn(t *testing.T) {
+	// The feed is not a matter of taste: with it off the menu bar reports
+	// "tun-manager is not running" while tun-manager is running, which is the
+	// most confusing answer this program can give. Every configuration derived
+	// from the example would say it.
+	//
+	// `notify` is deliberately not asserted here. Whether the shipped example
+	// posts notifications is the maintainer's preference, and a test that
+	// pinned it would be a test about taste.
 	cfg, err := Load(examplePath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -430,9 +435,6 @@ func TestTheShippedExampleTurnsOnWhatIsOnByDefault(t *testing.T) {
 
 	if !cfg.Feed {
 		t.Error("the example turns the feed off, so a copy of it has no menu bar")
-	}
-	if !cfg.Notify {
-		t.Error("the example turns notifications off")
 	}
 	if cfg.FeedSocket != DefaultFeedSocket {
 		t.Errorf("FeedSocket = %q, want the default %q", cfg.FeedSocket, DefaultFeedSocket)
@@ -452,5 +454,61 @@ func TestTheShippedExampleHasNoKeyThisProgramIgnores(t *testing.T) {
 	var cfg Config
 	if err := decoder.Decode(&cfg); err != nil {
 		t.Errorf("the example carries a key the program does not know: %v", err)
+	}
+}
+
+func TestAKeyThisProgramDoesNotKnowIsRefused(t *testing.T) {
+	// yaml ignores an unrecognised key by default, which is how somebody writes
+	// `feeed: false`, watches nothing happen, and has no way to find out why.
+	// Refusing costs a clear failure at startup instead of a silent one later.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\nfeeed: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("Load accepted a key it does not know")
+	}
+	if !strings.Contains(err.Error(), "feeed") {
+		t.Errorf("error = %v, want it to name the key", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error = %v, want it to name the file", err)
+	}
+}
+
+func TestAnEmptyConfigurationFileIsAllDefaults(t *testing.T) {
+	// A file somebody created and has not filled in yet. Not an error, and in
+	// particular not an unknown-key error.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.Feed || !cfg.Notify || cfg.ConfigDir != DefaultConfigDir {
+		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
+	}
+}
+
+func TestAFileThatIsOnlyCommentsIsAllDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("# nothing set yet\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.Feed {
+		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
 	}
 }
