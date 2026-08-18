@@ -163,6 +163,17 @@ type opener func() (Client, error)
 // the sockets is Read's problem, and that is where the privilege shows up.
 func NewReader() (*CtrlReader, error) { return newReader(openWgctrl) }
 
+// NewReaderIn reads the UAPI sockets of one directory rather than wherever
+// wgctrl looks.
+//
+// This is what `--wg-socket` reaches: it lets internal/tools/wgsim stand in for
+// a machine with tunnels on it, without root and without touching
+// /var/run/wireguard. Same protocol, same parsing, same code below this line -
+// only the directory differs, so the demo exercises the real path.
+func NewReaderIn(dir string) *CtrlReader {
+	return NewReaderFrom(UserspaceClient{Dir: dir})
+}
+
 func openWgctrl() (Client, error) { return wgctrl.New() }
 
 func newReader(open opener) (*CtrlReader, error) {
