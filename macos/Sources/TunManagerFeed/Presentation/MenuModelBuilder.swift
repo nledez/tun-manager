@@ -85,30 +85,12 @@ public enum MenuModelBuilder {
         }
     }
 
+    /// The row carries a name and a symbol and nothing else. What the tunnel
+    /// is doing lives in TunnelDetail, shown by the window: the facts fit in a
+    /// menu but the traffic does not, and having both build the same list was
+    /// two places to keep in step.
     private static func row(_ tunnel: TunnelStatus, now: Date, locale: Locale) -> MenuModel.Row {
-        var details: [String] = []
-        if let device = tunnel.device {
-            details.append("Interface: \(device)")
-        }
-        if let endpoint = tunnel.endpoint {
-            details.append("Endpoint: \(endpoint)")
-        }
-        if let handshake = tunnel.lastHandshake {
-            details.append("Handshake: \(Formatting.age(now.timeIntervalSince(handshake))) ago")
-        }
-        // Only for a tunnel that is carrying something: the counters are always
-        // on the wire, zero included, and showing "— / —" for a tunnel that is
-        // down is noise.
-        if tunnel.health != .down {
-            details.append(
-                "Received: \(Formatting.bytes(tunnel.rxBytes, locale: locale))"
-                    + "   Sent: \(Formatting.bytes(tunnel.txBytes, locale: locale))")
-        }
-        if let check = tunnel.checkIP {
-            details.append("Checks: \(check)")
-        }
-
-        return MenuModel.Row(title: tunnel.name, symbol: symbol(for: tunnel.health), details: details)
+        MenuModel.Row(title: tunnel.name, symbol: symbol(for: tunnel.health))
     }
 
     private static func symbol(for health: Health) -> String {

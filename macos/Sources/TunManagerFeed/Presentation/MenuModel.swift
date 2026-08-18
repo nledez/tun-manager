@@ -11,9 +11,6 @@ public struct MenuModel: Sendable, Equatable {
         public let title: String
         /// SF Symbol, drawn beside the name.
         public let symbol: String
-        /// The submenu: one line each, already formatted, already filtered of
-        /// anything the wire did not give.
-        public let details: [String]
     }
 
     /// A group of tunnels. `header` is nil for tunnels in no group, which are

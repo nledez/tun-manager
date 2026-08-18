@@ -140,3 +140,60 @@ private func eventually(
     #expect(recorder.diffs[0].appeared == ["alpha", "bravo"])
     #expect(recorder.diffs[0].healthChanges.isEmpty)
 }
+
+@MainActor
+@Test func watchingATunnelPutsTheVerbOnTheWire() async {
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+    ])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.start()
+    await eventually("the link to come up") { supervisor.state.isLive }
+
+    supervisor.watch("alpha")
+
+    #expect(transport.sent.contains { $0.contains("\"watch\"") && $0.contains("alpha") })
+}
+
+@MainActor
+@Test func closingTheWindowReleasesTheTunnelOnTheWire() async {
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+    ])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.start()
+    await eventually("the link to come up") { supervisor.state.isLive }
+    supervisor.watch("alpha")
+
+    supervisor.watchNothing()
+
+    #expect(transport.sent.contains { $0.contains("\"unwatch\"") })
+}
+
+@MainActor
+@Test func aReadingForTheWatchedTunnelReachesTheObserver() async {
+    // The whole point of watching: the numbers have to arrive somewhere.
+    final class Recorder: FeedObserver {
+        var samples: [Sample] = []
+        func linkDidChange(state: LinkState, snapshot: Snapshot?, publisherVersion: String?) {}
+        func linkDidSample(_ sample: Sample) { samples.append(sample) }
+    }
+    let recorder = Recorder()
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+    ])
+    let supervisor = FeedSupervisor(transport: transport)
+    supervisor.observer = recorder
+    supervisor.start()
+    await eventually("the link to come up") { supervisor.state.isLive }
+
+    // Watched first, then the reading arrives — the order the publisher uses,
+    // and the order that matters: a reading for a tunnel nobody asked about is
+    // dropped on purpose.
+    supervisor.watch("alpha")
+    transport.push(
+        #"{"type":"sample","tunnel":"alpha","at":"2026-08-17T14:03:12.1+02:00","rx":9,"tx":4}"# + "\n")
+    await eventually("the reading") { !recorder.samples.isEmpty }
+
+    #expect(recorder.samples[0].rx == 9)
+}

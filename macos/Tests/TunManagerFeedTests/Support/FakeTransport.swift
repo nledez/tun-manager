@@ -31,6 +31,9 @@ final class FakeTransport: FeedTransport, Sendable {
         var script: [Attempt] = []
         var attempts = 0
         var sent: [String] = []
+        /// The connection currently open, so a test can deliver a line after
+        /// something has been asked for rather than only at the start.
+        var live: FakeConnection?
     }
 
     var attempts: Int { state.withLock(\.attempts) }
@@ -42,6 +45,11 @@ final class FakeTransport: FeedTransport, Sendable {
 
     func record(_ line: Data) {
         state.withLock { $0.sent.append(String(decoding: line, as: UTF8.self)) }
+    }
+
+    /// Delivers a line on the open connection, now.
+    func push(_ line: String) {
+        state.withLock(\.live)?.push(line)
     }
 
     func connect() async throws -> any FeedConnection {
@@ -58,7 +66,10 @@ final class FakeTransport: FeedTransport, Sendable {
         case .deliverThenFail(let lines):
             return FakeConnection(lines: lines, failing: true, transport: self)
         case .deliverAndStayOpen(let lines):
-            return FakeConnection(lines: lines, failing: false, transport: self, staysOpen: true)
+            let connection = FakeConnection(
+                lines: lines, failing: false, transport: self, staysOpen: true)
+            state.withLock { $0.live = connection }
+            return connection
         }
     }
 }
@@ -68,16 +79,24 @@ private struct FailedRead: Error {}
 final class FakeConnection: FeedConnection, @unchecked Sendable {
     let chunks: AsyncThrowingStream<Data, any Error>
     private let transport: FakeTransport
+    private let handle: Mutex<AsyncThrowingStream<Data, any Error>.Continuation?>
 
     init(lines: [String], failing: Bool, transport: FakeTransport, staysOpen: Bool = false) {
         self.transport = transport
+        let box = Mutex<AsyncThrowingStream<Data, any Error>.Continuation?>(nil)
         self.chunks = AsyncThrowingStream { continuation in
+            box.withLock { $0 = continuation }
             for line in lines {
                 continuation.yield(Data(line.utf8))
             }
             guard !staysOpen else { return }
             failing ? continuation.finish(throwing: FailedRead()) : continuation.finish()
         }
+        self.handle = box
+    }
+
+    func push(_ line: String) {
+        handle.withLock { $0 }?.yield(Data(line.utf8))
     }
 
     func send(_ line: Data) { transport.record(line) }

@@ -10,12 +10,14 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private let supervisor: FeedSupervisor
     private let socketPath: String
     private let notifications: NotificationPoster
+    private let details: DetailWindowController
     private var model: MenuModel?
 
     init(supervisor: FeedSupervisor, socketPath: String, notifications: NotificationPoster) {
         self.supervisor = supervisor
         self.socketPath = socketPath
         self.notifications = notifications
+        self.details = DetailWindowController(supervisor: supervisor)
         super.init()
 
         // What makes the position stick when the user drags the item around,
@@ -40,6 +42,11 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     func linkDidPublish(snapshot: Snapshot, diff: SnapshotDiff) {
         notifications.post(NotificationBuilder.requests(for: diff))
+        details.update(tunnels: snapshot.tunnels)
+    }
+
+    func linkDidSample(_ sample: Sample) {
+        details.add(sample)
     }
 
     // MARK: - NSMenuDelegate
@@ -113,28 +120,18 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
             socketPath: socketPath)
     }
 
+    /// A tunnel row. Clicking it opens the window rather than a submenu: the
+    /// facts fit in a menu, but what is going through the tunnel does not.
     private func entry(_ row: MenuModel.Row) -> NSMenuItem {
-        let entry = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
+        let entry = NSMenuItem(title: row.title, action: #selector(showDetail(_:)), keyEquivalent: "")
+        entry.target = self
         entry.image = NSImage(systemSymbolName: row.symbol, accessibilityDescription: nil)
-
-        guard !row.details.isEmpty else { return entry }
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        for detail in row.details {
-            // Prominent: these are the reason somebody opened the submenu, and
-            // secondary grey on the menu's material is what made them unreadable.
-            submenu.addItem(disabled(detail, prominent: true))
-        }
-        entry.submenu = submenu
+        // Carried on the item so the handler knows which row was clicked
+        // without the controller keeping a parallel list to index into.
+        entry.representedObject = row.title
         return entry
     }
 
-    /// A row that cannot be clicked but can be read.
-    ///
-    /// AppKit greys a disabled item's title, which on the menu's dark material
-    /// leaves the detail lines barely legible. An attributed title with an
-    /// explicit colour overrides that: the item stays inert — no action, no
-    /// highlight — and the text stays readable.
     private func disabled(_ title: String, prominent: Bool = false) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -158,6 +155,13 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     @objc private func refresh() { supervisor.menuWillOpen() }
     @objc private func retry() { supervisor.userAskedToRetry() }
+    @objc private func showDetail(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+            let tunnels = supervisor.snapshot?.tunnels
+        else { return }
+        details.show(tunnel: name, tunnels: tunnels)
+    }
+
     @objc private func showAbout() {
         let about = self.about
         let alert = NSAlert()

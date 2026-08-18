@@ -31,45 +31,6 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
     #expect(bare.headline == "office")
 }
 
-@Test func aTunnelRowCarriesItsInterfaceEndpointAndHandshakeAge() {
-    let model = build(
-        .live(sawState: true),
-        snapshot(
-            TunnelStatus(
-                name: "alpha", group: "needed", health: .up, device: "utun7",
-                endpoint: "192.0.2.10:51820", checkIP: "10.20.30.1",
-                lastHandshake: taken.addingTimeInterval(-13), rxBytes: 184_320, txBytes: 92_160)))
-
-    let details = model.sections[0].rows[0].details
-    #expect(details.contains("Interface: utun7"))
-    #expect(details.contains("Endpoint: 192.0.2.10:51820"))
-    #expect(details.contains("Handshake: 25s ago"))
-    #expect(details.contains { $0.contains("180 kB") })
-    #expect(details.contains("Checks: 10.20.30.1"))
-}
-
-@Test func aTunnelWithNothingButItsNameDoesNotRenderEmptyDetailLines() {
-    // Every optional key was omitted by the publisher. A row of blank labels
-    // would say less than no labels at all.
-    let model = build(
-        .live(sawState: true),
-        snapshot(TunnelStatus(name: "charlie", group: "extra", health: .down)))
-
-    #expect(model.sections[0].rows[0].details.isEmpty)
-}
-
-@Test func aTunnelThatIsDownDoesNotShowCounters() {
-    // The counters are always on the wire, zero included. Showing them for a
-    // tunnel carrying nothing is noise.
-    let model = build(
-        .live(sawState: true),
-        snapshot(
-            TunnelStatus(
-                name: "charlie", group: "extra", health: .down, endpoint: "charlie.example:51820")))
-
-    #expect(!model.sections[0].rows[0].details.contains { $0.hasPrefix("Received:") })
-}
-
 @Test func tunnelsAreGroupedByGroupAndSortedByNameInsideEachGroup() {
     let model = build(
         .live(sawState: true),
