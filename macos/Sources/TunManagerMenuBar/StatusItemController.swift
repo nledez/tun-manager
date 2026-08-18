@@ -23,6 +23,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         item.autosaveName = "net.ledez.tun-manager.menubar.status"
 
         let menu = NSMenu()
+        // Otherwise AppKit decides enablement itself from whether an item has a
+        // target, and overrules the attributed titles above.
+        menu.autoenablesItems = false
         menu.delegate = self
         item.menu = menu
 
@@ -116,16 +119,34 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
         guard !row.details.isEmpty else { return entry }
         let submenu = NSMenu()
+        submenu.autoenablesItems = false
         for detail in row.details {
-            submenu.addItem(disabled(detail))
+            // Prominent: these are the reason somebody opened the submenu, and
+            // secondary grey on the menu's material is what made them unreadable.
+            submenu.addItem(disabled(detail, prominent: true))
         }
         entry.submenu = submenu
         return entry
     }
 
-    private func disabled(_ title: String) -> NSMenuItem {
+    /// A row that cannot be clicked but can be read.
+    ///
+    /// AppKit greys a disabled item's title, which on the menu's dark material
+    /// leaves the detail lines barely legible. An attributed title with an
+    /// explicit colour overrides that: the item stays inert — no action, no
+    /// highlight — and the text stays readable.
+    private func disabled(_ title: String, prominent: Bool = false) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
+        item.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: prominent ? NSColor.labelColor : NSColor.secondaryLabelColor,
+                // Monospaced digits so a column of byte counts and ages lines
+                // up instead of drifting with the width of each numeral.
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: NSFont.systemFontSize, weight: .regular),
+            ])
         return item
     }
 
