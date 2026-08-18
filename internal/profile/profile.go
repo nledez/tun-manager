@@ -111,15 +111,28 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// Unmarshalled *into* the defaults rather than into a zero value. yaml only
+	// sets the fields a document mentions, so absent keys keep their default
+	// and present ones overwrite it — which is what "every field is optional"
+	// has to mean.
+	//
+	// Starting from zero worked for strings, where "" is distinguishable from a
+	// real value and applyDefaults below fills it in. It does not work for a
+	// bool: an absent `feed:` left it false, the opposite of the documented
+	// default, and the menu bar reported "tun-manager is not running" while
+	// tun-manager was running. `notify:` had the same hole for longer.
+	cfg := Default()
+	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.Path = path
 	cfg.applyDefaults()
-	return &cfg, nil
+	return cfg, nil
 }
 
+// applyDefaults fills anything a document set to an empty value. Load starts
+// from Default(), so this only catches keys written out as blank rather than
+// left out.
 func (c *Config) applyDefaults() {
 	d := Default()
 	if c.ConfigDir == "" {

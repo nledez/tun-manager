@@ -297,3 +297,93 @@ func TestTheFeedCanBeSwitchedOff(t *testing.T) {
 		t.Errorf("FeedSocket = %q, want the configured path", cfg.FeedSocket)
 	}
 }
+
+func TestAConfigurationFileWithoutTheFeedKeyStillGetsTheFeed(t *testing.T) {
+	// The keys are optional and what is left out falls back to the built-in
+	// default — which for a bool means the zero value unless Load is careful,
+	// and false is the opposite of what Default says. This is not theoretical:
+	// it turned the feed off for every configuration written before the feed
+	// existed, silently, with the menu bar reporting "not running" while
+	// tun-manager was running.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\nnotify: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.Feed {
+		t.Error("Feed = false, want the default for a key the file does not mention")
+	}
+}
+
+func TestAConfigurationFileWithoutTheNotifyKeyStillNotifies(t *testing.T) {
+	// The same trap, and it has been there longer.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.Notify {
+		t.Error("Notify = false, want the default for a key the file does not mention")
+	}
+}
+
+func TestAFeedTurnedOffInTheFileStaysOff(t *testing.T) {
+	// The other half: a default that cannot be overridden is not a default.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("feed: false\nnotify: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Feed {
+		t.Error("Feed = true, want it off")
+	}
+	if cfg.Notify {
+		t.Error("Notify = true, want it off")
+	}
+}
+
+func TestAFieldWrittenOutAsBlankFallsBackToItsDefault(t *testing.T) {
+	// Not the same as leaving a key out, which Load handles by starting from the
+	// defaults. This is a document that mentions a key and gives it nothing —
+	// a mistake rather than an intent, and answered with the default rather
+	// than with a confusing failure much later.
+	body := "config_dir: \"\"\nwg_quick: \"\"\nrun_dir: \"\"\nfeed_socket: \"\"\nrefresh_interval: 0s\ngroups:\n"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	d := Default()
+	if cfg.ConfigDir != d.ConfigDir || cfg.WgQuick != d.WgQuick || cfg.RunDir != d.RunDir {
+		t.Errorf("paths = %q %q %q, want the defaults", cfg.ConfigDir, cfg.WgQuick, cfg.RunDir)
+	}
+	if cfg.FeedSocket != d.FeedSocket {
+		t.Errorf("FeedSocket = %q, want %q", cfg.FeedSocket, d.FeedSocket)
+	}
+	if cfg.RefreshInterval != d.RefreshInterval {
+		t.Errorf("RefreshInterval = %v, want %v", cfg.RefreshInterval, d.RefreshInterval)
+	}
+	if cfg.Groups == nil {
+		t.Error("Groups is nil, want an empty map so the group commands have something to read")
+	}
+}
