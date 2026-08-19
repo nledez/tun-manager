@@ -179,7 +179,17 @@ func (e *env) run(args []string) error {
 		return e.runNotify()
 	}
 
-	if e.euid != 0 {
+	// Root is needed for the real thing: the UAPI sockets under
+	// /var/run/wireguard are root-only, and wg-quick rewrites the routing
+	// table. Neither is true of a run pointed somewhere else - the sockets are
+	// wherever --wg-socket says and are readable by whoever made them - so
+	// asking for a password there would be asking for one to read /tmp.
+	//
+	// This is not a security boundary being lowered. It never was one: the
+	// kernel refuses the real sockets to a plain user whatever this says, and
+	// wg-quick fails on its own. What it is, is the difference between a demo
+	// anybody can run and one nobody does.
+	if e.euid != 0 && e.flags.wgSocket == "" {
 		return errors.New("this needs root: run `sudo tun-manager` (see `tun-manager doctor`)")
 	}
 
@@ -363,7 +373,12 @@ func (e *env) runDoctor() error {
 		return err
 	}
 
-	checks := cli.Doctor(cfg, u, e.euid, version)
+	var opts []cli.Option
+	if e.flags.wgSocket != "" {
+		opts = append(opts, cli.RootNotNeeded())
+	}
+
+	checks := cli.Doctor(cfg, u, e.euid, version, opts...)
 	if simulated, ok := cli.Simulation(e.flags.wgSocket, e.flags.fakePing); ok {
 		// First, not last: everything below it describes whatever the flags
 		// pointed at rather than this machine.

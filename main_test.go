@@ -1300,8 +1300,13 @@ func TestInventedProbesReplaceTheRealOnesEverywhere(t *testing.T) {
 
 func TestTheWireGuardDirectoryIsWhatTheApplicationReads(t *testing.T) {
 	isolatedHome(t)
+	// A directory of this test's own, and one that does not exist. A path
+	// shared with the demo would make this pass or fail depending on whether
+	// the simulator happens to be running.
+	dir := filepath.Join(t.TempDir(), "wireguard")
+
 	e := newEnv()
-	if _, err := e.parseFlags([]string{"--wg-socket", "/tmp/tm-demo/wireguard"}); err != nil {
+	if _, err := e.parseFlags([]string{"--wg-socket", dir}); err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
@@ -1319,7 +1324,7 @@ func TestTheWireGuardDirectoryIsWhatTheApplicationReads(t *testing.T) {
 	if len(state) != 0 {
 		t.Errorf("state = %+v, want nothing from a directory that is not there", state)
 	}
-	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != "/tmp/tm-demo/wireguard" {
+	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != dir {
 		t.Errorf("locator = %+v, want it pointed at the same directory", a.Locator)
 	}
 }

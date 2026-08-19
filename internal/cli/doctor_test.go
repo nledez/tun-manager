@@ -394,3 +394,38 @@ func TestBothSimulationsAreReportedTogether(t *testing.T) {
 		t.Errorf("detail = %q, want both named", check.Detail)
 	}
 }
+
+func TestRootIsNotRequiredOfARunThatReadsASimulator(t *testing.T) {
+	// Nothing a simulated run touches is root-only, so asking for a password
+	// would be asking for one to read /tmp - and a demo whose own diagnostic
+	// exits non-zero is one nobody believes the rest of.
+	cfg, u := healthyEnv(t)
+
+	checks := Doctor(cfg, u, 501, "test", RootNotNeeded())
+
+	root, ok := findCheck(checks, "root")
+	if !ok {
+		t.Fatal("no root check at all")
+	}
+	if root.Status != Pass {
+		t.Errorf("status = %v, want it to pass: %s", root.Status, root.Detail)
+	}
+	if !strings.Contains(root.Detail, "simulator") {
+		t.Errorf("detail = %q, want it to say why root is not needed", root.Detail)
+	}
+	if !AllPassed(checks) {
+		t.Error("AllPassed = false: a simulated run must be able to come out clean")
+	}
+}
+
+func TestRootIsStillRequiredOfAnOrdinaryRun(t *testing.T) {
+	// The flag is the only thing that lifts it.
+	cfg, u := healthyEnv(t)
+
+	checks := Doctor(cfg, u, 501, "test")
+
+	root, _ := findCheck(checks, "root")
+	if root.Status != Fail {
+		t.Errorf("status = %v, want a failure without the option", root.Status)
+	}
+}

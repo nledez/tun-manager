@@ -43,12 +43,28 @@ type Check struct {
 	Detail string
 }
 
+// Option adjusts what Doctor expects of the environment.
+type Option func(*expectations)
+
+type expectations struct{ rootNeeded bool }
+
+// RootNotNeeded says this run reads a simulator rather than the machine.
+//
+// Without it doctor reports a missing root as a failure, and a demo whose own
+// diagnostic exits non-zero is one nobody believes the rest of.
+func RootNotNeeded() Option { return func(e *expectations) { e.rootNeeded = false } }
+
 // Doctor inspects the environment and reports what would stop tun-manager from
 // working.
-func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string) []Check {
+func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string, opts ...Option) []Check {
+	want := expectations{rootNeeded: true}
+	for _, opt := range opts {
+		opt(&want)
+	}
+
 	return []Check{
 		{Name: "version", Status: Pass, Detail: version},
-		checkRoot(euid),
+		checkRoot(euid, want.rootNeeded),
 		checkWgQuick(cfg.WgQuick),
 		checkConfigDir(cfg.ConfigDir),
 		checkRunDir(cfg.RunDir),
@@ -86,15 +102,23 @@ func Simulation(wgSocket string, fakePing bool) (Check, bool) {
 	}, true
 }
 
-func checkRoot(euid int) Check {
-	if euid != 0 {
+func checkRoot(euid int, needed bool) Check {
+	switch {
+	case euid == 0:
+		return Check{Name: "running as root", Status: Pass, Detail: "euid 0"}
+	case !needed:
+		return Check{
+			Name:   "running as root",
+			Status: Pass,
+			Detail: fmt.Sprintf("euid %d, and root is not needed: this run reads a simulator", euid),
+		}
+	default:
 		return Check{
 			Name:   "running as root",
 			Status: Fail,
 			Detail: fmt.Sprintf("euid %d: the WireGuard control sockets are root-only, run `sudo tun-manager`", euid),
 		}
 	}
-	return Check{Name: "running as root", Status: Pass, Detail: "euid 0"}
 }
 
 func checkWgQuick(path string) Check {

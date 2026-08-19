@@ -12,9 +12,9 @@ COVERAGE_MIN := 99
 # counting them would only dilute the number this floor guards.
 COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
 
-.PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check run install clean release release-check macos-build macos-test macos-app
+.PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check demo demo-configs demo-configs-check run install clean release release-check macos-build macos-test macos-app
 
-all: vet lint test notices-check markers-check build
+all: vet lint test notices-check markers-check demo-configs-check build
 
 # -trimpath keeps local paths out of the binary, so the same source at the same
 # version produces the same bytes on any machine.
@@ -100,6 +100,44 @@ notices:
 # Fails when a dependency change was not reflected in the notices file.
 notices-check: notices
 	git diff --exit-code -- THIRD-PARTY-NOTICES.txt
+
+# The demo. internal/tools/wgsim writes the .conf files and serves a directory
+# of sockets that look like live tunnels, so the program can be seen working -
+# and photographed - without anybody's real network in the picture.
+#
+# No sudo: nothing a simulated run reads is root-only.
+DEMO_DIR := /tmp/tm-demo
+DEMO_CONFIGS := configs/wireguard
+
+demo: build demo-configs
+	@mkdir -p $(DEMO_DIR)/wireguard
+	@sed 's#^wg_quick:.*#wg_quick: $(CURDIR)/configs/demo/wg-quick-stub.sh#' \
+		configs/config.example.yaml > $(DEMO_DIR)/config.yaml
+	@echo "starting the simulator in $(DEMO_DIR)/wireguard"
+	@go run ./internal/tools/wgsim \
+		--config configs/config.example.yaml \
+		--config-dir $(DEMO_CONFIGS) \
+		--wg-socket $(DEMO_DIR)/wireguard & \
+	sleep 2; \
+	echo; \
+	echo "  the terminal:"; \
+	echo "    $(BIN) --config $(DEMO_DIR)/config.yaml --config-dir $(DEMO_CONFIGS) \\"; \
+	echo "      --wg-socket $(DEMO_DIR)/wireguard --feed-socket $(DEMO_DIR)/feed.sock --fake-ping"; \
+	echo; \
+	echo "  the window:"; \
+	echo "    'macos/build/Tun Manager (dev).app/Contents/MacOS/tun-manager-menubar' \\"; \
+	echo "      --socket $(DEMO_DIR)/feed.sock"; \
+	echo; \
+	wait
+
+# The demo's .conf files are committed, so they can be read on the forge without
+# running anything. Regenerating them is how they are edited.
+demo-configs:
+	@go run ./internal/tools/wgsim --config-dir $(DEMO_CONFIGS) --write-only
+
+# Fails when the committed fixtures no longer match the generator.
+demo-configs-check: demo-configs
+	git diff --exit-code -- $(DEMO_CONFIGS)
 
 # Cuts a release. Pushing the tag is what publishes: CI re-runs the suite on the
 # tagged commit and only then builds the archives and creates the release.
