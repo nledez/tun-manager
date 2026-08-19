@@ -7,16 +7,6 @@ import TunManagerFeed
 // RateSeries turns counters into rates. See macos/docs/coverage-gaps.md,
 // "the menu bar target".
 
-/// What the sidebar is pointing at.
-///
-/// An enum rather than an optional name, because "the overview" is a thing to
-/// select and not the absence of a selection — and a sentinel string would
-/// collide with a tunnel unlucky enough to be called that.
-enum DetailSelection: Hashable {
-    case overview
-    case tunnel(String)
-}
-
 /// What the window is showing, shared with the SwiftUI view.
 @MainActor
 final class DetailModel: ObservableObject {
@@ -180,13 +170,14 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
 
     private func select(_ selection: DetailSelection) {
         model.select(selection)
-        // No unwatch: the tunnel being left keeps its subscription so its
-        // history goes on filling. They are all released when the window
-        // closes.
-        if case .tunnel(let name) = selection {
-            supervisor.watch(name)
-            supervisor.askForPing(name)
+        // What each selection asks for is decided by DetailSelection, where a
+        // test can reach it. No unwatch here: the tunnel being left keeps its
+        // subscription so its history goes on filling, and they are all
+        // released when the window closes.
+        if let watched = selection.watches {
+            supervisor.watch(watched)
         }
+        supervisor.askForPing(selection.probes)
     }
 
     // MARK: - NSWindowDelegate
