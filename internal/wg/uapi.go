@@ -2,6 +2,7 @@ package wg
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -91,7 +92,10 @@ func (UserspaceClient) Close() error { return nil }
 func (c UserspaceClient) read(path string) (*wgtypes.Device, error) {
 	open := c.dial
 	if open == nil {
-		open = func(p string) (net.Conn, error) { return net.DialTimeout("unix", p, dialTimeout) }
+		open = func(p string) (net.Conn, error) {
+			dialer := net.Dialer{Timeout: dialTimeout}
+			return dialer.DialContext(context.Background(), "unix", p)
+		}
 	}
 
 	conn, err := open(path)
