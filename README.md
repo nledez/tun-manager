@@ -221,6 +221,10 @@ The menu bar application takes the matching flag:
 "/Applications/Tun Manager.app/Contents/MacOS/tun-manager-menubar" --socket <path>
 ```
 
+[`docs/simulator.md`](docs/simulator.md) has the rest: the simulator's own flags,
+what it puts in that directory, the five tunnels and how to change them, and what
+an empty table is telling you.
+
 ## How a tunnel's state is decided
 
 A tunnel is matched to its live interface through `/var/run/wireguard/<name>.name`,

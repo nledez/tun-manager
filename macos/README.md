@@ -24,7 +24,8 @@ The flag beats the `FeedSocket` defaults key, and leaves nothing behind — a ke
 left pointing at a demo publisher is a menu bar quietly listing tunnels that do
 not exist.
 
-`make -C .. demo` starts a publisher to point it at.
+`make -C .. demo` starts a publisher to point it at;
+[`docs/simulator.md`](../docs/simulator.md) says what it is serving.
 
 ## Building
 

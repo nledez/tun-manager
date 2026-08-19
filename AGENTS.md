@@ -141,6 +141,9 @@ make demo                       # writes the fixtures, serves /tmp/tm-demo
 pkill -f wgsim; rm -rf /tmp/tm-demo
 ```
 
+[`docs/simulator.md`](docs/simulator.md) is the full account: its flags, what it
+serves, the tunnel table, and what an empty table means.
+
 `configs/wireguard/*.conf` are generated and committed. Edit
 `internal/tools/wgsim/main.go` and run `make demo-configs`; `make all` fails when
 the two have drifted apart. They carry no `PrivateKey`: the parser never reads
