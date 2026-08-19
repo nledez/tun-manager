@@ -14,17 +14,13 @@ Handshake age, transferred bytes, latency, and which network you are on.
 
 </div>
 
-```
- tun-manager  ctx: office (en0 198.51.100.42)                       next ⟳ 4m12s
- ───────────────────────────────────────────────────────────────────────────────
-    NAME          GRP    STATE   HANDSHAKE  RX / TX        PING   ENDPOINT
- ▸✓ alpha         needed ● up    12s        1.2M / 840K    18ms   192.0.2.10:51820
-    bravo         needed ● stale 9m04s      2.3M / 961K    ×      198.51.100.20:51821
-    charlie       extra  ○ down                                   gateway.example:51824
-    delta         —      ○ down                                   198.51.100.30:51822
- ───────────────────────────────────────────────────────────────────────────────
- r refresh · p ping · s down all · ␣ select · ⏎ toggle · n needed · g graph · l logs · ? help · q quit
-```
+![The tun-manager terminal interface: a table of five tunnels with their group,
+state, handshake age, transferred bytes, latency and endpoint, above a traffic
+graph of the selected tunnel.](assets/screenshot-tui.png)
+
+The tunnels above are invented, served by the simulator described in [Seeing it
+work, without tunnels](#seeing-it-work-without-tunnels) — so this is
+reproducible on a machine with no WireGuard on it at all.
 
 While a batch runs, a spinner turns beside the context, the header counts the
 tunnels off, and the row being waited on says so where its state would be — so a
@@ -39,6 +35,20 @@ slow `wg-quick` is never mistaken for a hung program:
     charlie       extra  ⠋ starting                                 gateway.example:51824
     delta         —      ⠋ stopping                                 198.51.100.30:51822
 ```
+
+## Why
+
+I run several WireGuard tunnels. Some have to be up whenever the laptop is,
+others only when I ask. Nothing I found managed that distinction, so for a
+while it was a shell script driving [gum](https://github.com/charmbracelet/gum)
+— which works, and stops scaling the moment the tunnel list grows.
+
+What it had to keep:
+
+- tunnels stay managed by [wireguard-tools](https://www.wireguard.com/), not by a reimplementation
+- configurations stay unreadable to anyone but root, so a key cannot leak
+  through a file listing
+- which tunnels are *needed* depends on the network the machine is on
 
 ## Why root
 
@@ -55,18 +65,6 @@ prompt for one. Two consequences are handled explicitly:
   through `SUDO_USER` instead;
 - root has no GUI session, so notifications are posted back as the pre-sudo user.
 
-Notifications show the logo above as a thumbnail when [`terminal-notifier`][tn]
-is installed (`brew install terminal-notifier`), and fall back to `osascript`
-without it.
-
-The icon on the left of a notification is not ours to set: since macOS 11 it is
-the icon of the `.app` bundle that sent the notification, so it shows whichever
-tool did the sending. `terminal-notifier` still accepts `-appIcon`, but macOS
-ignores it. `sudo tun-manager notify` posts a sample so you can see what your
-machine does with it.
-
-[tn]: https://github.com/julienXX/terminal-notifier
-
 ## Install
 
 Download the archive for your machine from the
@@ -74,12 +72,37 @@ Download the archive for your machine from the
 runs on both Intel and Apple Silicon — or build from source:
 
 ```sh
+brew install wireguard-tools
 make build              # ./bin/tun-manager alone
 make install            # /usr/local/bin/tun-manager
                         #   + /Applications/Tun Manager.app
 
+sudo mkdir -p /private/wireguard/config
+sudo chown 0:0 /private/wireguard /private/wireguard/config
+sudo chmod 700 /private/wireguard /private/wireguard/config
+sudo ls -ld /private/wireguard /private/wireguard/config
+
 mkdir -p ~/.config/tun-manager
 cp configs/config.example.yaml ~/.config/tun-manager/config.yaml
+
+# Sudo is mandatory: it copies the file into /private/wireguard/config, which is
+# owned by root and readable by nobody else. A "# TO_CHECK=" line is mandatory
+# in each configuration file before it can be imported.
+sudo tun-manager import <config1> ~/Downloads/config1.conf
+...
+# Edit ~/.config/tun-manager/config.yaml to fit the imported configurations.
+# The example ships placeholder names: replace every one of them under groups
+# and overrides, or up --group refuses a tunnel that does not exist.
+# import only ever adds to the "all" group -- needed and extra are yours to fill.
+
+# Check installation before first run
+sudo tun-manager doctor
+
+open "/Applications/Tun Manager.app"
+# "tun-manager is not running" is normal, fix this with:
+sudo tun-manager
+
+# Press 's' to start needed tunnels, check if menubar application is sync with TUI
 ```
 
 `make install` builds both halves, so it needs the Swift toolchain as well as
@@ -104,13 +127,7 @@ sudo tun-manager up --group needed  # resolved against the current network
 sudo tun-manager down --all
 sudo tun-manager import work ~/Downloads/work.conf
 sudo tun-manager backup             # tar.gz of the configuration and every .conf
-tun-manager doctor                  # environment check, works without root
-```
-
-Closing the laptop:
-
-```sh
-sudo tun-manager down --all ; gum confirm "Restart VPN?" && sudo tun-manager
+tun-manager doctor                  # environment check; sudo to see config_dir
 ```
 
 ### Keys
@@ -177,6 +194,43 @@ to one every two seconds, as refreshes are.
 It is only alive while `tun-manager` is: there is no daemon. Run
 `sudo tun-manager doctor` to see where the socket would bind and who could
 read it.
+
+### The menu bar application
+
+`Tun Manager.app` is the consumer of that socket. It shows state, graphs traffic
+and raises notifications, and it starts and stops nothing — which is why it needs
+no privileges of its own and no helper installed anywhere.
+
+<img src="assets/screenshot-app-menu.png" width="320" alt="The menu bar menu: tunnels grouped under needed and extra, each with a state glyph, then how long ago the state was updated, Refresh, Ping, About and Quit.">
+
+The state is in the glyph rather than the colour: the menu bar of macOS 26 is
+often transparent over whatever the wallpaper happens to be, and a coloured
+glyph is unreadable there. `needed` is listed first because it is the group the
+answer to "is everything up?" depends on.
+
+`p` asks `tun-manager` for a round of probes — the same key it is in the
+terminal. Clicking a tunnel opens a window, which lists them all with what the
+terminal's table shows.
+
+![The window's overview: every tunnel in one table, with state, handshake age,
+transferred bytes, latency and endpoint. One tunnel is stale and its latency
+cell holds a red cross.](assets/screenshot-app-overview.png)
+
+A cross in the latency column is a probe that got no answer, with the reason on
+hover. An empty cell is a tunnel nobody probed, which is a different thing and
+reads as one.
+
+Picking a tunnel on the left shows what is going through it — download and
+upload each on its own scale, so a busy download does not flatten the upload
+into a line along the axis. The byte counts beside the charts are as fresh as
+the charts rather than the minutes-old ones from the last full refresh.
+
+![One tunnel in the window: interface, endpoint, handshake age, bytes received
+and sent, check address and latency, above separate charts for received and sent
+traffic.](assets/screenshot-app-detail.png)
+
+Switching tunnels keeps every history: the subscriptions are released only when
+the window closes. Building it is in [`macos/README.md`](macos/README.md).
 
 ## Seeing it work, without tunnels
 
@@ -364,6 +418,20 @@ those sections is missing.
 
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.
+
+## Notification without `Tun Manager.app`
+
+Notifications show the logo above as a thumbnail when [`terminal-notifier`][tn]
+is installed (`brew install terminal-notifier`), and fall back to `osascript`
+without it.
+
+The icon on the left of a notification is not ours to set: since macOS 11 it is
+the icon of the `.app` bundle that sent the notification, so it shows whichever
+tool did the sending. `terminal-notifier` still accepts `-appIcon`, but macOS
+ignores it. `sudo tun-manager notify` posts a sample so you can see what your
+machine does with it.
+
+[tn]: https://github.com/julienXX/terminal-notifier
 
 ## License
 
