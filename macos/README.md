@@ -8,6 +8,24 @@ stops a tunnel, which is why it needs no privileges of its own. The one thing it
 asks for rather than reads is a ping, and even then it names a tunnel while the
 address probed comes from that tunnel's configuration.
 
+## Pointing it somewhere else
+
+```sh
+"Tun Manager.app/Contents/MacOS/tun-manager-menubar" --socket /tmp/tm-demo/feed.sock
+```
+
+Or, to launch the bundle rather than the binary:
+
+```sh
+open "Tun Manager.app" --args --socket /tmp/tm-demo/feed.sock
+```
+
+The flag beats the `FeedSocket` defaults key, and leaves nothing behind — a key
+left pointing at a demo publisher is a menu bar quietly listing tunnels that do
+not exist.
+
+`make -C .. demo` starts a publisher to point it at.
+
 ## Building
 
 ```sh

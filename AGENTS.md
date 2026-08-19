@@ -116,6 +116,37 @@ defaults delete net.ledez.tun-manager.menubar
 `About Tun Manager…` prints the socket in use, which is how to tell at a glance
 which one is being looked at.
 
+Better still, prefer the flag to the defaults key:
+
+```sh
+"macos/build/Tun Manager (dev).app/Contents/MacOS/tun-manager-menubar" \
+    --socket /tmp/tm-demo/feed.sock
+```
+
+It leaves nothing behind. Half of the failure above was the key outliving the
+publisher; an argument cannot.
+
+## Stand-in WireGuard
+
+`internal/tools/wgsim` does the same job one layer down: it serves the UAPI
+sockets tun-manager reads WireGuard through, so the program can be tried, and
+photographed, without real tunnels.
+
+**Never point it at `/var/run/wireguard`.** Its sockets are indistinguishable
+from a live tunnel's and the real `wg` would find them. It refuses that path
+outright, but the rule is the point rather than the guard.
+
+```sh
+make demo                       # writes the fixtures, serves /tmp/tm-demo
+pkill -f wgsim; rm -rf /tmp/tm-demo
+```
+
+`configs/wireguard/*.conf` are generated and committed. Edit
+`internal/tools/wgsim/main.go` and run `make demo-configs`; `make all` fails when
+the two have drifted apart. They carry no `PrivateKey`: the parser never reads
+one, so leaving it out keeps every key out of the repository and means `wg-quick`
+refuses the file, which is what stops a fixture from ever bringing anything up.
+
 ## Git
 
 Commit messages, PR titles and issues are in English. Say what changed and why

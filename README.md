@@ -178,6 +178,49 @@ It is only alive while `tun-manager` is: there is no daemon. Run
 `sudo tun-manager doctor` to see where the socket would bind and who could
 read it.
 
+## Seeing it work, without tunnels
+
+Everything above needs tunnels that are up, which is a poor way to try something
+out and a worse way to take a screenshot. `internal/tools/wgsim` stands in for a
+machine with tunnels on it: it writes the `.conf` files and serves the UAPI
+sockets tun-manager reads them through. Five invented tunnels, addresses from the
+ranges reserved for documentation, counters that climb while it runs.
+
+```sh
+make demo
+```
+
+That prints the two commands to run, one per window. **No `sudo`:** nothing a
+simulated run reads is root-only.
+
+Under the hood it is four flags, and they work on their own:
+
+```sh
+tun-manager --config <file> --config-dir <dir> --wg-socket <dir> \
+            --feed-socket <path> --fake-ping
+```
+
+`--wg-socket` names a *directory*, not a socket: WireGuard's userspace API is one
+socket per interface, and the `<name>.name` files live beside them. One flag
+moves both, because that is how `/var/run/wireguard` is.
+
+`--fake-ping` invents the round trips instead of measuring them. The demo's check
+addresses reach nothing, so a real probe would time out on every row. It is
+derived from the address rather than drawn at random, so the same demo
+photographs the same twice.
+
+`tun-manager doctor` leads with a warning naming whatever is simulated. Without
+it, every line under it describes something that does not exist.
+
+The demo's `wg_quick` points at a stub that refuses, so a key pressed during a
+demo cannot reach the machine's real tunnels.
+
+The menu bar application takes the matching flag:
+
+```sh
+"/Applications/Tun Manager.app/Contents/MacOS/tun-manager-menubar" --socket <path>
+```
+
 ## How a tunnel's state is decided
 
 A tunnel is matched to its live interface through `/var/run/wireguard/<name>.name`,
@@ -286,6 +329,8 @@ make cover          # coverage per package, fails below the floor in the Makefil
 make cover-html     # per-statement report in the browser
 make notices        # regenerate THIRD-PARTY-NOTICES.txt from the module graph
 make markers-check  # every NOT TESTED marker names a documented section
+make demo           # the simulator and the two commands to point at it
+make demo-configs   # regenerate configs/wireguard from internal/tools/wgsim
 make release-check  # runs the release pipeline without publishing
 ```
 

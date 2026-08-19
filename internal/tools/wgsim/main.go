@@ -87,7 +87,11 @@ var tunnels = []tunnel{
 	{
 		name: "charlie", device: "utun6", handshakeAge: 4 * time.Minute,
 		endpoint: "charlie.example:51820", liveEndpoint: "203.0.113.10:51820",
-		checkIP: "203.0.113.11", address: "203.0.113.2/32",
+		// This address is one probe.Simulated answers nothing for, and that is
+		// the point: charlie is the stale tunnel, so its check address going
+		// quiet is the story the table should tell. One of each thing worth
+		// showing, latency included.
+		checkIP: "203.0.113.15", address: "203.0.113.2/32",
 		allowedIPs: "203.0.113.0/24",
 		rx:         5_120, tx: 10_240, rxRate: 0, txRate: 0,
 	},
