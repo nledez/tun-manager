@@ -17,6 +17,9 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 	if err := os.WriteFile(filepath.Join(confDir, "alpha.conf"), []byte("[Peer]\nPublicKey = k\n"), 0o600); err != nil {
 		t.Fatalf("write conf: %v", err)
 	}
+	// t.TempDir hands back a directory the umask has had its way with; the
+	// checks below are about the mode, so it is set rather than assumed.
+	chmod(t, confDir, 0o700)
 
 	binDir := t.TempDir()
 	wgQuick := filepath.Join(binDir, "wg-quick")
@@ -34,6 +37,12 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 	// Same reasoning: the default socket lives under /var/run, and whether the
 	// feed check passes must not depend on that directory happening to exist.
 	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
+
+	// A fixture is owned by whoever runs the suite, and the permission checks
+	// want root on the WireGuard side and the pre-sudo user on the other. Making
+	// that true on disk would mean running the suite as root, which would prove
+	// it only on a machine nobody develops on.
+	ownedPerPath(t, map[string]int{filepath.Dir(cfg.Path): 1000}, 0)
 
 	return cfg, privdrop.User{Username: "operator", HomeDir: "/home/operator", UID: 1000, Demotable: true}
 }
@@ -252,7 +261,7 @@ func TestStatusStringsAreStable(t *testing.T) {
 	}
 }
 
-func TestDoctorFailsOnAnUnreadableConfigDir(t *testing.T) {
+func TestDoctorFailsOnAConfigDirThatIsNotThere(t *testing.T) {
 	cfg, u := healthyEnv(t)
 	cfg.ConfigDir = filepath.Join(t.TempDir(), "absent")
 
@@ -264,17 +273,85 @@ func TestDoctorFailsOnAnUnreadableConfigDir(t *testing.T) {
 	}
 }
 
-func TestDoctorFailsOnAConfigDirThatBreaksThePattern(t *testing.T) {
-	// config_dir is user input; a bracket in it reaches filepath.Glob as a
-	// malformed pattern rather than as a directory that does not exist.
+func TestADirectoryItCannotReadIsNotReportedAsAnEmptyOne(t *testing.T) {
+	// config_dir is 0700 and owned by root, so running doctor without sudo
+	// cannot look inside it. Saying "no *.conf" there tells the user their
+	// tunnels have disappeared, when the truth is that this process cannot see
+	// them - the difference between "nothing is configured" and "ask again with
+	// sudo".
+	//
+	// A regular file where the directory belongs, rather than a chmod: the
+	// suite is run under sudo often enough, and root can read a 0000 directory,
+	// so a permission test would pass by not testing anything.
 	cfg, u := healthyEnv(t)
-	cfg.ConfigDir = filepath.Join(t.TempDir(), "wireguard[")
+	notADirectory := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(notADirectory, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg.ConfigDir = notADirectory
 
 	checks := Doctor(cfg, u, 0, "test")
 
 	c, _ := findCheck(checks, "config dir")
 	if c.Status != Fail {
-		t.Errorf("config dir check status = %v, want %v", c.Status, Fail)
+		t.Fatalf("status = %v, want a failure", c.Status)
+	}
+	if strings.Contains(c.Detail, "no *.conf") {
+		t.Errorf("detail = %q: a directory it could not read was reported as an empty one", c.Detail)
+	}
+	if !strings.Contains(c.Detail, notADirectory) {
+		t.Errorf("detail = %q, want the path it could not read", c.Detail)
+	}
+}
+
+func TestADirectoryThatHoldsNoTunnelSaysSo(t *testing.T) {
+	// The other half of the pair above: this one really is empty, and must not
+	// borrow the wording of a failure to look.
+	cfg, u := healthyEnv(t)
+	cfg.ConfigDir = t.TempDir()
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	if c, _ := findCheck(checks, "config dir"); !strings.Contains(c.Detail, "no *.conf") {
+		t.Errorf("detail = %q, want it to say the directory holds none", c.Detail)
+	}
+}
+
+func TestADirectoryNamedLikeAPatternIsStillJustADirectory(t *testing.T) {
+	// config_dir is user input. It used to reach filepath.Glob, where a bracket
+	// was a malformed pattern rather than a name; it is now a path like any
+	// other, and this pins that a name nobody expected does not take a
+	// different route through the check.
+	cfg, u := healthyEnv(t)
+	dir := filepath.Join(t.TempDir(), "wireguard[")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alpha.conf"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg.ConfigDir = dir
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	if c, _ := findCheck(checks, "config dir"); c.Status != Pass {
+		t.Errorf("status = %v (%s), want the tunnel found", c.Status, c.Detail)
+	}
+}
+
+func TestADirectoryEndingInConfIsNotCountedAsATunnel(t *testing.T) {
+	// The count is what "5 tunnel(s)" means, and a directory is not one.
+	cfg, u := healthyEnv(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "spare.conf"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg.ConfigDir = dir
+
+	checks := Doctor(cfg, u, 0, "test")
+
+	if c, _ := findCheck(checks, "config dir"); c.Status != Fail {
+		t.Errorf("status = %v (%s), want a directory not to count", c.Status, c.Detail)
 	}
 }
 

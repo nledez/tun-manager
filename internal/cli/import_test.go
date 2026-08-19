@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -378,5 +379,89 @@ func TestImportReportsAWriteFailure(t *testing.T) {
 
 	if !errors.Is(err, boom) {
 		t.Errorf("Import = %v, want %v", err, boom)
+	}
+}
+
+func TestTheConfigDirectoryIsCreatedUnreadableToAnybodyElse(t *testing.T) {
+	// The .conf files are 0600, so no key leaks whatever the directory says.
+	// What a 0755 directory leaks is the list: anybody on the machine can see
+	// how many tunnels there are, what they are called, and - through the names
+	// people give them - often who they reach.
+	// importEnv leaves config_dir absent, so this is the first import on a
+	// machine - the one case where the program chooses the mode at all.
+	cfg, source := importEnv(t, importable)
+
+	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	info, err := os.Stat(cfg.ConfigDir)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("mode = %o, want 700: anybody could list the tunnels", got)
+	}
+}
+
+func TestADirectoryThatAlreadyExistsIsTightenedRatherThanTrusted(t *testing.T) {
+	// MkdirAll does nothing to a directory that is already there, so an
+	// installation made before this rule existed - or one somebody widened -
+	// would go on leaking the tunnel list forever. This is the command that
+	// puts a key in there, so it is the one that makes the place fit.
+	cfg, source := importEnv(t, importable)
+	if err := os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(cfg.ConfigDir, 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	info, err := os.Stat(cfg.ConfigDir)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("mode = %o, want 700: an existing directory is tightened, not trusted", got)
+	}
+}
+
+func TestTheImportedFileIsReadableByNobodyElseWhateverTheUmaskIs(t *testing.T) {
+	// The mode WriteFile is given can only be narrowed by the umask, never
+	// widened, so the property to assert is "no bits for anybody else" rather
+	// than exactly 0600 - which a umask of 0200 would legitimately turn into
+	// 0400.
+	cfg, source := importEnv(t, importable)
+
+	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(cfg.ConfigDir, "alpha.conf"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got&0o077 != 0 {
+		t.Errorf("mode = %04o, want nothing for group or other: it holds a private key", got)
+	}
+}
+
+func TestImportAndDoctorAgreeOnWhatTheModesShouldBe(t *testing.T) {
+	// Two commands with their own opinion of the same number is how one of them
+	// starts writing what the other rejects.
+	cfg, source := importEnv(t, importable)
+	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	ownedBy(t, 0)
+	for _, c := range Permissions(cfg, privdrop.User{HomeDir: "/var/root"}) {
+		if c.Status == Fail {
+			t.Errorf("%s: %s", c.Name, c.Detail)
+		}
 	}
 }

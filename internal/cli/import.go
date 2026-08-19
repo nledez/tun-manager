@@ -21,7 +21,10 @@ const backupSuffix = ".before-update"
 
 // confMode is what an imported configuration is written as. It carries the
 // tunnel's private key, and wg-quick reads it as root: nobody else needs it.
-const confMode os.FileMode = 0o600
+//
+// The same value doctor checks for, from the same constant, so the command that
+// writes the file and the command that judges it cannot drift apart.
+const confMode = TunnelFileMode
 
 // shortName is what a tunnel may be called. The name becomes a file name and,
 // through `<name>.name` in the WireGuard run directory, the identity that
@@ -64,9 +67,24 @@ func Import(w io.Writer, cfg *profile.Config, u privdrop.User, name, source stri
 		return fmt.Errorf("%s already exists: remove it first if you mean to replace that tunnel", target)
 	}
 
-	if err = os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
+	if err = os.MkdirAll(cfg.ConfigDir, WireGuardDirMode); err != nil {
 		return err
 	}
+	// Set rather than left to MkdirAll, which does nothing to a directory that
+	// already exists and is cut down by the umask when it does create one. This
+	// is the command that puts a key in there, so it is the one that has to
+	// make sure the place is fit to hold it.
+	if err = os.Chmod(cfg.ConfigDir, WireGuardDirMode); err != nil {
+		// NOT TESTED: chmod on a directory this process has just created, or
+		// already owns as root. Arranging a refusal needs a directory owned by
+		// somebody else, which needs the suite to run as root to set up.
+		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		return err
+	}
+	// No chmod after this one, unlike the directory above: a umask can only
+	// take bits away, so whatever this lands on is 0600 or stricter. The one
+	// way it could be looser is an existing file keeping its own mode, and a
+	// target that already exists was refused several lines ago.
 	if err = os.WriteFile(target, body, confMode); err != nil {
 		return err
 	}

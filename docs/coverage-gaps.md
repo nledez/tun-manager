@@ -202,3 +202,43 @@ same 99.6%, now that every branch is covered from the package that owns it.
 asserted. A line reached by a test that checks nothing counts the same as one
 pinned by three assertions. The floor in the Makefile guards against coverage
 rotting, not against tests that do not test.
+
+### cli.ownerOf
+
+`internal/cli/permissions.go` reads the uid behind a `FileInfo`:
+
+```go
+stat, ok := info.Sys().(*syscall.Stat_t)
+if !ok {
+```
+
+On darwin `os.Stat` always yields a `*syscall.Stat_t`; the assertion cannot
+fail. It guards a platform where `Sys()` returns something else — Plan 9, or a
+future `io/fs` implementation — and this program does not build on one. The
+alternative is no guard at all, which turns that hypothetical into a panic
+inside a diagnostic command, which is the worst place for one.
+
+### filesystem races in the permission code
+
+Three branches in `internal/cli` handle a filesystem that changed underneath
+the process:
+
+- `permissions.go` stats the directory holding `config_dir` immediately after
+  statting `config_dir` itself. The first stat walked through the second path,
+  so it existed a moment earlier.
+- `permissions.go` calls `entry.Info()` on each entry `os.ReadDir` returned.
+  `ReadDir` does not stat, so this lstat fails only for a file deleted between
+  the listing and the read.
+- `import.go` chmods the directory it has just created, or that it already owns
+  as root.
+
+Each is reachable in production — a `rm -rf` landing in the same millisecond, a
+read-only filesystem — and none is arrangeable from a test. Opening the first
+two windows means pausing the process between two adjacent statements, which
+needs a seam through `os.Stat` whose only purpose is to be wrong. The third
+needs a directory owned by somebody else, which needs the suite to run as root
+to set up, and a suite that only proves itself under sudo proves nothing on
+anybody else's machine.
+
+They are handled rather than ignored, which is the part that matters: none of
+them can make the checks report something false.

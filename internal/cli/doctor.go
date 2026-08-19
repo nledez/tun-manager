@@ -62,17 +62,26 @@ func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string, opts
 		opt(&want)
 	}
 
-	return []Check{
+	checks := []Check{
 		{Name: "version", Status: Pass, Detail: version},
 		checkRoot(euid, want.rootNeeded),
 		checkWgQuick(cfg.WgQuick),
 		checkConfigDir(cfg.ConfigDir),
 		checkRunDir(cfg.RunDir),
 		checkConfigFile(cfg),
+	}
+	// Skipped for a simulated run. Its config_dir is a directory of fixtures in
+	// a checked-out repository, owned by whoever cloned it and holding no key -
+	// demanding root of it would be demanding that a demo be run as root, which
+	// is the thing the simulator exists to avoid.
+	if want.rootNeeded {
+		checks = append(checks, Permissions(cfg, u)...)
+	}
+	return append(checks, []Check{
 		checkGroups(cfg),
 		checkNotifications(u),
 		checkFeed(cfg, u),
-	}
+	}...)
 }
 
 // Simulation reports what about this run is invented, or false when nothing is.
@@ -132,15 +141,29 @@ func checkWgQuick(path string) Check {
 	return Check{Name: "wg-quick", Status: Pass, Detail: path}
 }
 
+// checkConfigDir counts the tunnels, and says why when it cannot.
+//
+// os.ReadDir rather than filepath.Glob, which by design returns an error only
+// for a malformed pattern: a directory it cannot read comes back as no matches
+// at all. That mattered the day config_dir became 0700 and owned by root -
+// running doctor without sudo then reported "no *.conf", telling the user their
+// tunnels had disappeared when the truth was that this process could not look.
 func checkConfigDir(dir string) Check {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.conf"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Check{Name: "config dir", Status: Fail, Detail: fmt.Sprintf("%s: %v", dir, err)}
 	}
-	if len(matches) == 0 {
+
+	tunnels := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".conf") {
+			tunnels++
+		}
+	}
+	if tunnels == 0 {
 		return Check{Name: "config dir", Status: Fail, Detail: "no *.conf in " + dir}
 	}
-	return Check{Name: "config dir", Status: Pass, Detail: fmt.Sprintf("%d tunnel(s) in %s", len(matches), dir)}
+	return Check{Name: "config dir", Status: Pass, Detail: fmt.Sprintf("%d tunnel(s) in %s", tunnels, dir)}
 }
 
 // checkRunDir matters because the "<tunnel>.name" files it holds are the only
