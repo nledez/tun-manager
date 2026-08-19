@@ -353,3 +353,44 @@ func TestDoctorFailsWhenTheFeedSocketsDirectoryIsAFile(t *testing.T) {
 		t.Errorf("detail = %q, want it to say why", c.Detail)
 	}
 }
+
+func TestNothingSimulatedReportsNoCheckAtAll(t *testing.T) {
+	// A line saying "not simulated" on every ordinary run would be noise in the
+	// place a reader looks for problems.
+	if _, ok := Simulation("", false); ok {
+		t.Error("Simulation reported a check for a run with no flags")
+	}
+}
+
+func TestASimulatedWireGuardSaysWhereItIsReading(t *testing.T) {
+	check, ok := Simulation("/tmp/tm-demo/wireguard", false)
+
+	if !ok {
+		t.Fatal("Simulation reported nothing for a simulated run")
+	}
+	if check.Status != Warn {
+		t.Errorf("status = %v, want a warning: nothing is broken, nothing is real either", check.Status)
+	}
+	if !strings.Contains(check.Detail, "/tmp/tm-demo/wireguard") {
+		t.Errorf("detail = %q, want the directory it is reading", check.Detail)
+	}
+}
+
+func TestInventedRoundTripsSayThatNothingIsSent(t *testing.T) {
+	check, ok := Simulation("", true)
+
+	if !ok {
+		t.Fatal("Simulation reported nothing for invented probes")
+	}
+	if !strings.Contains(check.Detail, "nothing is sent") {
+		t.Errorf("detail = %q, want it to say no packets leave", check.Detail)
+	}
+}
+
+func TestBothSimulationsAreReportedTogether(t *testing.T) {
+	check, _ := Simulation("/tmp/tm-demo/wireguard", true)
+
+	if !strings.Contains(check.Detail, "wireguard") || !strings.Contains(check.Detail, "invented") {
+		t.Errorf("detail = %q, want both named", check.Detail)
+	}
+}

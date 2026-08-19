@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"ledez.net/tun-manager/internal/feed"
@@ -56,6 +57,33 @@ func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string) []Ch
 		checkNotifications(u),
 		checkFeed(cfg, u),
 	}
+}
+
+// Simulation reports what about this run is invented, or false when nothing is.
+//
+// Separate from Doctor because it is about the flags rather than the machine,
+// and because a report that does not say it is looking at a simulator is a
+// trap: every other line below it would then describe something that does not
+// exist.
+//
+// Warn rather than Pass. Nothing is broken, but nothing here is real either,
+// and a green line saying so would be the wrong shape of reassurance.
+func Simulation(wgSocket string, fakePing bool) (Check, bool) {
+	var what []string
+	if wgSocket != "" {
+		what = append(what, "wireguard state from "+wgSocket)
+	}
+	if fakePing {
+		what = append(what, "round trips are invented, nothing is sent")
+	}
+	if len(what) == 0 {
+		return Check{}, false
+	}
+	return Check{
+		Name:   "simulated",
+		Status: Warn,
+		Detail: strings.Join(what, "; "),
+	}, true
 }
 
 func checkRoot(euid int) Check {

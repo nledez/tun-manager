@@ -18,6 +18,7 @@ import (
 	"ledez.net/tun-manager/internal/netctx"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
+	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wg"
 )
@@ -694,7 +695,7 @@ func isolatedHome(t *testing.T) string {
 func TestLoadConfigReadsUnderTheRealUserHome(t *testing.T) {
 	home := isolatedHome(t)
 
-	cfg, u, err := loadConfig()
+	cfg, u, err := newEnv().loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -717,7 +718,7 @@ func TestLoadConfigReportsAnUnreadableFile(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	if _, _, err := loadConfig(); err == nil {
+	if _, _, err := newEnv().loadConfig(); err == nil {
 		t.Fatal("loadConfig succeeded on an unreadable configuration, want an error")
 	}
 }
@@ -725,19 +726,19 @@ func TestLoadConfigReportsAnUnreadableFile(t *testing.T) {
 func TestLoadConfigReportsAnUnresolvableSudoUser(t *testing.T) {
 	t.Setenv("SUDO_USER", "nobody-by-that-name")
 
-	if _, _, err := loadConfig(); err == nil {
+	if _, _, err := newEnv().loadConfig(); err == nil {
 		t.Fatal("loadConfig succeeded with an unresolvable SUDO_USER, want an error")
 	}
 }
 
 func TestBuildWiresTheApplicationFromTheConfiguration(t *testing.T) {
-	// build is what the injected env.build stands in for everywhere else, so
+	// buildApp is what the injected env.build stands in for everywhere else, so
 	// nothing else ever runs it.
 	isolatedHome(t)
 
-	a, err := build()
+	a, err := newEnv().buildApp()
 	if err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatalf("buildApp: %v", err)
 	}
 	t.Cleanup(func() {
 		if r, ok := a.Reader.(*wg.CtrlReader); ok {
@@ -764,8 +765,8 @@ func TestBuildWiresTheApplicationFromTheConfiguration(t *testing.T) {
 func TestBuildReportsAConfigurationFailure(t *testing.T) {
 	t.Setenv("SUDO_USER", "nobody-by-that-name")
 
-	if _, err := build(); err == nil {
-		t.Fatal("build succeeded on an unreadable configuration, want an error")
+	if _, err := newEnv().buildApp(); err == nil {
+		t.Fatal("buildApp succeeded on an unreadable configuration, want an error")
 	}
 }
 
@@ -1132,5 +1133,234 @@ func TestBackupNeedsRoot(t *testing.T) {
 
 	if err := e.run([]string{"backup"}); err == nil {
 		t.Error("backup ran without root")
+	}
+}
+
+// --- The flags that come before the command -------------------------------
+
+func TestAFlagBeforeTheCommandLeavesTheCommandAlone(t *testing.T) {
+	// flag stops at the first argument that is not a flag, which is what lets a
+	// command keep its own flags.
+	e := testEnv(t, &fakeRunner{})
+
+	rest, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo", "status", "--json"})
+
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if len(rest) != 2 || rest[0] != "status" || rest[1] != "--json" {
+		t.Errorf("rest = %v, want the command and its own flags untouched", rest)
+	}
+}
+
+func TestConfigDirReachesEveryCommandRatherThanJustOne(t *testing.T) {
+	// Applied once, around the loader. Applying it at each call site is how one
+	// of these ends up honoured by status and forgotten by doctor.
+	e := testEnv(t, &fakeRunner{})
+
+	if _, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo/conf"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.ConfigDir != "/tmp/tm-demo/conf" {
+		t.Errorf("ConfigDir = %q, want the flag to have won", cfg.ConfigDir)
+	}
+}
+
+func TestTheFeedSocketCanBeMovedOffTheDefault(t *testing.T) {
+	// So a demo publishes somewhere the installed menu bar application is not
+	// listening, and cannot be mistaken for the real thing.
+	e := testEnv(t, &fakeRunner{})
+
+	if _, err := e.parseFlags([]string{"--feed-socket", "/tmp/tm-demo/feed.sock"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.FeedSocket != "/tmp/tm-demo/feed.sock" {
+		t.Errorf("FeedSocket = %q, want the flag to have won", cfg.FeedSocket)
+	}
+}
+
+func TestTheWireGuardDirectoryMovesTheInterfaceNamesToo(t *testing.T) {
+	// One flag for both, because that is how /var/run/wireguard is: the sockets
+	// and the "<name>.name" files sit side by side. Moving one without the
+	// other would resolve every tunnel against the real machine.
+	e := testEnv(t, &fakeRunner{})
+
+	if _, err := e.parseFlags([]string{"--wg-socket", "/tmp/tm-demo/wireguard"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.RunDir != "/tmp/tm-demo/wireguard" {
+		t.Errorf("RunDir = %q, want it to follow --wg-socket", cfg.RunDir)
+	}
+}
+
+func TestAFlagLeftUnsetChangesNothing(t *testing.T) {
+	// The overrides are applied unconditionally; an empty one must not blank
+	// the configured value.
+	e := testEnv(t, &fakeRunner{})
+	before, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	dir, socket, runDir := before.ConfigDir, before.FeedSocket, before.RunDir
+
+	if _, parseErr := e.parseFlags(nil); parseErr != nil {
+		t.Fatalf("parseFlags: %v", parseErr)
+	}
+
+	after, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if after.ConfigDir != dir || after.FeedSocket != socket || after.RunDir != runDir {
+		t.Errorf("config changed with no flags set: %+v", after)
+	}
+}
+
+func TestAConfigurationThatCannotBeReadIsStillReportedThroughTheOverrides(t *testing.T) {
+	// The wrapper must pass the failure on rather than apply overrides to a nil
+	// configuration.
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("unreadable config")
+	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
+
+	if _, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if _, _, err := e.config(); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the loader's own failure", err)
+	}
+}
+
+func TestAnotherConfigurationFileCanBeRead(t *testing.T) {
+	isolatedHome(t)
+	path := filepath.Join(t.TempDir(), "demo.yaml")
+	if err := os.WriteFile(path, []byte("config_dir: /tmp/tm-demo/conf\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	e := newEnv()
+	if _, err := e.parseFlags([]string{"--config", path}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.Path != path {
+		t.Errorf("Path = %q, want %q", cfg.Path, path)
+	}
+	if cfg.ConfigDir != "/tmp/tm-demo/conf" {
+		t.Errorf("ConfigDir = %q, want the file's own value", cfg.ConfigDir)
+	}
+}
+
+func TestInventedProbesReplaceTheRealOnesEverywhere(t *testing.T) {
+	// Both the table's latencies and the pre-check that skips a tunnel already
+	// reachable: one real probe left in would take the timeout on every row.
+	isolatedHome(t)
+	e := newEnv()
+	if _, err := e.parseFlags([]string{"--fake-ping"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() {
+		if r, ok := a.Reader.(*wg.CtrlReader); ok {
+			_ = r.Close()
+		}
+	})
+
+	if _, ok := a.Pinger.(probe.Simulated); !ok {
+		t.Errorf("pinger = %T, want the simulated one", a.Pinger)
+	}
+	if _, ok := a.Control.Pinger.(probe.Simulated); !ok {
+		t.Errorf("controller pinger = %T, want the simulated one", a.Control.Pinger)
+	}
+}
+
+func TestTheWireGuardDirectoryIsWhatTheApplicationReads(t *testing.T) {
+	isolatedHome(t)
+	e := newEnv()
+	if _, err := e.parseFlags([]string{"--wg-socket", "/tmp/tm-demo/wireguard"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	// An empty directory rather than the machine's own state: the point is that
+	// it looked where it was told.
+	state, err := a.Reader.Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(state) != 0 {
+		t.Errorf("state = %+v, want nothing from a directory that is not there", state)
+	}
+	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != "/tmp/tm-demo/wireguard" {
+		t.Errorf("locator = %+v, want it pointed at the same directory", a.Locator)
+	}
+}
+
+func TestAnUnknownFlagIsRefusedWithTheUsage(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	err := e.run([]string{"--frobnicate", "status"})
+
+	if err == nil {
+		t.Fatal("run accepted a flag it does not have")
+	}
+	if !strings.Contains(err.Error(), "Usage:") {
+		t.Errorf("err = %v, want the usage alongside it", err)
+	}
+}
+
+func TestHelpIsPrintedEvenWhenItLooksLikeAFlag(t *testing.T) {
+	// -h and --help reach the flag set before the command switch, and come back
+	// as flag.ErrHelp rather than as a command.
+	e := testEnv(t, &fakeRunner{})
+
+	rest, err := e.parseFlags([]string{"--help"})
+
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if len(rest) != 1 || rest[0] != "help" {
+		t.Errorf("rest = %v, want it handed back as the help command", rest)
+	}
+}
+
+func TestDoctorSaysWhenItIsLookingAtASimulator(t *testing.T) {
+	// Every line below it would otherwise describe something that does not
+	// exist.
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 0
+
+	_ = e.run([]string{"--wg-socket", "/tmp/tm-demo/wireguard", "--fake-ping", "doctor"})
+
+	if !strings.Contains(output(e), "simulated") {
+		t.Errorf("doctor did not say it was simulating:\n%s", output(e))
 	}
 }

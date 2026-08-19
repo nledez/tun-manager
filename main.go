@@ -49,8 +49,57 @@ Usage:
   tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
 
+Flags, before the command:
+  --config PATH       read this configuration instead of the user's
+  --config-dir DIR    read the .conf files from here
+  --feed-socket PATH  bind the status feed here
+  --wg-socket DIR     read WireGuard from the UAPI sockets in this directory,
+                      and look there for the interface-name files too
+  --fake-ping         invent the round trips instead of measuring them
+
+The last two exist for the demo: internal/tools/wgsim serves a directory of
+sockets that look like tunnels, and its addresses answer nothing. The doctor
+command says so when either is in use.
+
 Configuration: ~/.config/tun-manager/config.yaml
 `
+
+// overrides are the flags that move where the program looks, or what it
+// believes. Every one of them exists so the program can be run against
+// internal/tools/wgsim instead of against a machine with tunnels on it.
+//
+// They are held together rather than spread over env because they are applied
+// together, once, in run - which is what stops one of them being honoured by
+// `status` and forgotten by `doctor`.
+type overrides struct {
+	// config is the configuration file to read, replacing the one under the
+	// pre-sudo user's home.
+	config string
+	// configDir replaces config_dir.
+	configDir string
+	// feedSocket replaces feed_socket.
+	feedSocket string
+	// wgSocket is the directory of UAPI sockets to read, and the directory the
+	// interface-name files are looked for in. One flag for both because that is
+	// how the real /var/run/wireguard is: sockets and names side by side.
+	wgSocket string
+	// fakePing answers probes without sending anything.
+	fakePing bool
+}
+
+// apply puts the overrides onto a configuration that has just been read.
+func (o overrides) apply(cfg *profile.Config) *profile.Config {
+	if o.configDir != "" {
+		cfg.ConfigDir = o.configDir
+	}
+	if o.feedSocket != "" {
+		cfg.FeedSocket = o.feedSocket
+	}
+	if o.wgSocket != "" {
+		cfg.RunDir = o.wgSocket
+	}
+	return cfg
+}
 
 // env is everything the commands touch outside of themselves. Holding it in one
 // place keeps the dispatch and the flag parsing testable without root, a
@@ -71,6 +120,9 @@ type env struct {
 	notifier *notify.Notifier
 	// interactive runs the TUI. It is a field so tests never start one.
 	interactive func(context.Context, *app.App, *notify.Notifier, *feed.Server) error
+
+	// flags are the overrides parsed off the command line, before the command.
+	flags overrides
 }
 
 // NOT TESTED: this calls os.Exit, so covering it means starting a subprocess to
@@ -86,17 +138,25 @@ func main() {
 }
 
 func newEnv() *env {
-	return &env{
+	e := &env{
 		out:         os.Stdout,
 		euid:        os.Geteuid(),
-		config:      loadConfig,
 		now:         time.Now,
-		build:       build,
 		interactive: runTUI,
 	}
+	// Methods rather than package functions: both read the flags, and both
+	// stay replaceable by a test.
+	e.config = e.loadConfig
+	e.build = e.buildApp
+	return e
 }
 
 func (e *env) run(args []string) error {
+	args, err := e.parseFlags(args)
+	if err != nil {
+		return err
+	}
+
 	command := "tui"
 	if len(args) > 0 {
 		command, args = args[0], args[1:]
@@ -141,6 +201,45 @@ func (e *env) run(args []string) error {
 	}
 }
 
+// parseFlags takes the flags that come before the command and returns what is
+// left, starting at the command.
+//
+// flag stops at the first argument that is not a flag, so a command's own flags
+// travel on untouched: `--config X status --json` leaves ["status", "--json"].
+//
+// The overrides are then wrapped around e.config once, here, rather than
+// applied at each command. Applying them at the call sites is how one of them
+// ends up honoured by `status` and forgotten by `doctor`.
+func (e *env) parseFlags(args []string) ([]string, error) {
+	fs := newFlagSet(appName)
+	fs.StringVar(&e.flags.config, "config", "", "configuration file to read")
+	fs.StringVar(&e.flags.configDir, "config-dir", "", "directory of .conf files")
+	fs.StringVar(&e.flags.feedSocket, "feed-socket", "", "where to bind the status feed")
+	fs.StringVar(&e.flags.wgSocket, "wg-socket", "", "directory of WireGuard UAPI sockets")
+	fs.BoolVar(&e.flags.fakePing, "fake-ping", false, "invent round trips instead of measuring them")
+
+	if err := fs.Parse(args); err != nil {
+		// -h and --help reach here as flag.ErrHelp rather than as a command,
+		// because the flag set sees them first. Handing back "help" keeps the
+		// usage printed from the one place that prints it.
+		if errors.Is(err, flag.ErrHelp) {
+			return []string{"help"}, nil
+		}
+		return nil, fmt.Errorf("%w\n\n%s", err, usage)
+	}
+
+	overrides := e.flags
+	base := e.config
+	e.config = func() (*profile.Config, privdrop.User, error) {
+		cfg, u, err := base()
+		if err != nil {
+			return cfg, u, err
+		}
+		return overrides.apply(cfg), u, nil
+	}
+	return fs.Args(), nil
+}
+
 // signalled returns a context cancelled by an interrupt, so a long batch of
 // wg-quick runs can be stopped between two tunnels.
 func signalled() (context.Context, context.CancelFunc) {
@@ -153,23 +252,36 @@ func configPath(u privdrop.User) string {
 	return filepath.Join(u.ConfigDir(appName), "config.yaml")
 }
 
-func loadConfig() (*profile.Config, privdrop.User, error) {
+// loadConfig reads the configuration, from --config when one was given.
+func (e *env) loadConfig() (*profile.Config, privdrop.User, error) {
 	u, err := privdrop.Current()
 	if err != nil {
 		return nil, privdrop.User{}, err
 	}
-	cfg, err := profile.Load(configPath(u))
+	path := e.flags.config
+	if path == "" {
+		path = configPath(u)
+	}
+	cfg, err := profile.Load(path)
 	if err != nil {
 		return nil, u, err
 	}
 	return cfg, u, nil
 }
 
-func build() (*app.App, error) {
-	cfg, _, err := loadConfig()
+func (e *env) buildApp() (*app.App, error) {
+	cfg, _, err := e.config()
 	if err != nil {
 		return nil, err
 	}
+
+	// A chosen directory of UAPI sockets rather than wherever wgctrl looks.
+	// Same protocol and same parsing below either way; only the directory
+	// differs, so the demo exercises the path that ships.
+	if e.flags.wgSocket != "" {
+		return e.assemble(cfg, wg.NewReaderIn(e.flags.wgSocket)), nil
+	}
+
 	reader, err := wg.NewReader()
 	// NOT TESTED: this branch. Opening the client succeeds for any user on
 	// darwin - it only records where to look - so this guards against a
@@ -181,8 +293,18 @@ func build() (*app.App, error) {
 	if err != nil {
 		return nil, err
 	}
+	return e.assemble(cfg, reader), nil
+}
 
-	pinger := probe.New()
+// assemble wires the application around whichever reader it was given.
+func (e *env) assemble(cfg *profile.Config, reader wg.Reader) *app.App {
+	var pinger probe.Pinger = probe.New()
+	if e.flags.fakePing {
+		// The demo's check addresses reach nothing, so a real probe would take
+		// the timeout and then fail on every row.
+		pinger = probe.Simulated{}
+	}
+
 	return &app.App{
 		Config:  cfg,
 		Reader:  reader,
@@ -193,7 +315,7 @@ func build() (*app.App, error) {
 			Runner:  wg.ExecRunner{},
 			Pinger:  pinger,
 		},
-	}, nil
+	}
 }
 
 func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server) error {
@@ -242,6 +364,11 @@ func (e *env) runDoctor() error {
 	}
 
 	checks := cli.Doctor(cfg, u, e.euid, version)
+	if simulated, ok := cli.Simulation(e.flags.wgSocket, e.flags.fakePing); ok {
+		// First, not last: everything below it describes whatever the flags
+		// pointed at rather than this machine.
+		checks = append([]cli.Check{simulated}, checks...)
+	}
 	if err := cli.WriteDoctor(e.out, checks); err != nil {
 		return err
 	}
