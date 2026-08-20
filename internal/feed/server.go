@@ -437,6 +437,14 @@ func (s *Server) PublishPings(pings []wire.Ping) {
 }
 
 func (s *Server) add(conn net.Conn) {
+	// Asked before anything is sent, and before the client is remembered: a
+	// connection this feed does not serve is closed having learnt nothing, not
+	// even the version in the hello line.
+	if !s.serves(conn) {
+		conn.Close() //nolint:errcheck // there is nothing to say to it
+		return
+	}
+
 	c := &client{conn: conn, out: make(chan any, sendQueue), watch: map[string]bool{}}
 
 	s.mu.Lock()

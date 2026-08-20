@@ -180,6 +180,13 @@ feed: true                              # default
 feed_socket: /var/run/tun-manager.sock  # default
 ```
 
+Every connection is asked for by the kernel before it is answered: the feed
+reads the peer's credentials with `LOCAL_PEERCRED` and serves root, the user the
+socket was handed to, and nobody else. Credentials it cannot read are a refusal.
+That is the check that stays true — a file mode is consulted at `connect(2)` and
+never again, so everything below is what makes a foreign connection unlikely,
+and this is what makes it useless.
+
 It is `0600` from the moment it exists, not from the `chmod` that follows the
 bind: the permissions of a unix socket are consulted at `connect(2)` and never
 again, so anybody who connected during that window would go on reading the feed

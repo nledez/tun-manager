@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
@@ -588,5 +591,206 @@ func TestTheUmaskIsPutBackEvenWhenTheBindFails(t *testing.T) {
 
 	if len(asked) != 2 || asked[1] == 0o177 {
 		t.Errorf("the umask was left behind after a failed bind: %v", asked)
+	}
+}
+
+// MARK: who the feed will answer
+
+func TestAConnectionFromSomebodyElseIsClosedHavingLearntNothing(t *testing.T) {
+	// The socket is 0600 in a directory root owns, so this should not happen —
+	// and it is the last line rather than the first: a mode is consulted at
+	// connect(2) and never again, so a connection that got in during any window
+	// at all would otherwise keep reading the feed for as long as tun-manager
+	// runs.
+	asking(t, func(net.Conn) (int, error) { return os.Getuid() + 2, nil })
+	s := serving(t, nil)
+
+	c := dial(t, s)
+
+	if c.lines.Scan() {
+		t.Errorf("the feed answered a stranger with %q", c.lines.Bytes())
+	}
+	if s.clientCount() != 0 {
+		t.Errorf("the stranger was remembered as a client")
+	}
+}
+
+func TestAConnectionWhoseCredentialsCannotBeReadIsRefused(t *testing.T) {
+	// A feed that answered anyway would be one that answers whenever the check
+	// breaks, which is the state somebody trying to reach it would aim for.
+	asking(t, func(net.Conn) (int, error) { return 0, errors.New("no credentials on this socket") })
+	s := serving(t, nil)
+
+	c := dial(t, s)
+
+	if c.lines.Scan() {
+		t.Errorf("the feed answered a connection it could not identify: %q", c.lines.Bytes())
+	}
+}
+
+func TestTheFeedAnswersTheUserItsSocketWasHandedTo(t *testing.T) {
+	// The whole point of handing the socket over: the menu bar runs as that
+	// user and this is the connection it makes.
+	//
+	// Neither root nor the identity running the suite, or the two other rules
+	// would let it through and this would be proving nothing.
+	operator := os.Getuid() + 1
+	asking(t, func(net.Conn) (int, error) { return operator, nil })
+	// Listen hands the socket to that user on the way, which a suite running as
+	// somebody else cannot do for real.
+	previousChown := fsx.Chown
+	fsx.Chown = func(string, int, int) error { return nil }
+	t.Cleanup(func() { fsx.Chown = previousChown })
+	s := serving(t, nil, func(s *Server) {
+		s.Owner = privdrop.User{Username: "operator", UID: operator, GID: 20, Demotable: true}
+	})
+
+	c := dial(t, s)
+
+	if got := c.next(t)["type"]; got != "hello" {
+		t.Errorf("first line = %v, want the hello the feed opens with", got)
+	}
+}
+
+func TestTheFeedAnswersRoot(t *testing.T) {
+	// Root can read that socket whatever its mode says. Refusing would be
+	// theatre.
+	asking(t, func(net.Conn) (int, error) { return 0, nil })
+	s := serving(t, nil)
+
+	if got := dial(t, s).next(t)["type"]; got != "hello" {
+		t.Errorf("first line = %v, want the hello the feed opens with", got)
+	}
+}
+
+func TestTheRealCredentialsAreWhatIsAskedFor(t *testing.T) {
+	// Every other test here stands in for the kernel. This one does not: the
+	// connection is a real one, from the identity running the suite, and the
+	// feed has to recognise it.
+	s := serving(t, nil)
+
+	if got := dial(t, s).next(t)["type"]; got != "hello" {
+		t.Errorf("first line = %v, want the hello the feed opens with", got)
+	}
+}
+
+func TestCredentialsCannotBeReadFromSomethingThatIsNotASocket(t *testing.T) {
+	// The assertion in realPeerUID: a net.Conn that carries no descriptor to
+	// ask about. Answering "uid 0" for one would be answering for anybody.
+	if _, err := realPeerUID(nothingUnderneath{}); err == nil {
+		t.Error("credentials were read off a connection that has none")
+	}
+}
+
+// asking makes the feed read the uid a test chooses rather than the one the
+// kernel reports: every socket a suite opens comes from the identity running
+// it, so the case worth checking is the one it cannot arrange.
+func asking(t *testing.T, who func(net.Conn) (int, error)) {
+	t.Helper()
+
+	previous := peerUID
+	peerUID = who
+	t.Cleanup(func() { peerUID = previous })
+}
+
+// nothingUnderneath is a connection with no descriptor behind it. It says it is
+// a unix socket, because that is the question realPeerUID asks first.
+type nothingUnderneath struct{ net.Conn }
+
+func (nothingUnderneath) LocalAddr() net.Addr { return unixAddr{} }
+
+func TestCredentialsCannotBeReadFromAConnectionThatIsGone(t *testing.T) {
+	// Control cannot reach a descriptor that has been closed. Answering for it
+	// would be answering for whoever comes next on that number.
+	conn := aUnixConnection(t)
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := realPeerUID(conn); err == nil {
+		t.Error("credentials were read off a closed connection")
+	}
+}
+
+func TestCredentialsCannotBeReadFromASocketThatIsNotLocal(t *testing.T) {
+	// LOCAL_PEERCRED is a unix-socket question, and darwin does not refuse it
+	// when it is asked of a TCP socket: it answers with a zeroed xucred, which
+	// says uid 0, which is root. So the question is not asked of anything but a
+	// unix socket, and this is the test that says so.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close() //nolint:errcheck
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close() //nolint:errcheck
+
+	if uid, err := realPeerUID(conn); err == nil {
+		t.Errorf("realPeerUID = %d on a TCP connection, want a refusal", uid)
+	}
+}
+
+func TestCredentialsCannotBeReadFromAConnectionThatWillNotBeReached(t *testing.T) {
+	// A net.Conn that says it has a descriptor and then cannot produce one.
+	if _, err := realPeerUID(unreachable{}); err == nil {
+		t.Error("credentials were read off a connection that cannot be reached")
+	}
+}
+
+// unreachable implements syscall.Conn and fails to hand over the descriptor,
+// which is the shape of a connection closed between the accept and the
+// question.
+type unreachable struct{ net.Conn }
+
+func (unreachable) LocalAddr() net.Addr { return unixAddr{} }
+
+// aUnixConnection is one end of a real unix socket pair, for the tests that ask
+// about credentials without a feed behind them.
+func aUnixConnection(t *testing.T) net.Conn {
+	t.Helper()
+
+	path := socketPath(t)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// unixAddr is what a unix socket answers when asked what it is.
+type unixAddr struct{}
+
+func (unixAddr) Network() string { return "unix" }
+func (unixAddr) String() string  { return "/var/run/tun-manager.sock" }
+
+func (unreachable) SyscallConn() (syscall.RawConn, error) {
+	return nil, errors.New("the connection is gone")
+}
+
+func TestAPeerTheKernelWillNotVouchForIsRefused(t *testing.T) {
+	// The getsockopt itself failing. It does not on a working machine, and what
+	// it does when it fails is decide who gets to read the feed.
+	//
+	// No Server here on purpose: standing in for a package variable while an
+	// accept loop is reading it is a data race, and -race says so.
+	conn := aUnixConnection(t)
+	previous := peerCredentials
+	peerCredentials = func(int, int, int) (*unix.Xucred, error) {
+		return nil, errors.New("protocol not available")
+	}
+	t.Cleanup(func() { peerCredentials = previous })
+
+	if uid, err := realPeerUID(conn); err == nil {
+		t.Errorf("realPeerUID = %d, want the refusal the kernel gave", uid)
 	}
 }

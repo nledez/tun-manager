@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -349,6 +350,9 @@ func TestAddClosesAConnectionArrivingAfterShutdown(t *testing.T) {
 	s.closed = true
 	s.mu.Unlock()
 
+	// A pipe has no credentials to read, and the feed refuses what it cannot
+	// identify. What this test is about is what happens after that check.
+	asking(t, func(net.Conn) (int, error) { return os.Getuid(), nil })
 	server, peer := net.Pipe()
 	defer peer.Close()
 
@@ -377,6 +381,9 @@ func TestAddRejectsAConnectionWhileShutdownIsClosing(t *testing.T) {
 	s.closing = true
 	s.mu.Unlock()
 
+	// A pipe has no credentials to read, and the feed refuses what it cannot
+	// identify. What this test is about is what happens after that check.
+	asking(t, func(net.Conn) (int, error) { return os.Getuid(), nil })
 	server, peer := net.Pipe()
 	defer peer.Close()
 
