@@ -119,6 +119,11 @@ func (t tunnel) publicKey() string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// fatal is what main does with a failure. A variable so a test can call main
+// itself: log.Fatal ends the process, and a simulator that refuses to start is
+// exactly the behaviour worth checking.
+var fatal = log.Fatal
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("wgsim: ")
@@ -130,7 +135,7 @@ func main() {
 	flag.Parse()
 
 	if err := run(*configPath, *configDir, *wgSocket, *writeOnly); err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 }
 
@@ -239,7 +244,23 @@ type counters struct {
 	tx map[string]int64
 }
 
+// serve binds the sockets and answers until an interrupt arrives.
 func serve(dir string) error {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	stop := make(chan struct{})
+	go func() {
+		<-signals
+		close(stop)
+	}()
+	return serveUntil(dir, stop)
+}
+
+// serveUntil is serve with the signal handling lifted out, so a test can stop
+// it by closing a channel rather than by killing the process it runs in.
+func serveUntil(dir string, stop <-chan struct{}) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -274,10 +295,10 @@ func serve(dir string) error {
 		log.Printf("%s on %s (%s)", t.name, t.device, path)
 	}
 
-	go c.tick()
+	ticking := make(chan struct{})
+	defer close(ticking)
+	go c.tick(ticking, tickInterval)
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	log.Printf("serving %d tunnels in %s; ^C to stop", len(listeners), dir)
 	<-stop
 
@@ -288,17 +309,35 @@ func serve(dir string) error {
 	return nil
 }
 
+// tickInterval is how often the counters advance while the simulator runs.
+const tickInterval = time.Second
+
 // tick advances the counters, so the rate charts have something to draw.
-func (c *counters) tick() {
-	t := time.NewTicker(time.Second)
+//
+// The interval is a parameter rather than a package variable a test can lower:
+// two tests running at once would then be writing and reading the same one, and
+// a simulator whose whole job is to be predictable is a poor place to start
+// sharing state.
+func (c *counters) tick(stop <-chan struct{}, every time.Duration) {
+	t := time.NewTicker(every)
 	defer t.Stop()
-	for range t.C {
-		c.mu.Lock()
-		for _, tun := range tunnels {
-			c.rx[tun.name] += tun.rxRate
-			c.tx[tun.name] += tun.txRate
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			c.advance()
 		}
-		c.mu.Unlock()
+	}
+}
+
+// advance is one step of it, which is the part worth watching.
+func (c *counters) advance() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, tun := range tunnels {
+		c.rx[tun.name] += tun.rxRate
+		c.tx[tun.name] += tun.txRate
 	}
 }
 

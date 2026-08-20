@@ -10,15 +10,15 @@
 // Apache-2.0 section 4 requires redistributing NOTICE files with binary
 // distributions, so the generated file ships in the release archives.
 //
-// NOT TESTED: this package has no unit tests and is excluded from the coverage
-// profile by COVER_PKGS in the Makefile. It is a build-time generator: it never
-// ships in the binary, and its only output is THIRD-PARTY-NOTICES.txt, which
-// `make notices-check` regenerates and compares on every build and in CI. That
-// catches a regression; it does not catch a licence this never collected in the
-// first place. See docs/coverage-gaps.md, "The notices generator".
+// `make notices-check` regenerates the file and compares it on every build and
+// in CI, which catches a regression. What it cannot catch is a licence this
+// never collected in the first place, which is what the tests beside it are
+// for: the collecting is driven from a package list a test writes itself,
+// rather than from whatever happens to be in the module cache.
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -62,6 +62,15 @@ type moduleLicenses struct {
 	files   map[string]string // relative path within the module -> absolute path
 }
 
+// What main does at the end, as variables: os.Exit ends the process before a
+// test can look at anything, and a generator that says why it stopped is worth
+// checking says it.
+var (
+	exit             = os.Exit
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+)
+
 func main() {
 	out := flag.String("o", "THIRD-PARTY-NOTICES.txt", "output file, or - for stdout")
 	flag.Parse()
@@ -73,17 +82,18 @@ func main() {
 
 	rendered, err := generate(context.Background(), patterns)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "notices: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "notices: %v\n", err) //nolint:errcheck // there is nowhere left to report it
+		exit(1)
+		return
 	}
 
 	if *out == "-" {
-		fmt.Print(rendered)
+		fmt.Fprint(stdout, rendered) //nolint:errcheck // likewise
 		return
 	}
 	if err := os.WriteFile(*out, []byte(rendered), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "notices: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "notices: %v\n", err) //nolint:errcheck // likewise
+		exit(1)
 	}
 }
 
@@ -146,7 +156,7 @@ func generate(ctx context.Context, patterns []string) (string, error) {
 		sort.Strings(rels)
 
 		for _, rel := range rels {
-			content, err := os.ReadFile(mod.files[rel])
+			content, err := readFile(mod.files[rel])
 			if err != nil {
 				return "", err
 			}
@@ -160,6 +170,11 @@ func generate(ctx context.Context, patterns []string) (string, error) {
 	}
 	return b.String(), nil
 }
+
+// readFile is os.ReadFile. A variable so a test can lose a licence between the
+// listing that found it and the read that reproduces it: shipping the rest of
+// the file and saying nothing would claim a completeness it does not have.
+var readFile = os.ReadFile
 
 // collectInto records the license files sitting directly in dir.
 func collectInto(mod *moduleLicenses, dir, moduleRoot string) {
@@ -202,7 +217,19 @@ var targets = []struct{ goos, goarch string }{
 
 // listPackages returns the union of the dependencies of every target platform,
 // deduplicated by import path and in a deterministic order.
-func listPackages(ctx context.Context, patterns []string) ([]listedPackage, error) {
+//
+// A variable, so that the collecting below can be driven from a package list a
+// test writes itself rather than from whatever is in the module cache: what is
+// worth checking is which licence files end up in the file, and running the
+// real go list would make that depend on the machine.
+var listPackages = listEveryTarget
+
+// listPackagesFor is the one call that shells out. It is a variable for the
+// same reason: the union and the deduplication above are worth testing without
+// two seconds of go list behind each case.
+var listPackagesFor = runGoList
+
+func listEveryTarget(ctx context.Context, patterns []string) ([]listedPackage, error) {
 	var (
 		all  []listedPackage
 		seen = map[string]bool{}
@@ -223,34 +250,40 @@ func listPackages(ctx context.Context, patterns []string) ([]listedPackage, erro
 	return all, nil
 }
 
-func listPackagesFor(ctx context.Context, goos, goarch string, patterns []string) ([]listedPackage, error) {
+// goCommand is the toolchain this shells out to. A variable so a test can point
+// it at something that fails to start, or at something that answers with
+// nothing resembling JSON — both of which are how a broken toolchain shows up,
+// and neither of which the real `go` will do on request.
+var goCommand = "go"
+
+func runGoList(ctx context.Context, goos, goarch string, patterns []string) ([]listedPackage, error) {
 	args := append([]string{"list", "-deps", "-json"}, patterns...)
-	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd := exec.CommandContext(ctx, goCommand, args...)
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch)
-	cmd.Stderr = os.Stderr
-	stdout, err := cmd.StdoutPipe()
+	// go list says why on its own standard error, and that is worth passing on
+	// rather than swallowing: "no required module provides package" is the
+	// answer to most of the reasons this fails.
+	cmd.Stderr = stderr
+
+	// Output rather than a pipe: the listing is a few megabytes at most, and
+	// one call that covers starting the process and waiting for it leaves one
+	// failure to report instead of three.
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("go list: %w", err)
 	}
 
 	var pkgs []listedPackage
-	dec := json.NewDecoder(stdout)
+	dec := json.NewDecoder(bytes.NewReader(out))
 	for {
 		var pkg listedPackage
 		if err := dec.Decode(&pkg); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			_ = cmd.Wait()
-			return nil, err
+			return nil, fmt.Errorf("read what go list said: %w", err)
 		}
 		pkgs = append(pkgs, pkg)
-	}
-	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("go list: %w", err)
 	}
 	return pkgs, nil
 }
