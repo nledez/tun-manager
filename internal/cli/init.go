@@ -155,7 +155,14 @@ func keepPrevious(path string, force bool) (string, error) {
 			path, filepath.Base(path)+initBackupSuffix)
 	}
 
-	saved := path + initBackupSuffix
+	return keepAside(path, initBackupSuffix)
+}
+
+// keepAside moves a file out of the way under a suffix, and returns where it
+// went. It is what stops a command that replaces a configuration from being the
+// command that loses one.
+func keepAside(path, suffix string) (string, error) {
+	saved := path + suffix
 	if err := fsx.Rename(path, saved); err != nil {
 		return "", fmt.Errorf("keep %s as %s: %w", path, saved, err)
 	}

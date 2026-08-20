@@ -44,6 +44,7 @@ Usage:
   sudo tun-manager down <name>...     bring tunnels down
   sudo tun-manager down --all         bring every tunnel down
   sudo tun-manager init-privileged    create the root-only half of the config
+  sudo tun-manager feed-key [--rotate]  the fingerprint the menu bar pins
   sudo tun-manager import NAME FILE   add a .conf and list it in the all group
                                      (shows the file and asks; --yes skips)
   sudo tun-manager backup             archive the configuration and every .conf
@@ -274,6 +275,8 @@ func (e *env) run(args []string) error {
 		return e.runDown(args)
 	case "init-privileged":
 		return e.runInitPrivileged(args)
+	case "feed-key":
+		return e.runFeedKey(args)
 	case "import":
 		return e.runImport(args)
 	case "backup":
@@ -563,6 +566,36 @@ func (e *env) runInitPrivileged(args []string) error {
 	// time has no user configuration yet, and needing one to create the other
 	// half would be a circle.
 	return cli.InitPrivileged(e.out, e.privilegedPath, *force)
+}
+
+// runFeedKey prints the fingerprint of the key the feed signs with, or draws a
+// new one.
+func (e *env) runFeedKey(args []string) error {
+	fs := newFlagSet("feed-key")
+	rotate := fs.Bool("rotate", false, "draw a new key, keeping the previous configuration beside it")
+	yes := fs.Bool("yes", false, "rotate without being asked to agree to it")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: sudo tun-manager feed-key [--rotate]")
+	}
+
+	priv, err := e.privileged()
+	if err != nil {
+		return err
+	}
+	if !*rotate {
+		return cli.FeedKey(e.out, priv)
+	}
+
+	// Asked, because every menu bar that connected to this publisher has the
+	// old key pinned and will refuse the new one until somebody says otherwise.
+	ask := cli.Ask(e.in, e.out)
+	if *yes {
+		ask = cli.Assumed(true)
+	}
+	return cli.RotateFeedKey(e.out, priv, ask)
 }
 
 // runImport adds a WireGuard configuration to the ones tun-manager manages.

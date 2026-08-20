@@ -226,6 +226,19 @@ It is only alive while `tun-manager` is: there is no daemon. Run
 `sudo tun-manager doctor` to see where the socket would bind and who could
 read it.
 
+```sh
+sudo tun-manager feed-key             # the fingerprint the application pins
+sudo tun-manager feed-key --rotate    # draw a new one
+```
+
+The fingerprint is the first sixteen bytes of the SHA-256 of the key's public
+half, in hex pairs — short enough to compare by eye against the application, and
+safe to read out loud, paste into an issue or leave on a screen. Rotating asks
+first and says why: every menu bar that has connected to this publisher pinned
+the old key and will refuse the new one until you approve it there. The previous
+configuration is kept as `tun-manager.yaml.before-rotate`, which is the only
+copy of the old key there is.
+
 ### The menu bar application
 
 `Tun Manager.app` is the consumer of that socket. It shows state, graphs traffic

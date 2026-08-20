@@ -246,3 +246,59 @@ func (p *Privileged) applyDefaults() {
 		p.FeedSocket = d.FeedSocket
 	}
 }
+
+// SetFeedKey writes a new signing key into the privileged file, leaving
+// everything else in it exactly as it was.
+//
+// Edited as a node tree rather than marshalled back from Privileged, for the
+// reason AddToGroup is: this is a file somebody maintains by hand, and a
+// rotation that came back having eaten the comment explaining each setting is a
+// rotation nobody does twice.
+//
+// The caller has already loaded the file, so its owner and its mode have been
+// judged; what this adds is that they survive the rewrite.
+func SetFeedKey(path, seed string) error {
+	data, err := fsx.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(doc.Content) == 0 {
+		// An empty file parses without error and without a document to edit.
+		// There is nothing in it to preserve, so one is started here.
+		doc = yaml.Node{
+			Kind:    yaml.DocumentNode,
+			Content: []*yaml.Node{{Kind: yaml.MappingNode}},
+		}
+	}
+
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("%s: the configuration is not a mapping", path)
+	}
+
+	if key := childOf(root, feedKeyName); key != nil {
+		key.SetString(seed)
+	} else {
+		root.Content = append(root.Content, scalar(feedKeyName), quoted(seed))
+	}
+
+	// Through the same writer AddToGroup uses: a temporary file beside the
+	// original, moved over it, keeping the mode it had. This one is 0600, and a
+	// rotation that widened it would hand the new key to whoever asked next.
+	return replace(path, &doc)
+}
+
+// feedKeyName is the key in the file, in one place: a rotation that wrote
+// feed_key while the loader read feedKey would silently do nothing.
+const feedKeyName = "feed_key"
+
+// quoted is a scalar that stays quoted, so a base64 seed ending in "=" is not
+// left looking like something else.
+func quoted(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Style: yaml.DoubleQuotedStyle, Value: value}
+}

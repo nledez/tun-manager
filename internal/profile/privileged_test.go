@@ -426,3 +426,160 @@ func TestLoadPrivilegedReportsAParentItCannotStat(t *testing.T) {
 		t.Errorf("err = %v, want the stat failure", err)
 	}
 }
+
+// MARK: replacing the key the feed signs with
+
+func TestSetFeedKeyWritesTheNewKeyAndKeepsEverythingElse(t *testing.T) {
+	// This file is written by init-privileged and then maintained by hand: a
+	// rotation that came back having eaten the comments explaining each setting
+	// is a rotation nobody does twice.
+	ownedBy(t, 0)
+	path := writePrivileged(t, `# what runs as root
+wg_quick: /usr/bin/wg-quick
+
+# the key the menu bar pins
+feed_key: "b2xkLXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="
+wg_quick_no_symlink: true
+`)
+
+	if err := SetFeedKey(path, "bmV3LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="); err != nil {
+		t.Fatalf("SetFeedKey: %v", err)
+	}
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(written)
+	if strings.Contains(body, "b2xkLXNlZWQ") {
+		t.Errorf("the old key is still in the file:\n%s", body)
+	}
+	if !strings.Contains(body, "bmV3LXNlZWQ") {
+		t.Errorf("the new key is not in the file:\n%s", body)
+	}
+	for _, want := range []string{"# what runs as root", "# the key the menu bar pins", "wg_quick_no_symlink: true"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the rotation lost %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestSetFeedKeyReadsBackAsTheKeyItWrote(t *testing.T) {
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+	const seed = "bmV3LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="
+
+	if err := SetFeedKey(path, seed); err != nil {
+		t.Fatalf("SetFeedKey: %v", err)
+	}
+
+	cfg, err := LoadPrivileged(path)
+	if err != nil {
+		t.Fatalf("LoadPrivileged: %v", err)
+	}
+	if cfg.FeedKey.Reveal() != seed {
+		t.Errorf("FeedKey = %q, want the one just written", cfg.FeedKey.Reveal())
+	}
+}
+
+func TestSetFeedKeyAddsTheKeyToAFileWithout(t *testing.T) {
+	// A privileged file written before there was a key to put in it.
+	ownedBy(t, 0)
+	path := writePrivileged(t, "wg_quick: /usr/bin/wg-quick\n")
+
+	if err := SetFeedKey(path, "bmV3LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="); err != nil {
+		t.Fatalf("SetFeedKey: %v", err)
+	}
+
+	cfg, err := LoadPrivileged(path)
+	if err != nil {
+		t.Fatalf("LoadPrivileged: %v", err)
+	}
+	if cfg.FeedKey.Reveal() == "" {
+		t.Error("the key was not added")
+	}
+}
+
+func TestSetFeedKeyKeepsTheFileToRoot(t *testing.T) {
+	// It holds the key. A rotation that widened the mode would hand it to
+	// whoever asked next.
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+
+	if err := SetFeedKey(path, "bmV3LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="); err != nil {
+		t.Fatalf("SetFeedKey: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != PrivilegedFileMode {
+		t.Errorf("mode = %04o, want %04o", got, PrivilegedFileMode)
+	}
+}
+
+func TestSetFeedKeyRefusesAFileItCannotParse(t *testing.T) {
+	ownedBy(t, 0)
+	path := writePrivileged(t, "wg_quick: [not, a, string\n")
+
+	if err := SetFeedKey(path, "x"); err == nil {
+		t.Error("SetFeedKey rewrote a file it could not read")
+	}
+}
+
+func TestSetFeedKeyRefusesWhatIsNotAMapping(t *testing.T) {
+	ownedBy(t, 0)
+	path := writePrivileged(t, "- one\n- two\n")
+
+	if err := SetFeedKey(path, "x"); err == nil {
+		t.Error("SetFeedKey rewrote a document that is not a configuration")
+	}
+}
+
+func TestSetFeedKeyWritesAKeyIntoAnEmptyFile(t *testing.T) {
+	// init-privileged makes the file; somebody emptied it. There is nothing to
+	// preserve, and a rotation that refused would leave them with no way back.
+	ownedBy(t, 0)
+	path := writePrivileged(t, "")
+
+	if err := SetFeedKey(path, "bmV3LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0tLS0="); err != nil {
+		t.Fatalf("SetFeedKey: %v", err)
+	}
+
+	cfg, err := LoadPrivileged(path)
+	if err != nil {
+		t.Fatalf("LoadPrivileged: %v", err)
+	}
+	if cfg.FeedKey.Reveal() == "" {
+		t.Error("the key was not written")
+	}
+}
+
+func TestSetFeedKeyReportsAFileItCannotRead(t *testing.T) {
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+	boom := errors.New("input/output error")
+	previous := fsx.ReadFile
+	fsx.ReadFile = func(string) ([]byte, error) { return nil, boom }
+	t.Cleanup(func() { fsx.ReadFile = previous })
+
+	if err := SetFeedKey(path, "x"); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the read failure", err)
+	}
+}
+
+func TestSetFeedKeyReportsAFileItCannotWrite(t *testing.T) {
+	// The privileged file is the one thing this program cannot half-write: a
+	// truncated one takes the tunnels with it at the next start.
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+	boom := errors.New("no space left on device")
+	previous := fsx.OpenFile
+	fsx.OpenFile = func(string, int, os.FileMode) (*os.File, error) { return nil, boom }
+	t.Cleanup(func() { fsx.OpenFile = previous })
+
+	if err := SetFeedKey(path, "x"); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the write failure", err)
+	}
+}

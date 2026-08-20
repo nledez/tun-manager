@@ -2024,3 +2024,105 @@ func TestASimulatedRunSaysSoToTheFeed(t *testing.T) {
 	cancel()
 	<-served
 }
+
+func TestFeedKeyPrintsTheFingerprintTheApplicationPins(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Path = filepath.Join(t.TempDir(), "tun-manager.yaml")
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+	if err := e.run([]string{"feed-key"}); err != nil {
+		t.Fatalf("feed-key: %v", err)
+	}
+
+	if !strings.Contains(output(e), "feed key") {
+		t.Errorf("output = %q, want the fingerprint", output(e))
+	}
+	if strings.Contains(output(e), priv.FeedKey.Reveal()) {
+		t.Errorf("output = %q, prints the key itself", output(e))
+	}
+}
+
+func TestFeedKeyRotatesWhenAskedTo(t *testing.T) {
+	e, path := aFeedKeyOnDisk(t)
+	e.in = strings.NewReader("y\n")
+
+	if err := e.run([]string{"feed-key", "--rotate"}); err != nil {
+		t.Fatalf("feed-key --rotate: %v", err)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(body), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=") {
+		t.Error("the key did not change")
+	}
+	if !strings.Contains(output(e), "[y/N]") {
+		t.Errorf("nothing was asked before every pinned connection was broken:\n%s", output(e))
+	}
+}
+
+func TestFeedKeyRotationCanBeAgreedToOnTheCommandLine(t *testing.T) {
+	e, _ := aFeedKeyOnDisk(t)
+	e.in = strings.NewReader("") // nothing to read: --yes must not need it
+
+	if err := e.run([]string{"feed-key", "--rotate", "--yes"}); err != nil {
+		t.Fatalf("feed-key --rotate --yes: %v", err)
+	}
+
+	if strings.Contains(output(e), "[y/N]") {
+		t.Errorf("--yes still asked:\n%s", output(e))
+	}
+}
+
+func TestFeedKeyTakesNoArgument(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	if err := e.run([]string{"feed-key", "somewhere"}); err == nil {
+		t.Fatal("feed-key accepted an argument")
+	}
+}
+
+func TestFeedKeyReportsAPrivilegedFileItCannotRead(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("tun-manager.yaml is owned by uid 501 rather than root")
+	e.privileged = func() (*profile.Privileged, error) { return nil, boom }
+
+	if err := e.run([]string{"feed-key"}); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the reason the file could not be read", err)
+	}
+}
+
+// aFeedKeyOnDisk gives an environment whose privileged configuration is a real
+// file with a key in it, which is what a rotation rewrites.
+func aFeedKeyOnDisk(t *testing.T) (*env, string) {
+	t.Helper()
+
+	e := testEnv(t, &fakeRunner{})
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tun-manager.yaml")
+	body := "wg_quick: /usr/bin/wg-quick\nfeed_key: \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Path = path
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	return e, path
+}
+
+func TestFeedKeyRejectsAnUnknownFlag(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	if err := e.run([]string{"feed-key", "--replace"}); err == nil {
+		t.Fatal("feed-key accepted --replace")
+	}
+}

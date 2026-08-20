@@ -34,6 +34,7 @@ var (
 	MkdirAll     = os.MkdirAll
 	ReadDir      = os.ReadDir
 	OpenFile     = os.OpenFile
+	ReadFile     = os.ReadFile
 	EvalSymlinks = filepath.EvalSymlinks
 	// StatFile is (*os.File).Stat, which is a method and so cannot be replaced
 	// the way the calls above can. It is here because the checks that matter
