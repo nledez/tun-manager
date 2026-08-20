@@ -223,9 +223,37 @@ reason: it decides whether the file that says what root will execute is owned
 by root, and the two packages cannot share the variable without `profile`
 importing `cli`, which is backwards. Both markers name this section.
 
+### the feed key round trip
+
+`internal/cli/init.go` asks for the fingerprint of the seed it has just
+generated:
+
+```go
+seed, err := feed.GenerateSeed(nil)
+fingerprint, err := feed.FingerprintOfSeed(seed)
+```
+
+The second call cannot fail on the first call's output: `GenerateSeed` returns
+32 bytes of base64, which is exactly what `FingerprintOfSeed` accepts. Reaching
+the branch would mean the two disagree about what a seed is, which no input can
+arrange — only an edit to one of them, and `internal/feed` covers both sides
+directly. The error is returned rather than ignored because a fingerprint
+nobody could compute is a key nobody can verify, and finding that out at
+install time beats finding it out from the menu bar.
+
+`init-privileged` also asks `crypto/rand` for the seed, and returns what it
+says. It does not fail on darwin, and the case that matters — a source that
+runs out mid-read, yielding a key with fewer bits than it claims — is covered
+in `internal/feed`, where the reader is a parameter and can be made to.
+
+`internal/feed/key.go` carries the other half of the same shape: the type
+assertion on what `ed25519.PrivateKey.Public()` returns. It returns an
+`ed25519.PublicKey` and nothing else; the guard exists so a standard library
+that changed that would produce an error rather than a panic.
+
 ### filesystem races in the permission code
 
-Five branches handle a filesystem that changed underneath the process. Three
+Nine branches handle a filesystem that changed underneath the process. Three
 are in `internal/cli/permissions.go` and `internal/cli/import.go`:
 
 - `permissions.go` stats the directory holding `config_dir` immediately after
@@ -241,6 +269,14 @@ Two more are in `internal/profile/privileged.go`:
 
 - `LoadPrivileged` fstats the descriptor it has just opened.
 - `checkPrivilegedParent` stats the directory the open above walked through.
+
+Five more are in `internal/cli/init.go`, which creates that layout: the write
+and the close of a file it has just created, the chmod of a directory it has
+just created or already owns, the rename of a file it has just seen, and the
+create itself — whose `O_EXCL|O_NOFOLLOW` is there precisely to lose that race
+safely rather than to win it. Each
+needs the filesystem to change, fill up or be unmounted between two adjacent
+statements.
 
 Each is reachable in production — a `rm -rf` landing in the same millisecond, a
 read-only filesystem — and none is arrangeable from a test. Opening the first

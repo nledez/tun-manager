@@ -43,6 +43,7 @@ Usage:
   sudo tun-manager up --group NAME    bring a whole group up (needed, extra, all)
   sudo tun-manager down <name>...     bring tunnels down
   sudo tun-manager down --all         bring every tunnel down
+  sudo tun-manager init-privileged    create the root-only half of the config
   sudo tun-manager import NAME FILE   add a .conf and list it in the all group
   sudo tun-manager backup             archive the configuration and every .conf
   tun-manager doctor                  check the environment
@@ -239,7 +240,11 @@ func (e *env) run(args []string) error {
 	// wg-quick fails on its own. What it is, is the difference between a demo
 	// anybody can run and one nobody does.
 	if e.euid != 0 && e.flags.wgSocket == "" {
-		return errors.New("this needs root: run `sudo tun-manager` (see `tun-manager doctor`)")
+		// The command is named back, because "run `sudo tun-manager`" is right
+		// for the interface and wrong for everything else: it would start the
+		// TUI rather than do what was asked for.
+		return fmt.Errorf("this needs root: run `sudo tun-manager%s` (see `tun-manager doctor`)",
+			asArgument(command))
 	}
 
 	switch command {
@@ -251,6 +256,8 @@ func (e *env) run(args []string) error {
 		return e.runUp(args)
 	case "down":
 		return e.runDown(args)
+	case "init-privileged":
+		return e.runInitPrivileged(args)
 	case "import":
 		return e.runImport(args)
 	case "backup":
@@ -368,6 +375,15 @@ func plural(named []string) string {
 	return "each of them"
 }
 
+// asArgument renders a command for the refusal above, and renders the default
+// one as nothing at all: `sudo tun-manager tui` is not what anybody types.
+func asArgument(command string) string {
+	if command == "tui" {
+		return ""
+	}
+	return " " + command
+}
+
 // signalled returns a context cancelled by an interrupt, so a long batch of
 // wg-quick runs can be stopped between two tunnels.
 func signalled() (context.Context, context.CancelFunc) {
@@ -474,6 +490,32 @@ func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server)
 	return tui.Run(ctx, a, n, f)
 }
 
+// runInitPrivileged lays out the root-only half of the configuration.
+//
+// It asks for root on its own account rather than leaning on the gate in run:
+// that gate lets a simulated run through, and this command writes into
+// /private/wireguard whatever the flags say.
+func (e *env) runInitPrivileged(args []string) error {
+	fs := newFlagSet("init-privileged")
+	force := fs.Bool("force", false, "replace an existing configuration, keeping the old one beside it")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: sudo tun-manager init-privileged [--force]")
+	}
+	if e.euid != 0 {
+		return fmt.Errorf(
+			"init-privileged writes %s, which belongs to root: run `sudo tun-manager init-privileged`",
+			e.privilegedPath)
+	}
+
+	// Deliberately not through e.config: a machine being set up for the first
+	// time has no user configuration yet, and needing one to create the other
+	// half would be a circle.
+	return cli.InitPrivileged(e.out, e.privilegedPath, *force)
+}
+
 // runImport adds a WireGuard configuration to the ones tun-manager manages.
 func (e *env) runImport(args []string) error {
 	fs := newFlagSet("import")
@@ -537,7 +579,7 @@ func (e *env) runDoctor() error {
 		// A simulated run reads no privileged file, so there is nothing to
 		// report about one; the simulated line below says where its settings
 		// came from instead.
-		checks = append([]cli.Check{cli.PrivilegedFile(e.privilegedPath, privErr, e.euid)}, checks...)
+		checks = append([]cli.Check{cli.PrivilegedFile(e.privilegedPath, priv, privErr, e.euid)}, checks...)
 	}
 	if simulated, ok := cli.Simulation(e.flags.wgSocket, e.flags.fakePing); ok {
 		// First, not last: everything below it describes whatever the flags

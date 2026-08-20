@@ -1556,3 +1556,80 @@ func TestASimulatedRunTakesItsDangerousSettingsFromTheFlags(t *testing.T) {
 		t.Errorf("FeedSocket = %q, want the flag", priv.FeedSocket)
 	}
 }
+
+func TestInitPrivilegedNeedsRootEvenWithASimulationFlag(t *testing.T) {
+	// The root gate lets a simulated run through, because a simulator is
+	// readable by whoever started it. This command writes /private/wireguard,
+	// so it asks for root on its own account.
+	e := demoEnv(t, &fakeRunner{})
+	e.privilegedPath = filepath.Join(t.TempDir(), "wireguard", "config", "tun-manager.yaml")
+
+	err := e.run([]string{"--wg-socket", t.TempDir(), "init-privileged"})
+
+	if err == nil {
+		t.Fatal("init-privileged ran without root")
+	}
+	if !strings.Contains(err.Error(), "sudo") {
+		t.Errorf("error %q does not say what to type", err)
+	}
+	if _, statErr := os.Stat(e.privilegedPath); !os.IsNotExist(statErr) {
+		t.Error("it wrote the file anyway")
+	}
+}
+
+func TestInitPrivilegedWritesTheFileTheProgramReads(t *testing.T) {
+	// The path is not an argument and not a flag: what init writes is what a
+	// root run reads, and there is no way to make the two differ.
+	e := testEnv(t, &fakeRunner{}) // euid 0
+	e.privilegedPath = filepath.Join(t.TempDir(), "wireguard", "config", "tun-manager.yaml")
+
+	if err := e.run([]string{"init-privileged"}); err != nil {
+		t.Fatalf("init-privileged: %v", err)
+	}
+
+	if _, err := os.Stat(e.privilegedPath); err != nil {
+		t.Fatalf("nothing was written: %v", err)
+	}
+	if !strings.Contains(output(e), e.privilegedPath) {
+		t.Errorf("the report does not name the file:\n%s", output(e))
+	}
+}
+
+func TestInitPrivilegedRejectsAnUnknownFlag(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	if err := e.run([]string{"init-privileged", "--replace"}); err == nil {
+		t.Fatal("init-privileged accepted --replace")
+	}
+}
+
+func TestTheRootRefusalNamesTheCommandThatWasAskedFor(t *testing.T) {
+	// "run `sudo tun-manager`" is the right thing to type for the interface and
+	// the wrong thing for everything else: it would start the TUI instead of
+	// doing what was asked.
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+
+	err := e.run([]string{"init-privileged"})
+
+	if err == nil {
+		t.Fatal("init-privileged ran without root")
+	}
+	if !strings.Contains(err.Error(), "sudo tun-manager init-privileged") {
+		t.Errorf("error %q does not name the command", err)
+	}
+}
+
+func TestTheRootRefusalForTheInterfaceStaysPlain(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+	e.euid = 501
+
+	err := e.run(nil)
+
+	if err == nil {
+		t.Fatal("the interface started without root")
+	}
+	if !strings.Contains(err.Error(), "`sudo tun-manager` (see") {
+		t.Errorf("error %q, want it to name the bare command", err)
+	}
+}

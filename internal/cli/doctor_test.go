@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 )
@@ -511,8 +512,16 @@ func TestRootIsStillRequiredOfAnOrdinaryRun(t *testing.T) {
 	}
 }
 
+// withFeedKey is a privileged configuration that has been through
+// init-privileged: the only shape in which the file is complete.
+func withFeedKey() *profile.Privileged {
+	priv := profile.DefaultPrivileged()
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	return priv
+}
+
 func TestThePrivilegedFileIsReportedAsReadWhenItWas(t *testing.T) {
-	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", nil, 0)
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", withFeedKey(), nil, 0)
 
 	if check.Status != Pass {
 		t.Errorf("status = %v, want Pass", check.Status)
@@ -525,7 +534,7 @@ func TestThePrivilegedFileIsReportedAsReadWhenItWas(t *testing.T) {
 func TestAPrivilegedFileAPlainUserCannotReadIsOnlyAWarning(t *testing.T) {
 	// It is 0600 and root's. A plain user being unable to read it is the design
 	// working, and a FAIL there would teach people to chmod it.
-	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", fs.ErrPermission, 501)
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", withFeedKey(), fs.ErrPermission, 501)
 
 	if check.Status != Warn {
 		t.Errorf("status = %v, want Warn", check.Status)
@@ -539,12 +548,67 @@ func TestAPrivilegedFileRootCannotReadIsAFailure(t *testing.T) {
 	// Root can read anything it is allowed to read. If it cannot, the file is
 	// missing, a symbolic link, or owned by somebody else - and the reason has
 	// to reach the report rather than be softened into a warning.
-	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", errors.New("is a symbolic link"), 0)
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", withFeedKey(), errors.New("is a symbolic link"), 0)
 
 	if check.Status != Fail {
 		t.Errorf("status = %v, want Fail", check.Status)
 	}
 	if !strings.Contains(check.Detail, "symbolic link") {
 		t.Errorf("detail %q loses the reason", check.Detail)
+	}
+}
+
+func TestThePrivilegedCheckShowsTheFeedKeyFingerprint(t *testing.T) {
+	// It is what somebody compares against the application's About window when
+	// the menu bar says the publisher has changed. A fingerprint the publisher
+	// side never prints is a comparison nobody can make.
+	priv := profile.DefaultPrivileged()
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	want, err := feed.FingerprintOfSeed(priv.FeedKey.Reveal())
+	if err != nil {
+		t.Fatalf("FingerprintOfSeed: %v", err)
+	}
+
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", priv, nil, 0)
+
+	if check.Status != Pass {
+		t.Errorf("status = %v, want Pass", check.Status)
+	}
+	if !strings.Contains(check.Detail, want) {
+		t.Errorf("detail %q does not show the fingerprint %q", check.Detail, want)
+	}
+	if strings.Contains(check.Detail, priv.FeedKey.Reveal()) {
+		t.Errorf("detail %q prints the private seed", check.Detail)
+	}
+}
+
+func TestAPrivilegedFileWithoutAFeedKeyIsAWarning(t *testing.T) {
+	// Everything works without one until the menu bar has to tell this
+	// publisher from another. Saying so at doctor time is the cheap moment.
+	priv := profile.DefaultPrivileged() // no feed key
+
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", priv, nil, 0)
+
+	if check.Status != Warn {
+		t.Errorf("status = %v, want Warn", check.Status)
+	}
+	if !strings.Contains(check.Detail, "init-privileged") {
+		t.Errorf("detail %q does not say how to get one", check.Detail)
+	}
+}
+
+func TestAPrivilegedFileWithAnUnusableFeedKeyIsAWarning(t *testing.T) {
+	// A seed edited by hand, truncated by a copy and paste. The file itself is
+	// sound, so the failure belongs on this line rather than at startup.
+	priv := profile.DefaultPrivileged()
+	priv.FeedKey = "not a key"
+
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", priv, nil, 0)
+
+	if check.Status != Warn {
+		t.Errorf("status = %v, want Warn", check.Status)
+	}
+	if strings.Contains(check.Detail, "not a key") {
+		t.Errorf("detail %q prints what was in the file", check.Detail)
 	}
 }

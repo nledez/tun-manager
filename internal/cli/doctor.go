@@ -120,12 +120,12 @@ func Simulation(wgSocket string, fakePing bool) (Check, bool) {
 // failure means every line below it describes built-in defaults rather than
 // this machine — and because doctor is the one command that must still run
 // when it fails. Everything else refuses to start.
-func PrivilegedFile(path string, err error, euid int) Check {
+func PrivilegedFile(path string, priv *profile.Privileged, err error, euid int) Check {
 	const name = "privileged config"
 
 	switch {
 	case err == nil:
-		return Check{Name: name, Status: Pass, Detail: path + " 0600 root:root"}
+		return feedKeyDetail(name, path, priv)
 	case euid != 0 && errors.Is(err, fs.ErrPermission):
 		// The file is 0600 and root's, so a plain user cannot read it. That is
 		// the design working, not a fault, and reporting it as a failure would
@@ -136,6 +136,37 @@ func PrivilegedFile(path string, err error, euid int) Check {
 		}
 	default:
 		return Check{Name: name, Status: Fail, Detail: err.Error()}
+	}
+}
+
+// feedKeyDetail renders the line for a file that was read, which is where the
+// feed key's fingerprint belongs.
+//
+// The fingerprint is the whole reason this line is worth reading twice: it is
+// what somebody compares against the menu bar application's About window when
+// it says the publisher has changed. Only the fingerprint is shown, never the
+// seed - a report is printed, piped and pasted into issues.
+func feedKeyDetail(name, path string, priv *profile.Privileged) Check {
+	seed := priv.FeedKey.Reveal()
+	if seed == "" {
+		return Check{
+			Name: name, Status: Warn,
+			Detail: path + " has no feed key: the menu bar application cannot tell this publisher " +
+				"from another. `sudo tun-manager init-privileged --force` writes one",
+		}
+	}
+
+	fingerprint, err := feed.FingerprintOfSeed(seed)
+	if err != nil {
+		// The message names what is wrong with the key, never the key.
+		return Check{
+			Name: name, Status: Warn,
+			Detail: fmt.Sprintf("%s: %v. `sudo tun-manager init-privileged --force` writes a new one", path, err),
+		}
+	}
+	return Check{
+		Name: name, Status: Pass,
+		Detail: fmt.Sprintf("%s %04o root:root, feed key %s", path, TunnelFileMode.Perm(), fingerprint),
 	}
 }
 

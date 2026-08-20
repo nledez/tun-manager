@@ -77,12 +77,12 @@ make build              # ./bin/tun-manager alone
 make install            # /usr/local/bin/tun-manager
                         #   + /Applications/Tun Manager.app
 
-sudo mkdir -p /private/wireguard/config
-sudo chown 0:0 /private/wireguard /private/wireguard/config
-sudo chmod 700 /private/wireguard /private/wireguard/config
-sudo cp configs/tun-manager.example.yaml /private/wireguard/config/tun-manager.yaml
-sudo chmod 0600 /private/wireguard/config/tun-manager.yaml
-sudo ls -ld /private/wireguard /private/wireguard/config /private/wireguard/config/tun-manager.yaml
+# The root-only half of the configuration: the directories, the file that says
+# what runs as root, and the key the menu bar application pins. It creates each
+# one for root alone, tightens a directory that is already there and too open,
+# and refuses to overwrite a configuration that exists -- that file holds the
+# feed key, and replacing it is what makes the menu bar stop trusting you.
+sudo tun-manager init-privileged
 
 mkdir -p ~/.config/tun-manager
 cp configs/config.example.yaml ~/.config/tun-manager/config.yaml
