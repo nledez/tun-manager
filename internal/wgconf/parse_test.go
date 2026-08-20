@@ -484,3 +484,19 @@ func TestParseAndParseFileAgree(t *testing.T) {
 		t.Errorf("Parse = %+v\nParseFile = %+v", fromBytes, fromFile)
 	}
 }
+
+func TestParseReportsALineItCannotRead(t *testing.T) {
+	// bufio.Scanner refuses a line longer than its buffer, and a .conf whose
+	// last line never arrived is not one to half-parse: the peer key could be
+	// on the part that was dropped.
+	body := []byte("[Interface]\nAddress = " + strings.Repeat("1", 70*1024) + "\n")
+
+	_, err := Parse(body, "/private/wireguard/config/alpha.conf")
+
+	if err == nil {
+		t.Fatal("Parse accepted a file it could not read to the end")
+	}
+	if !strings.Contains(err.Error(), "alpha.conf") {
+		t.Errorf("error %q does not name the file", err)
+	}
+}

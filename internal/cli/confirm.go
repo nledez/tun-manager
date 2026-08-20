@@ -23,9 +23,7 @@ type Confirm func(question string) (bool, error)
 func Ask(in io.Reader, w io.Writer) Confirm {
 	return func(question string) (bool, error) {
 		if _, err := fmt.Fprintf(w, "%s [y/N] ", question); err != nil {
-			// NOT TESTED: the writer here is the one every other line of the
-			// report has already gone to.
-			// See docs/coverage-gaps.md, "the confirmation prompt".
+			// A question nobody saw must not be answered on their behalf.
 			return false, err
 		}
 

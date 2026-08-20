@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"ledez.net/tun-manager/internal/feed"
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // privilegedTemplate is what init-privileged writes: the settings that decide
@@ -27,6 +28,12 @@ var privilegedTemplate string
 // emptyFeedKey is the line the generated key replaces. The template ships with
 // it empty, because a key shipped in an example is a key everybody has.
 const emptyFeedKey = `feed_key: ""`
+
+// generateSeed draws the key init-privileged writes. A variable so a test can
+// make the draw fail: crypto/rand does not fail on darwin, and a key drawn from
+// a source that ran out would have fewer bits than it claims with nothing
+// downstream able to tell.
+var generateSeed = func() (string, error) { return feed.GenerateSeed(nil) }
 
 // initBackupSuffix names the copy --force keeps. Replacing the file replaces
 // the feed key, and the menu bar has pinned the old one: somebody who did that
@@ -50,20 +57,16 @@ func InitPrivileged(w io.Writer, path string, force bool) error {
 		}
 	}
 
-	seed, err := feed.GenerateSeed(nil)
+	seed, err := generateSeed()
 	if err != nil {
-		// NOT TESTED: this reads crypto/rand, which does not fail on darwin -
-		// the failing-reader case is covered where it can be injected, in
-		// internal/feed.
-		// See docs/coverage-gaps.md, "the feed key round trip".
 		return err
 	}
 	fingerprint, err := feed.FingerprintOfSeed(seed)
 	if err != nil {
-		// NOT TESTED: the seed was produced by GenerateSeed one line above, so
-		// it is the right length and is base64 by construction. Reaching this
-		// means those two disagree, which no input can arrange.
-		// See docs/coverage-gaps.md, "the feed key round trip".
+		// Only reachable if the generator above and the reader disagree about
+		// what a seed is. A key nobody can take a fingerprint of is a key
+		// nobody can verify, and finding that out at install time beats finding
+		// it out from the menu bar.
 		return err
 	}
 
@@ -75,29 +78,20 @@ func InitPrivileged(w io.Writer, path string, force bool) error {
 	// O_EXCL rather than a prior stat: between a check and a create, somebody
 	// who can write the directory can put a file there. O_NOFOLLOW for the same
 	// reason a symbolic link is refused above - what is written here is a key.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, TunnelFileMode)
+	f, err := fsx.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, TunnelFileMode)
 	if err != nil {
-		// NOT TESTED: the directory was made 0700 and owned by this process a
-		// few lines above, and whatever was at the path was moved aside or
-		// refused. Reaching this means something claimed the name in between,
-		// which is the race this open is written to lose safely rather than one
-		// a test can arrange.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// O_EXCL is what makes this the safe way to lose a race with something
+		// that claimed the name in between, rather than the way to win it.
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 	body := strings.Replace(privilegedTemplate, emptyFeedKey, `feed_key: "`+seed+`"`, 1)
-	if _, writeErr := io.WriteString(f, body); writeErr != nil {
-		// NOT TESTED: a write to a file this process has just created, on a
-		// filesystem with room on it. Arranging a failure means filling the
-		// disk or unmounting it underneath the descriptor.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+	if _, writeErr := fsx.WriteString(f, body); writeErr != nil {
+		// A disk that filled up between the create and the write.
 		f.Close() //nolint:errcheck // the create is the failure being reported
 		return fmt.Errorf("write %s: %w", path, writeErr)
 	}
-	if closeErr := f.Close(); closeErr != nil {
-		// NOT TESTED: same window as the write above, and closed to a test for
-		// the same reason.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+	if closeErr := fsx.CloseFile(f); closeErr != nil {
+		// The write is only really done once the close says so.
 		return fmt.Errorf("write %s: %w", path, closeErr)
 	}
 
@@ -118,10 +112,10 @@ func InitPrivileged(w io.Writer, path string, force bool) error {
 // The mode is set rather than left to MkdirAll, which cuts it down by the umask
 // when it creates and does nothing at all when the directory already exists.
 func makePrivateDir(dir string) error {
-	info, err := os.Lstat(dir)
+	info, err := fsx.Lstat(dir)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if mkErr := os.MkdirAll(dir, WireGuardDirMode); mkErr != nil {
+		if mkErr := fsx.MkdirAll(dir, WireGuardDirMode); mkErr != nil {
 			return fmt.Errorf("create %s: %w", dir, mkErr)
 		}
 	case err != nil:
@@ -136,11 +130,8 @@ func makePrivateDir(dir string) error {
 		return fmt.Errorf("%s exists and is not a directory", dir)
 	}
 
-	if err := os.Chmod(dir, WireGuardDirMode); err != nil {
-		// NOT TESTED: chmod on a directory this process has just created, or
-		// already owns as root. Arranging a refusal needs a directory owned by
-		// somebody else, which needs the suite to run as root to set up.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+	if err := fsx.Chmod(dir, WireGuardDirMode); err != nil {
+		// A directory owned by somebody else, on a filesystem mounted read-only.
 		return fmt.Errorf("chmod %s: %w", dir, err)
 	}
 	return nil
@@ -153,7 +144,7 @@ func makePrivateDir(dir string) error {
 // link, so what is at the path afterwards is nothing at all, and the O_EXCL
 // create below lands on a name nobody else has claimed.
 func keepPrevious(path string, force bool) (string, error) {
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	if _, err := fsx.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	if !force {
@@ -165,10 +156,7 @@ func keepPrevious(path string, force bool) (string, error) {
 	}
 
 	saved := path + initBackupSuffix
-	if err := os.Rename(path, saved); err != nil {
-		// NOT TESTED: a rename within one directory, which this process owns as
-		// root and has just been shown to contain the file.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+	if err := fsx.Rename(path, saved); err != nil {
 		return "", fmt.Errorf("keep %s as %s: %w", path, saved, err)
 	}
 	return saved, nil

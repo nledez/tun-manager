@@ -53,15 +53,12 @@ func PublicKeyOfSeed(seed string) (ed25519.PublicKey, error) {
 	if len(raw) != SeedLen {
 		return nil, fmt.Errorf("the feed key is %d bytes, want %d", len(raw), SeedLen)
 	}
-	pub, ok := ed25519.NewKeyFromSeed(raw).Public().(ed25519.PublicKey)
-	if !ok {
-		// NOT TESTED: crypto/ed25519 returns an ed25519.PublicKey from an
-		// ed25519.PrivateKey and nothing else. This guards a standard library
-		// that changed that, on which the assertion would panic instead.
-		// See docs/coverage-gaps.md, "the feed key round trip".
-		return nil, errors.New("the feed key does not yield a public key")
-	}
-	return pub, nil
+	// The public half is the second half of the private key, which is what
+	// Public() hands back. Taken directly rather than through a type assertion
+	// on an interface: an assertion that cannot fail is a branch that cannot be
+	// tested, and one that could fail would panic in a permission check.
+	key := ed25519.NewKeyFromSeed(raw)
+	return ed25519.PublicKey(key[ed25519.SeedSize:]), nil
 }
 
 // Fingerprint renders a public key as something a person can compare: the

@@ -183,15 +183,19 @@ type env struct {
 	flags overrides
 }
 
-// NOT TESTED: this calls os.Exit, so covering it means starting a subprocess to
-// confirm that Go can start a program and that a non-zero return becomes a
-// non-zero exit code. Everything it reaches is covered: newEnv wires the
-// process, run dispatches, and main_test.go drives both directly.
-// See docs/coverage-gaps.md, "main".
+// exit and stderr are what main does at the end of a run that failed. They are
+// variables so that a test can call main itself: os.Exit ends the process
+// before the test can look at anything, and a failure that reaches nobody is
+// the one thing this function is for.
+var (
+	exit             = os.Exit
+	stderr io.Writer = os.Stderr
+)
+
 func main() {
 	if err := newEnv().run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", appName, err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "%s: %v\n", appName, err) //nolint:errcheck // there is nowhere left to report it
+		exit(1)
 	}
 }
 
@@ -483,17 +487,20 @@ func (e *env) buildApp() (*app.App, error) {
 		return e.assemble(cfg, priv, wg.NewReaderIn(e.flags.wgSocket)), nil
 	}
 
-	reader, err := wg.NewReader()
-	// NOT TESTED: this branch. Opening the client succeeds for any user on
-	// darwin - it only records where to look - so this guards against a
-	// platform, or a future wgctrl, where it can fail. wg.NewReader is covered
-	// on both paths in its own package.
-	// See docs/coverage-gaps.md, "build and the WireGuard client".
+	reader, err := newReader()
 	if err != nil {
+		// Opening the client only records where to look, so this guards a
+		// platform, or a future wgctrl, where that can fail.
 		return nil, err
 	}
 	return e.assemble(cfg, priv, reader), nil
 }
+
+// newReader opens the WireGuard control client. A variable so a test can make
+// it fail: on darwin it does not, which would leave the branch above unwritten
+// or unread, and neither is a good way to treat the code that decides whether
+// the program can see the tunnels at all.
+var newReader = wg.NewReader
 
 // assemble wires the application around whichever reader it was given.
 //

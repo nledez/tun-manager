@@ -1,9 +1,11 @@
 package fsx
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOwnerReadsTheOwnerOfARealFile(t *testing.T) {
@@ -25,3 +27,25 @@ func TestOwnerReadsTheOwnerOfARealFile(t *testing.T) {
 		t.Errorf("Owner = %d:%d, want %d:%d", uid, gid, os.Getuid(), os.Getgid())
 	}
 }
+
+func TestOwnerOfSomethingWithNoStatBehindItOwnsNothing(t *testing.T) {
+	// An io/fs implementation whose Sys() is not a *syscall.Stat_t. Answering
+	// "nobody owns this" is what keeps a permission check from panicking, and
+	// -1 matches no uid, so nothing is accepted on the strength of it.
+	uid, gid := Owner("anywhere", statless{})
+
+	if uid != -1 || gid != -1 {
+		t.Errorf("Owner = %d:%d, want -1:-1", uid, gid)
+	}
+}
+
+// statless is a FileInfo with nothing underneath it, which is what an io/fs
+// implementation other than the operating system's hands back.
+type statless struct{}
+
+func (statless) Name() string       { return "anywhere" }
+func (statless) Size() int64        { return 0 }
+func (statless) Mode() fs.FileMode  { return 0 }
+func (statless) ModTime() time.Time { return time.Time{} }
+func (statless) IsDir() bool        { return false }
+func (statless) Sys() any           { return nil }

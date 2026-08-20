@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // writeConfig puts a configuration file in a temporary directory and returns
@@ -284,5 +286,25 @@ func TestAddToGroupReportsATemporaryFileItCannotWrite(t *testing.T) {
 	}
 	if got := readConfig(t, path); strings.Contains(got, "bravo") {
 		t.Errorf("the configuration was changed anyway:\n%s", got)
+	}
+}
+
+func TestReplaceReportsADocumentItCannotRender(t *testing.T) {
+	// A node tree the encoder cannot write. It is a bug rather than a
+	// condition, and the file has to be left alone when it happens: rendering
+	// half a document over somebody's configuration is worse than failing.
+	path := writeConfig(t, "groups:\n  all: [alpha]\n")
+	before := readConfig(t, path)
+
+	err := replace(path, &yaml.Node{Kind: 99})
+
+	if err == nil {
+		t.Fatal("replace rendered a node it cannot encode")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not name the file", err)
+	}
+	if readConfig(t, path) != before {
+		t.Error("the configuration was rewritten anyway")
 	}
 }

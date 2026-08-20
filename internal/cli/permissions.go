@@ -68,7 +68,7 @@ func Permissions(cfg *profile.Config, u privdrop.User) []Check {
 // is not one either — doctor warns about it, which is the right weight for
 // "there is nothing here to manage".
 func EnforcePermissions(configDir string) error {
-	if _, err := os.Stat(configDir); errors.Is(err, fs.ErrNotExist) {
+	if _, err := fsx.Stat(configDir); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 
@@ -93,7 +93,7 @@ func EnforcePermissions(configDir string) error {
 func checkWireGuardDirs(configDir string) Check {
 	const name = "config dir mode"
 
-	info, err := os.Stat(configDir)
+	info, err := fsx.Stat(configDir)
 	if err != nil {
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("%s: %v", configDir, err)}
 	}
@@ -102,7 +102,7 @@ func checkWireGuardDirs(configDir string) Check {
 	}
 
 	parent := filepath.Dir(configDir)
-	parentInfo, err := os.Stat(parent)
+	parentInfo, err := fsx.Stat(parent)
 	if err != nil {
 		// The stat above walked through this directory, so it was there a
 		// moment ago; something removed it in between.
@@ -136,7 +136,7 @@ func checkWireGuardDirs(configDir string) Check {
 func checkTunnelFiles(configDir string) Check {
 	const name = "tunnel files"
 
-	entries, err := os.ReadDir(configDir)
+	entries, err := fsx.ReadDir(configDir)
 	if err != nil {
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("%s: %v", configDir, err)}
 	}
@@ -185,7 +185,7 @@ func checkUserConfigDir(cfg *profile.Config, u privdrop.User) Check {
 	const name = "user config dir"
 
 	dir := filepath.Dir(cfg.Path)
-	info, err := os.Stat(dir)
+	info, err := fsx.Stat(dir)
 	if err != nil {
 		return Check{Name: name, Status: Warn, Detail: fmt.Sprintf("%s: %v", dir, err)}
 	}

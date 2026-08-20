@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wgconf"
@@ -69,7 +70,7 @@ func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name
 	}
 
 	target := filepath.Join(cfg.ConfigDir, name+".conf")
-	if _, statErr := os.Stat(target); statErr == nil {
+	if _, statErr := fsx.Stat(target); statErr == nil {
 		return fmt.Errorf("%s already exists: remove it first if you mean to replace that tunnel", target)
 	}
 
@@ -89,18 +90,14 @@ func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name
 		return fmt.Errorf("nothing was imported: %s was not agreed to", source)
 	}
 
-	if err = os.MkdirAll(cfg.ConfigDir, WireGuardDirMode); err != nil {
+	if err = fsx.MkdirAll(cfg.ConfigDir, WireGuardDirMode); err != nil {
 		return err
 	}
 	// Set rather than left to MkdirAll, which does nothing to a directory that
 	// already exists and is cut down by the umask when it does create one. This
 	// is the command that puts a key in there, so it is the one that has to
 	// make sure the place is fit to hold it.
-	if err = os.Chmod(cfg.ConfigDir, WireGuardDirMode); err != nil {
-		// NOT TESTED: chmod on a directory this process has just created, or
-		// already owns as root. Arranging a refusal needs a directory owned by
-		// somebody else, which needs the suite to run as root to set up.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+	if err = fsx.Chmod(cfg.ConfigDir, WireGuardDirMode); err != nil {
 		return err
 	}
 	// No chmod after this one, unlike the directory above: a umask can only
@@ -157,7 +154,7 @@ func backup(path string) (string, error) {
 	}
 
 	mode := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
+	if info, statErr := fsx.Stat(path); statErr == nil {
 		mode = info.Mode().Perm()
 	}
 

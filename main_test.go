@@ -1831,3 +1831,147 @@ func TestTheStrictRulesReachTheControllerThatRunsWgQuick(t *testing.T) {
 		t.Errorf("the controller was given %+v, want both rules", a.Control.Strict)
 	}
 }
+
+// MARK: what main itself does
+
+func TestMainReportsAFailureAndExitsNonZero(t *testing.T) {
+	// The one thing this function is for. os.Exit would end the test process
+	// before anything could be looked at, so both ends of it are variables.
+	isolatedHome(t)
+	var said strings.Builder
+	var code int
+	swapMain(t, &said, &code, []string{"tun-manager", "nonsense-command"})
+
+	main()
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(said.String(), "tun-manager: ") {
+		t.Errorf("nothing useful was said on stderr: %q", said.String())
+	}
+}
+
+func TestMainSaysNothingWhenTheRunSucceeds(t *testing.T) {
+	isolatedHome(t)
+	var said strings.Builder
+	code := -1
+	swapMain(t, &said, &code, []string{"tun-manager", "version"})
+
+	main()
+
+	if code != -1 {
+		t.Errorf("exit was called with %d on a run that worked", code)
+	}
+	if said.String() != "" {
+		t.Errorf("stderr = %q, want nothing", said.String())
+	}
+}
+
+// swapMain points main at a writer and an exit a test can read, and gives it
+// the command line to run.
+func swapMain(t *testing.T, said *strings.Builder, code *int, args []string) {
+	t.Helper()
+
+	previousExit, previousErr, previousArgs := exit, stderr, os.Args
+	exit = func(status int) { *code = status }
+	stderr = said
+	os.Args = args
+	t.Cleanup(func() { exit, stderr, os.Args = previousExit, previousErr, previousArgs })
+}
+
+func TestBuildReportsAControlClientItCannotOpen(t *testing.T) {
+	// Opening it only records where to look, so on darwin it does not fail.
+	// What it decides is whether the program can see the tunnels at all, which
+	// is not a thing to discover from a nil pointer later.
+	isolatedHome(t)
+	boom := errors.New("no wireguard on this platform")
+	previous := newReader
+	newReader = func() (*wg.CtrlReader, error) { return nil, boom }
+	t.Cleanup(func() { newReader = previous })
+
+	e := testEnv(t, &fakeRunner{})
+
+	if _, err := e.buildApp(); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the failure to open the client", err)
+	}
+}
+
+func TestTheOverridesPassOnAPrivilegedFailure(t *testing.T) {
+	// The wrapper around the loader must report what the loader said rather
+	// than apply flags to a configuration it never got.
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("tun-manager.yaml is a symbolic link")
+	e.privileged = func() (*profile.Privileged, error) { return nil, boom }
+
+	if _, err := e.parseFlags(nil); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if _, err := e.privileged(); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the loader's own failure", err)
+	}
+}
+
+func TestTwoRefusedFlagsAreNamedTogether(t *testing.T) {
+	// "each of them" rather than "it": somebody who passed two flags is told
+	// about both, and reads one sentence rather than running the command twice
+	// to find the second.
+	e := testEnv(t, &fakeRunner{}) // euid 0
+
+	_, err := e.parseFlags([]string{"--fake-ping", "--wg-socket", "/tmp/anywhere"})
+
+	if err == nil {
+		t.Fatal("two simulation flags were accepted under root")
+	}
+	for _, want := range []string{"--fake-ping", "--wg-socket", "each of them"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestInitPrivilegedTakesNoArgument(t *testing.T) {
+	e := testEnv(t, &fakeRunner{})
+
+	err := e.run([]string{"init-privileged", "somewhere"})
+
+	if err == nil {
+		t.Fatal("init-privileged accepted a path to write to")
+	}
+	if !strings.Contains(err.Error(), "usage:") {
+		t.Errorf("error %q does not say how to call it", err)
+	}
+}
+
+func TestDoctorReportsAPrivilegedFileItCannotRead(t *testing.T) {
+	// The one command that carries on without it: telling somebody why root
+	// cannot read what it needs is its whole job.
+	e := testEnv(t, &fakeRunner{})
+	e.privileged = func() (*profile.Privileged, error) {
+		return nil, errors.New("tun-manager.yaml is owned by uid 501 rather than root")
+	}
+
+	_ = e.run([]string{"doctor"})
+
+	got := output(e)
+	if !strings.Contains(got, "privileged config") {
+		t.Errorf("doctor said nothing about the privileged file:\n%s", got)
+	}
+	if !strings.Contains(got, "uid 501") {
+		t.Errorf("doctor did not say why it could not read it:\n%s", got)
+	}
+}
+
+func TestTheInterfaceRefusesToStartWithoutThePrivilegedFile(t *testing.T) {
+	// Unlike doctor. Everything the interface does needs to know what root may
+	// run, and defaults that appear when the file cannot be read are defaults
+	// somebody can arrange to get.
+	e := testEnv(t, &fakeRunner{})
+	boom := errors.New("tun-manager.yaml is missing")
+	e.privileged = func() (*profile.Privileged, error) { return nil, boom }
+
+	if err := e.run(nil); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the interface to have refused", err)
+	}
+}

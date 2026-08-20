@@ -257,3 +257,23 @@ func TestAPingForATunnelThatIsDownProbesNothing(t *testing.T) {
 		t.Errorf("targets = %v, want nothing to probe", got)
 	}
 }
+
+func TestASecondPingRequestWhileOneIsRunningIsIgnored(t *testing.T) {
+	// The menu bar asks for a round every time somebody opens it. Honouring a
+	// second one would double the packets and interleave two sets of answers
+	// into one table. The publisher's floor bounds how often a client can ask,
+	// not how many rounds overlap here.
+	reqs := make(chan feed.Request, 1)
+	m := loadedModel(threeRows...)
+	m.requests = reqs
+	m.pinging = true
+
+	next, cmd := m.Update(requestMsg{req: feed.Request{Kind: feed.RequestPing}, from: reqs})
+
+	if !next.(Model).pinging {
+		t.Error("pinging = false, want the round already in flight remembered")
+	}
+	if cmd == nil {
+		t.Error("cmd = nil, want the next request still listened for")
+	}
+}

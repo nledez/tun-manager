@@ -122,11 +122,8 @@ func replace(path string, doc *yaml.Node) error {
 		err = closeErr
 	}
 	if err != nil {
-		// NOT TESTED: the document was parsed out of a file moments ago and is
-		// written into a buffer, so neither call has a way to fail. Reaching
-		// this would mean the node tree built above is malformed, which is a
-		// bug rather than a condition.
-		// See docs/coverage-gaps.md, "profile.replace".
+		// A node tree the encoder cannot write. The file is left alone: half a
+		// document over somebody's configuration is worse than a failure.
 		return fmt.Errorf("render %s: %w", path, err)
 	}
 

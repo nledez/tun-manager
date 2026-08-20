@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -385,5 +386,43 @@ func TestTheFeedCanBeSwitchedOff(t *testing.T) {
 	}
 	if cfg.FeedSocket != "/tmp/other.sock" {
 		t.Errorf("FeedSocket = %q, want the configured path", cfg.FeedSocket)
+	}
+}
+
+// MARK: the failures a working filesystem does not produce
+
+func TestLoadPrivilegedReportsADescriptorItCannotStat(t *testing.T) {
+	// The check is made on the open descriptor rather than on the path, which
+	// is what stops a name changing between the look and the read. When that
+	// fstat fails there is nothing left to judge the file by.
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+	boom := errors.New("bad file descriptor")
+	previous := fsx.StatFile
+	fsx.StatFile = func(*os.File) (os.FileInfo, error) { return nil, boom }
+	t.Cleanup(func() { fsx.StatFile = previous })
+
+	_, err := LoadPrivileged(path)
+
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the fstat failure", err)
+	}
+}
+
+func TestLoadPrivilegedReportsAParentItCannotStat(t *testing.T) {
+	// The open walked through that directory a moment earlier. Something
+	// removed it in between, and a file whose parent cannot be judged is a file
+	// that cannot be trusted.
+	ownedBy(t, 0)
+	path := writePrivileged(t, samplePrivilegedYAML)
+	boom := errors.New("no such file or directory")
+	previous := fsx.Stat
+	fsx.Stat = func(string) (os.FileInfo, error) { return nil, boom }
+	t.Cleanup(func() { fsx.Stat = previous })
+
+	_, err := LoadPrivileged(path)
+
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the stat failure", err)
 	}
 }

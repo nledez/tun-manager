@@ -503,3 +503,23 @@ func TestLoadRefusesEveryKeyThatMovedToTheRootOnlyFile(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyDefaultsFillsEveryBlankField(t *testing.T) {
+	// Load starts from Default(), so on that path these branches only catch a
+	// key written out as blank. Called directly, they are the whole contract:
+	// an empty value is not a value.
+	cfg := &Config{}
+
+	cfg.applyDefaults()
+
+	d := Default()
+	if cfg.ConfigDir != d.ConfigDir {
+		t.Errorf("ConfigDir = %q, want %q", cfg.ConfigDir, d.ConfigDir)
+	}
+	if cfg.RefreshInterval != d.RefreshInterval {
+		t.Errorf("RefreshInterval = %v, want %v", cfg.RefreshInterval, d.RefreshInterval)
+	}
+	if cfg.Groups == nil {
+		t.Error("Groups is nil, want an empty map so the group commands have something to read")
+	}
+}

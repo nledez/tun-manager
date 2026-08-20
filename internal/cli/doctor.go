@@ -235,7 +235,7 @@ func checkWgQuick(priv *profile.Privileged) Check {
 // Both the name given and what it resolves to are walked: a link in a directory
 // root owns, pointing into one it does not, reads as safe and is not.
 func reachableByAnybodyButRoot(path string) (string, bool) {
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, err := fsx.EvalSymlinks(path)
 	if err != nil {
 		// wg.CheckExecutable resolved this path a moment ago, so only something
 		// moving it in between arrives here. The name as given is then all
@@ -245,7 +245,7 @@ func reachableByAnybodyButRoot(path string) (string, bool) {
 
 	for _, start := range []string{path, resolved} {
 		for name := start; ; name = filepath.Dir(name) {
-			info, statErr := os.Lstat(name)
+			info, statErr := fsx.Lstat(name)
 			if statErr != nil {
 				// Same window: something moved while this was being read. What
 				// has been walked so far is what can be said about it.
@@ -293,7 +293,7 @@ func checkConfigDir(dir string) Check {
 // checkRunDir matters because the "<tunnel>.name" files it holds are the only
 // way to tell apart two configs that share a peer public key.
 func checkRunDir(dir string) Check {
-	if _, err := os.Stat(dir); err != nil {
+	if _, err := fsx.Stat(dir); err != nil {
 		return Check{
 			Name:   "wireguard run dir",
 			Status: Warn,
@@ -358,7 +358,7 @@ func checkFeed(priv *profile.Privileged, u privdrop.User) Check {
 	}
 
 	dir := filepath.Dir(priv.FeedSocket)
-	info, err := os.Stat(dir)
+	info, err := fsx.Stat(dir)
 	if err != nil {
 		return Check{Name: "status feed", Status: Fail, Detail: fmt.Sprintf("%s: %v", dir, err)}
 	}

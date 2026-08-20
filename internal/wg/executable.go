@@ -3,7 +3,6 @@ package wg
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"ledez.net/tun-manager/internal/fsx"
 )
@@ -60,7 +59,7 @@ type Strict struct {
 func CheckExecutable(path string, strict Strict) error {
 	// EvalSymlinks resolves every link on the way, so what is checked below is
 	// the file that will actually run rather than the name it was reached by.
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, err := fsx.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("wg_quick %s cannot be read: %w", path, err)
 	}
@@ -70,7 +69,7 @@ func CheckExecutable(path string, strict Strict) error {
 				"point wg_quick at %s, or unset the rule", named(path, resolved), resolved)
 	}
 
-	info, err := os.Stat(resolved)
+	info, err := fsx.Stat(resolved)
 	if err != nil {
 		// EvalSymlinks walked to this file a moment ago; something moved it in
 		// between, and what root would run is no longer what was checked.
@@ -112,8 +111,8 @@ func CheckExecutable(path string, strict Strict) error {
 // only one who can.
 func checkOwnedByRoot(path, resolved string) error {
 	for _, start := range []string{path, resolved} {
-		for name := start; ; name = filepath.Dir(name) {
-			info, err := os.Lstat(name)
+		for name := start; ; name = fsx.Dir(name) {
+			info, err := fsx.Lstat(name)
 			if err != nil {
 				return fmt.Errorf("wg_quick: %s cannot be read: %w", name, err)
 			}
@@ -129,7 +128,7 @@ func checkOwnedByRoot(path, resolved string) error {
 					"wg_quick: %s is %04o and its group can write it, and wg_quick_root_owned is "+
 						"set: `sudo chmod g-w %s`", name, info.Mode().Perm(), name)
 			}
-			if name == filepath.Dir(name) {
+			if name == fsx.Dir(name) {
 				break
 			}
 		}
@@ -145,8 +144,8 @@ func checkOwnedByRoot(path, resolved string) error {
 // attack this is looking for. /tmp is 1777, and a stub kept there for a demo is
 // not a finding.
 func checkPathToExecutable(path string, strict Strict) error {
-	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
-		info, err := os.Stat(dir)
+	for dir := fsx.Dir(path); ; dir = fsx.Dir(dir) {
+		info, err := fsx.Stat(dir)
 		if err != nil {
 			return fmt.Errorf("wg_quick: %s cannot be read: %w", dir, err)
 		}
@@ -156,7 +155,7 @@ func checkPathToExecutable(path string, strict Strict) error {
 					"can be replaced by anybody: `sudo chmod o-w %s`",
 				dir, info.Mode().Perm(), dir)
 		}
-		if dir == filepath.Dir(dir) {
+		if dir == fsx.Dir(dir) {
 			return nil
 		}
 	}

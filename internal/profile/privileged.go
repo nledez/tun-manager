@@ -131,13 +131,13 @@ func DefaultPrivileged() *Privileged {
 // A missing file is a refusal, not a set of defaults. Defaults that appear
 // when the file cannot be read are defaults an attacker can arrange to get.
 func LoadPrivileged(path string) (*Privileged, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := fsx.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, openRefusal(path, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = fsx.CloseFile(f) }()
 
-	info, err := f.Stat()
+	info, err := fsx.StatFile(f)
 	if err != nil {
 		// The descriptor became invalid between the open and the call.
 		return nil, fmt.Errorf("stat %s: %w", path, err)
@@ -212,7 +212,7 @@ func checkPrivilegedFile(path string, info os.FileInfo) error {
 // new one would pass every check above because they would own it and could
 // make it 0600.
 func checkPrivilegedParent(dir string) error {
-	info, err := os.Stat(dir)
+	info, err := fsx.Stat(dir)
 	if err != nil {
 		// The open above walked through this directory, so something removed it
 		// in between.
