@@ -481,9 +481,9 @@ network, so a tunnel that reaches a LAN you are sometimes sitting on can be
 ## Development
 
 [`AGENTS.md`](AGENTS.md) holds the conventions this repository is kept to:
-everything is tested, anything that is not carries a `NOT TESTED:` comment and a
-section in [`docs/coverage-gaps.md`](docs/coverage-gaps.md), fixtures are
-invented, and pushed history is never rewritten.
+everything is tested — every statement of it, build-time tools included — calls
+that cannot be made to fail on a working machine are reached through a variable
+a test can swap, fixtures are invented, and pushed history is never rewritten.
 
 ```sh
 make                # vet, lint, tests, notices check, build
@@ -517,11 +517,10 @@ GitHub release.
 
 The suite runs without root and without touching a real tunnel: the WireGuard
 state, the command runner, the network interfaces, the notification transport
-and the clock are all injected.
-[`docs/coverage-gaps.md`](docs/coverage-gaps.md) lists what is left uncovered
-and why. Each deliberate omission carries a `NOT TESTED:` comment on the code itself,
-naming the section that argues for it; `make markers-check` fails when one of
-those sections is missing.
+and the clock are all injected. So is the filesystem, in
+[`internal/fsx`](internal/fsx), which is how a `chmod` that fails or a `.conf`
+that disappears between two calls gets a test rather than an excuse. `make
+cover` fails below 100%.
 
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.

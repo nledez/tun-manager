@@ -4,13 +4,11 @@ APPDIR ?= /Applications
 APP_NAME := Tun Manager.app
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COVERAGE := coverage.out
-# Fail the build below this, so coverage cannot quietly rot. Set just under the
-# current figure: a real regression trips it, a rounding change does not.
-COVERAGE_MIN := 99
-# Coverage measures the program that ships. internal/tools holds build-time
-# generators, which `make notices-check` exercises end to end on every run;
-# counting them would only dilute the number this floor guards.
-COVER_PKGS := $(shell go list ./... | grep -v '/internal/tools/')
+# Fail the build below this. Everything is tested, including the build-time
+# generators in internal/tools, so anything under 100 is a branch that shipped
+# without ever having been run.
+COVERAGE_MIN := 100
+COVER_PKGS := $(shell go list ./...)
 
 .PHONY: all build test race cover cover-html vet lint fmt icon notices notices-check markers-check demo demo-configs demo-configs-check run install clean release release-check macos-build macos-test macos-app
 
@@ -147,17 +145,20 @@ demo-configs-check: demo-configs
 release:
 	@scripts/release.sh $(VERSION)
 
-# Every deliberate omission carries a NOT TESTED: marker naming the section of
-# docs/coverage-gaps.md that argues for it. A marker whose reasoning lives only
-# in a commit message is an excuse rather than a decision, so check the section
-# exists.
+# There is nothing deliberately untested: `make cover` holds the whole module at
+# 100%. Should that ever stop being true, a NOT TESTED: marker names the section
+# of docs/coverage-gaps.md that argues for it - a marker whose reasoning lives
+# only in a commit message is an excuse rather than a decision - and this checks
+# the section is there.
 markers-check:
-	@grep -rho 'docs/coverage-gaps.md, "[^"]*"' --include='*.go' . \
-		| sed 's/.*"\(.*\)"/\1/' | sort -u | while read -r section; do \
+	@markers=$$(grep -rho 'docs/coverage-gaps.md, "[^"]*"' --include='*.go' . \
+		| sed 's/.*"\(.*\)"/\1/' | sort -u); \
+	if [ -z "$$markers" ]; then echo "nothing carries a NOT TESTED marker"; exit 0; fi; \
+	echo "$$markers" | while read -r section; do \
 		grep -qF "### $$section" docs/coverage-gaps.md \
 			|| { echo "no \"$$section\" section in docs/coverage-gaps.md"; exit 1; }; \
-	done
-	@echo "every NOT TESTED marker is documented"
+	done; \
+	echo "every NOT TESTED marker is documented"
 
 # Runs the release pipeline without publishing anything.
 release-check:
