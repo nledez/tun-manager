@@ -68,10 +68,18 @@ const (
 	// the WireGuard control socket.
 	refreshFloor = 2 * time.Second
 
-	// challengeFloor is the shortest gap between two signatures a client can
+	// challengeFloor is the shortest gap between two signatures one client can
 	// ask for. Signing is cheap and not free, and a client that can ask
 	// whenever it likes is a signing oracle. One a second is far more than any
 	// client needs: the application asks once per connection.
+	//
+	// Per client, and that part is not an implementation detail. Shared across
+	// the publisher, it would let any client on the socket keep every other one
+	// from ever being answered - a denial of service dressed up as a rate
+	// limit - and it made an honest reconnection go unanswered, which the
+	// application can only read as "this one cannot prove who it is". What
+	// bounds the total is maxClients: thirty-two of these at once, each of them
+	// one signature a second.
 	challengeFloor = time.Second
 
 	// pingFloor is the shortest gap between two rounds of probes a client can
@@ -159,17 +167,16 @@ type Server struct {
 	// socket nobody can reach.
 	socket os.FileInfo
 
-	mu            sync.Mutex
-	closed        bool
-	closing       bool
-	clients       map[*client]struct{}
-	view          app.View
-	haveView      bool
-	sampling      chan struct{}
-	requests      chan Request
-	lastRefresh   time.Time
-	lastPing      time.Time
-	lastChallenge time.Time
+	mu          sync.Mutex
+	closed      bool
+	closing     bool
+	clients     map[*client]struct{}
+	view        app.View
+	haveView    bool
+	sampling    chan struct{}
+	requests    chan Request
+	lastRefresh time.Time
+	lastPing    time.Time
 }
 
 func (s *Server) interval() time.Duration {
@@ -445,6 +452,10 @@ type client struct {
 	conn  net.Conn
 	out   chan any
 	watch map[string]bool
+	// lastChallenge is when this client was last signed something, under the
+	// server's mutex like every other stamp. A fresh connection has asked for
+	// nothing, so its first question is always answered.
+	lastChallenge time.Time
 }
 
 // Serve accepts connections until ctx is cancelled, then says goodbye to
@@ -697,7 +708,7 @@ func (s *Server) answerChallenge(c *client, encoded string) {
 	if err != nil {
 		return
 	}
-	if !s.allowChallenge() {
+	if !s.allowChallenge(c) {
 		return
 	}
 
@@ -710,9 +721,13 @@ func (s *Server) answerChallenge(c *client, encoded string) {
 	s.sendTo(c, authMsg{Type: "auth", Nonce: encoded, Signature: signature})
 }
 
-// allowChallenge reports whether enough time has passed since the last
-// signature to make another.
-func (s *Server) allowChallenge() bool {
+// allowChallenge reports whether enough time has passed since this client was
+// last signed something to sign it another.
+//
+// This client, and no other: the question one client asked says nothing about
+// whether another deserves an answer, and a connection that has just been
+// opened has asked nothing at all.
+func (s *Server) allowChallenge(c *client) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -721,10 +736,10 @@ func (s *Server) allowChallenge() bool {
 		floor = s.ChallengeFloor
 	}
 	now := s.clock()
-	if !s.lastChallenge.IsZero() && now.Sub(s.lastChallenge) < floor {
+	if !c.lastChallenge.IsZero() && now.Sub(c.lastChallenge) < floor {
 		return false
 	}
-	s.lastChallenge = now
+	c.lastChallenge = now
 	return true
 }
 

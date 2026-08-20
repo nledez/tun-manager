@@ -704,3 +704,49 @@ func aNonce(mark byte) []byte {
 	nonce[0] = mark
 	return nonce
 }
+
+func TestAClientThatReconnectsIsAnsweredStraightAway(t *testing.T) {
+	// What "trust the new key" does in the menu bar application: forget the
+	// pinned key, close, and connect again - all inside a millisecond. A floor
+	// kept for the whole publisher rather than for each client made that second
+	// connection go unanswered, which the application can only read as "this
+	// one cannot prove who it is". A rotation would have looked exactly like an
+	// impostor, which is the one confusion this whole exchange exists to
+	// prevent.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+
+	first := dial(t, s)
+	first.next(t)
+	first.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
+	if got := first.next(t)["type"]; got != "auth" {
+		t.Fatalf("first answer = %v, want auth", got)
+	}
+	first.Close()
+
+	second := dial(t, s)
+	second.next(t)
+	second.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
+	if got := second.next(t)["type"]; got != "auth" {
+		t.Errorf("second answer = %v, want auth: a fresh connection has asked for nothing yet", got)
+	}
+}
+
+func TestOneClientCannotSpendAnotherClientsBudget(t *testing.T) {
+	// The floor is per client, so a second one asking has nothing to do with
+	// what the first one already asked for. Sharing it would make any client on
+	// the socket able to keep every other client from ever being answered,
+	// which is a denial of service dressed up as a rate limit.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+
+	greedy := dial(t, s)
+	greedy.next(t)
+	greedy.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
+	greedy.next(t)
+
+	honest := dial(t, s)
+	honest.next(t)
+	honest.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
+	if got := honest.next(t)["type"]; got != "auth" {
+		t.Errorf("answer = %v, want auth: another client's question is not this one's", got)
+	}
+}

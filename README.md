@@ -217,8 +217,10 @@ from "has nothing to prove", and a fallback available to the honest case is a
 fallback available to whoever is standing in for it.
 
 What one client may cost is bounded: thirty-two connections at once — the
-thirty-third is told why and closed — sixty-four watched tunnels each, and eight
-kilobytes to a line. There is no idle timeout, deliberately: the menu bar says
+thirty-third is told why and closed — sixty-four watched tunnels each, eight
+kilobytes to a line, and one signature a second. Each of those is counted per
+client rather than for the publisher as a whole: a limit shared between clients
+is one any client can spend on everybody else's behalf. There is no idle timeout, deliberately: the menu bar says
 nothing at all until somebody opens it, so disconnecting a quiet client would
 disconnect the healthy one.
 
