@@ -11,6 +11,20 @@ public enum DetailSelection: Hashable, Sendable {
     case overview
     case tunnel(String)
 
+    /// What a double-click in the overview table opens, or nil for a click that
+    /// names no one tunnel.
+    ///
+    /// The table hands over a set rather than a row: empty when the click
+    /// landed between rows, and larger when several were selected first. One
+    /// name is the only case that says which detail to show — picking whichever
+    /// came first out of an unordered set would open a tunnel nobody chose, and
+    /// blanking the table on an empty click would answer a question nobody
+    /// asked.
+    public static func opening(_ names: Set<String>) -> DetailSelection? {
+        guard names.count == 1, let name = names.first else { return nil }
+        return .tunnel(name)
+    }
+
     /// The tunnel to subscribe to, or nil when there is none.
     ///
     /// The overview draws from the state that arrives anyway, so it needs no

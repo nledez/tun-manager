@@ -241,6 +241,12 @@ terminal's table shows.
 transferred bytes, latency and endpoint. One tunnel is stale and its latency
 cell holds a red cross.](assets/screenshot-app-overview.png)
 
+Double-clicking a row in that table opens that tunnel's own pane, with its
+traffic graph — the sidebar is not the only way in, and going back to it to find
+a name you are already looking at is a step nobody should have to take. The
+right button offers the same thing, so the gesture is discoverable rather than
+folklore.
+
 A cross in the latency column is a probe that got no answer, with the reason on
 hover. An empty cell is a tunnel nobody probed, which is a different thing and
 reads as one.

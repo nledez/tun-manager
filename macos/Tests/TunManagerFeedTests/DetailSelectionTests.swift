@@ -44,3 +44,23 @@ import Testing
     #expect(DetailSelection.tunnel("alpha") != DetailSelection.tunnel("bravo"))
     #expect(DetailSelection.overview != DetailSelection.tunnel("overview"))
 }
+
+@Test func openingARowFromTheOverviewPointsAtThatTunnel() {
+    // Double-clicking a row in "All tunnels" is how somebody asks for the
+    // detail of the tunnel they are looking at, rather than going back to the
+    // sidebar to find the same name again.
+    #expect(DetailSelection.opening(["alpha"]) == .tunnel("alpha"))
+}
+
+@Test func openingNothingChangesNothing() {
+    // A double-click that lands between rows hands over an empty set. Treating
+    // that as a selection would blank the table for no reason.
+    #expect(DetailSelection.opening([]) == nil)
+}
+
+@Test func openingSeveralRowsChangesNothing() {
+    // The table allows more than one row to be selected, and there is one
+    // detail pane. Picking whichever came first out of an unordered set would
+    // open a tunnel nobody chose.
+    #expect(DetailSelection.opening(["alpha", "bravo"]) == nil)
+}

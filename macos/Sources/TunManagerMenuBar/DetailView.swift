@@ -34,7 +34,7 @@ struct DetailView: View {
             if let detail = model.detail {
                 TunnelPane(detail: detail, model: model)
             } else {
-                OverviewPane(model: model)
+                OverviewPane(model: model, onOpen: onSelect)
             }
         }
         // The floor is what the six columns need side by side, plus the
@@ -180,6 +180,9 @@ private struct TunnelPane: View {
 /// Every tunnel at once, in the four columns the terminal shows.
 private struct OverviewPane: View {
     @ObservedObject var model: DetailModel
+    /// What a double-click on a row asks for: the detail of that tunnel.
+    let onOpen: (DetailSelection) -> Void
+    @State private var picked: Set<TunnelRow.ID> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -195,7 +198,7 @@ private struct OverviewPane: View {
     }
 
     private var table: some View {
-        Table(model.rows) {
+        Table(model.rows, selection: $picked) {
             TableColumn("TUNNEL") { row in
                 Label {
                     Text(row.name)
@@ -214,6 +217,23 @@ private struct OverviewPane: View {
                 .width(min: 60, ideal: 70)
             TableColumn("ENDPOINT") { row in Text(row.endpoint).monospaced() }
                 .width(min: 140, ideal: 200)
+        }
+        // primaryAction is the double-click. Somebody looking at a row in this
+        // table and wanting its graph should not have to go back to the sidebar
+        // and find the same name a second time.
+        //
+        // The menu is the same act on the right button, so the gesture is
+        // discoverable rather than folklore. Both go through
+        // DetailSelection.opening, which is where the "one row, and only one"
+        // rule lives and is tested.
+        .contextMenu(forSelectionType: TunnelRow.ID.self) { names in
+            if let choice = DetailSelection.opening(names), case .tunnel(let name) = choice {
+                Button("Open \(name)") { onOpen(choice) }
+            }
+        } primaryAction: { names in
+            if let choice = DetailSelection.opening(names) {
+                onOpen(choice)
+            }
         }
     }
 
