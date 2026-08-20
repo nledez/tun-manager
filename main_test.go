@@ -422,7 +422,7 @@ func TestConfigPathSitsUnderTheRealUserHome(t *testing.T) {
 func TestTUIIsTheDefaultCommand(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var started bool
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error {
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error {
 		started = true
 		return nil
 	}
@@ -438,7 +438,7 @@ func TestTUIIsTheDefaultCommand(t *testing.T) {
 func TestTUIGetsANotifierBuiltFromTheConfiguration(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server) error {
+	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server, _ []string) error {
 		got = n
 		return nil
 	}
@@ -460,7 +460,7 @@ func TestTUIUsesAnInjectedNotifier(t *testing.T) {
 	want := &notify.Notifier{Enabled: false}
 	e.notifier = want
 	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server) error {
+	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server, _ []string) error {
 		got = n
 		return nil
 	}
@@ -476,7 +476,7 @@ func TestTUIUsesAnInjectedNotifier(t *testing.T) {
 func TestTUIFailureIsReported(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	boom := errors.New("no terminal")
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error { return boom }
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error { return boom }
 
 	if err := e.run(nil); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
@@ -486,7 +486,7 @@ func TestTUIFailureIsReported(t *testing.T) {
 func TestTUIBuildFailureStopsBeforeStarting(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	e.build = func() (*app.App, error) { return nil, errors.New("no wireguard socket") }
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server) error {
+	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error {
 		t.Fatal("the TUI started despite a failed build")
 		return nil
 	}
@@ -499,7 +499,7 @@ func TestTUIBuildFailureStopsBeforeStarting(t *testing.T) {
 func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var got *feed.Server
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, _ []string) error {
 		got = f
 		return nil
 	}
@@ -529,7 +529,7 @@ func TestTheInterfaceStartsWithAFeedWhenItIsOn(t *testing.T) {
 		return priv, nil
 	}
 	var got *feed.Server
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, _ []string) error {
 		got = f
 		// Checked here, not after e.run returns: runTUI cancels the feed's
 		// context once this callback returns, and its own shutdown removes
@@ -566,10 +566,10 @@ func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
 		return priv, nil
 	}
 	var got *feed.Server
-	var started bool
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
-		got = f
-		started = true
+	var told []string
+	started := false
+	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, problems []string) error {
+		got, told, started = f, problems, true
 		return nil
 	}
 
@@ -583,8 +583,14 @@ func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
 	if got != nil {
 		t.Errorf("feed = %+v, want none when the socket cannot bind", got)
 	}
-	if !strings.Contains(output(e), "status feed unavailable") {
-		t.Errorf("output = %q, want it to say the feed is unavailable", output(e))
+	// Handed to the interface rather than printed: a line written here goes to
+	// a terminal the alternate screen covers a millisecond later, which is how
+	// this message went unread on a real machine.
+	if len(told) != 1 || !strings.Contains(told[0], "status feed unavailable") {
+		t.Errorf("the interface was told %q, want the reason the feed did not start", told)
+	}
+	if strings.Contains(output(e), "status feed unavailable") {
+		t.Errorf("the reason was printed where nobody would see it:\n%s", output(e))
 	}
 }
 
@@ -606,7 +612,7 @@ func TestStartFeedsServedChannelClosesOnlyOnceServeReturns(t *testing.T) {
 	priv.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	f, served := e.startFeed(ctx, a, priv, privdrop.User{})
+	f, served, _ := e.startFeed(ctx, a, priv, privdrop.User{})
 	if f == nil {
 		t.Fatal("feed = nil, want one when feed is on")
 	}
@@ -642,7 +648,7 @@ func TestStartFeedReturnsNoChannelWhenThereIsNoFeed(t *testing.T) {
 	}
 	priv.Feed = false
 
-	f, served := e.startFeed(context.Background(), a, priv, privdrop.User{})
+	f, served, _ := e.startFeed(context.Background(), a, priv, privdrop.User{})
 
 	if f != nil || served != nil {
 		t.Errorf("startFeed = (%v, %v), want (nil, nil) when the feed is off", f, served)
@@ -846,7 +852,7 @@ func TestRunTUIStopsWithItsContext(t *testing.T) {
 	cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- runTUI(ctx, nil, nil, nil) }()
+	go func() { done <- runTUI(ctx, nil, nil, nil, nil) }()
 
 	select {
 	case err := <-done:
@@ -2007,7 +2013,7 @@ func TestASimulatedRunSaysSoToTheFeed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	f, served := e.startFeed(ctx, a, priv, privdrop.User{})
+	f, served, _ := e.startFeed(ctx, a, priv, privdrop.User{})
 
 	if f == nil {
 		t.Fatal("the feed did not start for a simulated run")

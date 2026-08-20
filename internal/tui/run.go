@@ -28,8 +28,15 @@ func WithoutTerminal() Option {
 // It is separate from Run so the wiring can be asserted directly. Reaching it
 // through a running program means racing the event loop, which is how a test
 // ends up proving only that nothing panicked.
-func newModel(a *app.App, n *notify.Notifier, f *feed.Server) Model {
+func newModel(a *app.App, n *notify.Notifier, f *feed.Server, problems []string) Model {
 	m := New(a, n)
+	// Whatever went wrong before the screen existed. Printed on the way in, it
+	// would be swallowed by the alternate screen a millisecond later, which is
+	// how "the status feed is unavailable" became something nobody ever read.
+	for _, problem := range problems {
+		m.log(problem, true)
+	}
+	m.showLogs = len(problems) > 0
 	if f == nil {
 		// Assigning a nil *feed.Server to the interface would leave a non-nil
 		// interface holding a nil pointer, and every publish would panic.
@@ -42,13 +49,18 @@ func newModel(a *app.App, n *notify.Notifier, f *feed.Server) Model {
 
 // Run starts the interactive interface and blocks until the user quits or the
 // context is cancelled. A nil feed means nothing is published.
-func Run(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, opts ...Option) error {
+//
+// problems are the things that went wrong before there was a screen to say them
+// on. They open the log pane and are shown in red, because the alternative -
+// writing them to the terminal a moment before the alternate screen covers it -
+// is the same as not saying them at all.
+func Run(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, problems []string, opts ...Option) error {
 	programOpts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	for _, o := range opts {
 		o(&programOpts)
 	}
 
-	m := newModel(a, n, f)
+	m := newModel(a, n, f, problems)
 
 	_, err := tea.NewProgram(m, programOpts...).Run()
 	if ctx.Err() != nil {

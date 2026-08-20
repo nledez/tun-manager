@@ -429,7 +429,9 @@ func TestListenRefusesADirectoryRootDoesNotOwn(t *testing.T) {
 	}
 }
 
-func TestListenRefusesADirectoryOthersCanWrite(t *testing.T) {
+func TestListenRefusesADirectoryAnybodyCanWrite(t *testing.T) {
+	// World-writable, which is the one that matters: a directory root owns and
+	// only its group can write is somewhere a plain user already cannot touch.
 	path := socketPath(t)
 	dir := filepath.Dir(path)
 	if err := os.Chmod(dir, 0o777); err != nil {
@@ -441,12 +443,30 @@ func TestListenRefusesADirectoryOthersCanWrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("Listen bound under a directory anybody can write")
 	}
-	if !strings.Contains(err.Error(), "sudo chmod go-w") {
+	if !strings.Contains(err.Error(), "sudo chmod o-w") {
 		t.Errorf("error %q does not say how to fix it", err)
 	}
 }
 
+func TestListenBindsUnderADirectoryOnlyItsGroupCanWrite(t *testing.T) {
+	// /var/run is 0775 root:daemon on darwin, and `touch /var/run/anything` is
+	// refused to a plain user. Refusing it would refuse the documented socket
+	// path, and the advice that came with the refusal — chmod a system
+	// directory — was worse than the thing it guarded against.
+	path := socketPath(t)
+	if err := os.Chmod(filepath.Dir(path), 0o775); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	s := &Server{Path: path}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen refused the mode /var/run has: %v", err)
+	}
+	s.Close() //nolint:errcheck
+}
+
 func TestListenReportsADirectoryItCannotLookAt(t *testing.T) {
+	ownedByRoot(t)
 	s := &Server{Path: filepath.Join(t.TempDir(), "absent", "f.sock")}
 
 	err := s.Listen()

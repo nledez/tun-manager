@@ -177,7 +177,7 @@ type env struct {
 	// notifier is optional; without one the TUI posts no notification.
 	notifier *notify.Notifier
 	// interactive runs the TUI. It is a field so tests never start one.
-	interactive func(context.Context, *app.App, *notify.Notifier, *feed.Server) error
+	interactive func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error
 
 	// flags are the overrides parsed off the command line, before the command.
 	flags overrides
@@ -535,8 +535,8 @@ func (e *env) assemble(cfg *profile.Config, priv *profile.Privileged, reader wg.
 	}
 }
 
-func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server) error {
-	return tui.Run(ctx, a, n, f)
+func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, problems []string) error {
+	return tui.Run(ctx, a, n, f, problems)
 }
 
 // runInitPrivileged lays out the root-only half of the configuration.
@@ -711,7 +711,7 @@ func (e *env) runTUI() error {
 	ctx, stop := signalled()
 	defer stop()
 
-	f, served := e.startFeed(ctx, a, priv, owner)
+	f, served, problems := e.startFeed(ctx, a, priv, owner)
 	if f != nil {
 		// Cancelling before waiting is the whole point: closing the socket
 		// first would break the accept loop out with clients still connected
@@ -721,22 +721,23 @@ func (e *env) runTUI() error {
 			<-served
 		}()
 	}
-	return e.interactive(ctx, a, notifier, f)
+	return e.interactive(ctx, a, notifier, f, problems)
 }
 
-// startFeed opens the status socket, or returns nil having said why.
+// startFeed opens the status socket, or returns nil and the reason it could not.
 //
 // Losing the menu bar must never cost you the ability to bring a tunnel up, so
-// a feed that cannot start is reported and stepped over. The alternate screen
-// puts this back on the terminal when the interface exits, and `doctor` says
-// the same thing at any time.
+// a feed that cannot start is reported and stepped over. The reason goes to the
+// interface, which shows it in the log pane and opens that pane: printing it
+// here would put it on a terminal the alternate screen covers a millisecond
+// later. `doctor` says the same thing at any time.
 //
 // The returned channel closes once Serve has returned, so the caller can wait
 // for the goodbye and the socket removal it is responsible for rather than
 // racing them.
-func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privileged, owner privdrop.User) (*feed.Server, <-chan struct{}) {
+func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privileged, owner privdrop.User) (*feed.Server, <-chan struct{}, []string) {
 	if !priv.Feed {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	f := &feed.Server{
@@ -750,8 +751,9 @@ func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privilege
 		Version:   version,
 	}
 	if err := f.Listen(); err != nil { //nolint:contextcheck // Listen takes no context; Serve below does
-		fmt.Fprintf(e.out, "%s: status feed unavailable: %v\n", appName, err) //nolint:errcheck
-		return nil, nil
+		// Handed back rather than printed: the interface is about to cover this
+		// terminal, and a line written here is a line nobody sees.
+		return nil, nil, []string{fmt.Sprintf("status feed unavailable: %v", err)}
 	}
 
 	served := make(chan struct{})
@@ -761,7 +763,7 @@ func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privilege
 		// is not actionable here: nothing is left to run once it returns.
 		_ = f.Serve(ctx)
 	}()
-	return f, served
+	return f, served, nil
 }
 
 func (e *env) runStatus(args []string) error {

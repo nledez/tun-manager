@@ -220,7 +220,7 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, a, nil, nil, WithoutTerminal())
+		done <- Run(ctx, a, nil, nil, nil, WithoutTerminal())
 	}()
 
 	cancel()
@@ -234,7 +234,7 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 func TestAFeedIsWiredIntoTheModel(t *testing.T) {
 	f := &feed.Server{Path: filepath.Join(t.TempDir(), "f.sock")}
 
-	m := newModel(nil, nil, f)
+	m := newModel(nil, nil, f, nil)
 
 	if m.feed == nil {
 		t.Error("feed = nil, want the server the composition root passed")
@@ -247,7 +247,7 @@ func TestAFeedIsWiredIntoTheModel(t *testing.T) {
 func TestAnInterfaceBuiltWithoutAFeedHoldsNoFeed(t *testing.T) {
 	// A nil *feed.Server assigned to the interface would leave a non-nil
 	// interface holding a nil pointer, and the first publish would panic.
-	m := newModel(nil, nil, nil)
+	m := newModel(nil, nil, nil, nil)
 
 	if m.feed != nil {
 		t.Errorf("feed = %#v, want nothing", m.feed)
@@ -317,7 +317,7 @@ func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
 	a.Reader = nil
 
-	err := Run(context.Background(), a, nil, nil, WithoutTerminal())
+	err := Run(context.Background(), a, nil, nil, nil, WithoutTerminal())
 
 	if err == nil {
 		t.Fatal("Run returned nil after the program crashed, want the failure reported")
@@ -377,3 +377,36 @@ func TestABatchReportsEachTunnelWhileTheNextIsStillRunning(t *testing.T) {
 // what they are about is everything around the call; the check has its own
 // tests in internal/wg.
 func installedWgQuick(string) error { return nil }
+
+func TestAProblemFromBeforeTheScreenExistedIsShownInTheLog(t *testing.T) {
+	// "status feed unavailable: ..." was printed to the terminal a moment
+	// before the alternate screen covered it, so nobody ever read it. It
+	// belongs in the pane, in red, with the pane open.
+	m := newModel(&app.App{}, nil, nil, []string{"status feed unavailable: it is 0777"})
+
+	if !m.showLogs {
+		t.Error("the log pane is closed, so the problem is one keystroke away from being invisible")
+	}
+	if len(m.logs) != 1 {
+		t.Fatalf("logs = %+v, want the problem in them", m.logs)
+	}
+	if !m.logs[0].IsFail {
+		t.Error("the problem is not marked as a failure, so it is not drawn in red")
+	}
+	if !strings.Contains(m.logs[0].Text, "status feed unavailable") {
+		t.Errorf("log = %q, want the reason", m.logs[0].Text)
+	}
+}
+
+func TestWithNoProblemTheLogPaneStaysShut(t *testing.T) {
+	// The pane is a third of the screen. Opening it when there is nothing to
+	// read would cost the table its rows on every run.
+	m := newModel(&app.App{}, nil, nil, nil)
+
+	if m.showLogs {
+		t.Error("the log pane opened with nothing in it")
+	}
+	if len(m.logs) != 0 {
+		t.Errorf("logs = %+v, want none", m.logs)
+	}
+}

@@ -212,12 +212,19 @@ func (s *Server) Listen() error {
 	return nil
 }
 
-// checkDirectory refuses to bind under a directory somebody else could write.
+// checkDirectory refuses to bind under a directory anybody can write.
 //
-// The mode of the socket is not the whole story. Anybody who can write the
+// The mode of the socket is not the whole story. Somebody who can write the
 // directory holding it can unlink it and bind their own in its place, and the
 // menu bar would then be listening to whatever they chose to say — while
 // tun-manager, root, went on running with nobody reading its feed.
+//
+// What that comes down to is the owner and the world bit. A directory root owns
+// and only its group can write is somewhere a plain user already cannot touch:
+// /var/run is 0775 root:daemon on darwin, `touch /var/run/anything` is refused,
+// and anybody who is in that group has other ways in. Refusing it would refuse
+// the documented socket path, and the advice that came with the refusal - chmod
+// a system directory - was worse than the thing it was guarding against.
 //
 // Off for a simulated run, whose socket goes wherever the flags said and whose
 // directory belongs to whoever is running the demo. Those flags are refused
@@ -235,14 +242,13 @@ func (s *Server) checkDirectory() error {
 	if uid, _ := fsx.Owner(dir, info); uid != fsx.Root {
 		return fmt.Errorf(
 			"the status feed will not bind in %s: it is owned by uid %d rather than root, "+
-				"so that user can unlink the socket and bind their own in its place. "+
-				"`sudo chown 0:0 %s`, or point feed_socket somewhere root owns", dir, uid, dir)
+				"so that user can unlink the socket and bind their own in its place: "+
+				"`sudo chown 0:0 %s`, or point feed_socket at a directory root owns", dir, uid, dir)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
+	if info.Mode().Perm()&0o002 != 0 && info.Mode()&os.ModeSticky == 0 {
 		return fmt.Errorf(
-			"the status feed will not bind in %s: it is %04o, so somebody else can replace "+
-				"the socket with one of their own: `sudo chmod go-w %s`",
-			dir, info.Mode().Perm(), dir)
+			"the status feed will not bind in %s: it is %04o, so anybody at all can replace the "+
+				"socket with one of their own: `sudo chmod o-w %s`", dir, info.Mode().Perm(), dir)
 	}
 	return nil
 }
