@@ -180,6 +180,12 @@ feed: true                              # default
 feed_socket: /var/run/tun-manager.sock  # default
 ```
 
+It is `0600` from the moment it exists, not from the `chmod` that follows the
+bind: the permissions of a unix socket are consulted at `connect(2)` and never
+again, so anybody who connected during that window would go on reading the feed
+for as long as `tun-manager` ran. The bind happens under a `umask` of `0177`,
+and the `chmod` stays as the belt to that pair of braces.
+
 It binds only under a directory root owns and nobody else can write, and it
 unlinks only a socket: a stale one left by a killed `tun-manager` is taken back,
 anything else — a file, a symbolic link, a directory — stops the feed with a

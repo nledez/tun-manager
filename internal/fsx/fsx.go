@@ -78,6 +78,11 @@ func realOwner(_ string, info os.FileInfo) (uid, gid int) {
 	return int(stat.Uid), int(stat.Gid)
 }
 
+// Umask sets the bits the kernel takes out of the mode of everything this
+// process creates, and returns what it was. Process-wide, which is why the one
+// caller holds it for as long as it takes to bind a socket and no longer.
+var Umask = syscall.Umask
+
 // Lchown is os.Lchown: it changes the owner of a symbolic link rather than of
 // what the link points at. os.Chown is never used in this program. Root
 // changing the owner of a path that somebody else can replace with a link is

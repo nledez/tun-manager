@@ -176,8 +176,7 @@ func (s *Server) Listen() error {
 		return err
 	}
 
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(context.Background(), "unix", s.Path)
+	ln, err := bindPrivately(s.Path)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.Path, err)
 	}
@@ -188,6 +187,10 @@ func (s *Server) Listen() error {
 		ul.SetUnlinkOnClose(false)
 	}
 
+	// Kept although the umask above has already done it. An umask takes bits
+	// out and never puts them in, so this can only ever tighten what is there -
+	// and a filesystem that ignores the umask, or a Go that stops applying it
+	// to a bind, would leave the socket readable with nothing to say so.
 	if err := fsx.Chmod(s.Path, SocketMode); err != nil {
 		return s.abandon(ln, fmt.Errorf("chmod %s: %w", s.Path, err))
 	}
@@ -271,6 +274,31 @@ func (s *Server) clearStaleSocket() error {
 		return fmt.Errorf("remove stale socket %s: %w", s.Path, err)
 	}
 	return nil
+}
+
+// umaskMu serialises the umask around a bind. The umask is process-wide, and
+// this is the only place that touches it: whatever else is creating a file at
+// that instant gets a stricter mode than it asked for, for the length of one
+// syscall, which is the harmless direction to be wrong in.
+var umaskMu sync.Mutex
+
+// bindPrivately binds the socket with a umask that makes it 0600 from the
+// moment it exists.
+//
+// Binding and then chmodding leaves a window, and the window matters here in a
+// way it would not for an ordinary file: the permissions of a unix socket are
+// consulted at connect(2) and never again. Somebody who connects while the
+// socket is still world-readable keeps that connection after the chmod, and
+// reads the feed for as long as tun-manager runs.
+func bindPrivately(path string) (net.Listener, error) {
+	umaskMu.Lock()
+	defer umaskMu.Unlock()
+
+	previous := fsx.Umask(0o177)
+	defer fsx.Umask(previous)
+
+	lc := net.ListenConfig{}
+	return lc.Listen(context.Background(), "unix", path)
 }
 
 // abandon undoes a half-built listener and returns the reason it was given.

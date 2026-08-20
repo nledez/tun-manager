@@ -510,3 +510,83 @@ func TestListenReportsASocketItCannotUnlink(t *testing.T) {
 		t.Errorf("err = %v, want the failure to unlink", err)
 	}
 }
+
+// MARK: the mode the socket has from the moment it exists
+
+func TestTheSocketIsNeverReadableEvenBeforeTheChmod(t *testing.T) {
+	// The chmod that follows the bind cannot close this on its own: the
+	// permissions of a unix socket are consulted at connect(2) and never again,
+	// so anybody who connected during the window keeps reading the feed for as
+	// long as tun-manager runs. With the chmod doing nothing at all, the mode
+	// has to be 0600 already.
+	previous := fsx.Chmod
+	fsx.Chmod = func(string, os.FileMode) error { return nil }
+	t.Cleanup(func() { fsx.Chmod = previous })
+	s := &Server{Path: socketPath(t)}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer s.Close() //nolint:errcheck
+
+	info, err := os.Stat(s.Path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != SocketMode {
+		t.Errorf("the socket was born %04o, want %04o: the umask did not take", got, SocketMode)
+	}
+}
+
+func TestTheUmaskIsPutBackAfterTheBind(t *testing.T) {
+	// It is process-wide. Leaving it at 0177 would tighten every file the
+	// program writes afterwards, which is the harmless direction — and still
+	// not something to do behind the back of the rest of the program.
+	var asked []int
+	previous := fsx.Umask
+	fsx.Umask = func(mask int) int {
+		asked = append(asked, mask)
+		return previous(mask)
+	}
+	t.Cleanup(func() { fsx.Umask = previous })
+	s := &Server{Path: socketPath(t)}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer s.Close() //nolint:errcheck
+
+	if len(asked) != 2 {
+		t.Fatalf("the umask was set %d time(s), want it set and put back", len(asked))
+	}
+	if asked[0] != 0o177 {
+		t.Errorf("bound under umask %04o, want 0177", asked[0])
+	}
+	if asked[1] == 0o177 {
+		t.Error("the umask was left at 0177 for the rest of the program")
+	}
+}
+
+func TestTheUmaskIsPutBackEvenWhenTheBindFails(t *testing.T) {
+	var asked []int
+	previous := fsx.Umask
+	fsx.Umask = func(mask int) int {
+		asked = append(asked, mask)
+		return previous(mask)
+	}
+	t.Cleanup(func() { fsx.Umask = previous })
+	ownedByRoot(t)
+	s := &Server{Path: filepath.Join(t.TempDir(), "f.sock")}
+	if err := os.Chmod(filepath.Dir(s.Path), 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	if err := s.Listen(); err == nil {
+		s.Close() //nolint:errcheck
+		t.Fatal("Listen bound in a directory it cannot write")
+	}
+
+	if len(asked) != 2 || asked[1] == 0o177 {
+		t.Errorf("the umask was left behind after a failed bind: %v", asked)
+	}
+}
