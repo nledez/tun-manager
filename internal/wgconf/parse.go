@@ -10,6 +10,7 @@ package wgconf
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"net/netip"
@@ -38,19 +39,91 @@ type Tunnel struct {
 	// CheckIPInferred reports that CheckIP was guessed rather than read from a
 	// "# TO_CHECK=" comment.
 	CheckIPInferred bool
+	// Hooks are the commands wg-quick would run, as root, around bringing this
+	// tunnel up and down. They are collected so they can be shown to somebody
+	// before the file is trusted; nothing here ever runs one.
+	Hooks []Hook
 }
+
+// Hook is one PreUp, PostUp, PreDown or PostDown line.
+//
+// wg-quick executes these as root, every time the tunnel goes up or down. A
+// configuration downloaded from a provider can carry one, and it will run with
+// every privilege tun-manager has — so the point of reading them here is to be
+// able to put them in front of a person.
+type Hook struct {
+	// Key is the directive as it was written. wg-quick's parser is
+	// case-insensitive, and showing "postup" back to somebody who wrote
+	// "PostUp" makes them look for a line that is not there.
+	Key string
+	// Value is the command line, as written.
+	Value string
+	// Line is where it is in the file, counting from one.
+	Line int
+}
+
+// hookKeys are the directives wg-quick executes. Table is not among them: it
+// chooses how routes are installed and runs nothing, and crying wolf over it
+// would teach people to skim the warning.
+var hookKeys = map[string]bool{
+	"preup":    true,
+	"postup":   true,
+	"predown":  true,
+	"postdown": true,
+}
+
+// secretKeys are the values that must not be shown when a file is displayed.
+// PublicKey is not among them: it is an identity rather than a secret, and it
+// is what matches a configuration to a live interface.
+var secretKeys = map[string]bool{
+	"privatekey":   true,
+	"presharedkey": true,
+}
+
+// Redact returns the file with every secret value replaced, and everything else
+// left exactly as it was — same lines, same order, same spelling.
+//
+// It exists so a configuration can be shown back to whoever is importing it.
+// What they are being asked to read is what wg-quick will run as root; what
+// they must not have to think about is whether it is safe to have on screen.
+func Redact(body []byte) []byte {
+	lines := strings.Split(string(body), "\n")
+	for i, line := range lines {
+		// Cut rather than splitKeyValue: the part before the "=" is kept as it
+		// was written, indentation and all, so the file reads back the way it
+		// is on disk.
+		key, _, ok := strings.Cut(line, "=")
+		if !ok || !secretKeys[strings.ToLower(strings.TrimSpace(key))] {
+			continue
+		}
+		lines[i] = strings.TrimRight(key, " \t") + " = " + hidden
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// hidden is what a secret is shown as. Not a row of asterisks the width of the
+// value: the length of a key is not something worth publishing either.
+const hidden = "(hidden)"
 
 const toCheckMarker = "TO_CHECK"
 
 // ParseFile reads a single WireGuard configuration file.
+//
+// It reads the whole file and parses what it read, rather than parsing as it
+// reads: whoever imports a configuration is shown it first, and showing one
+// file while importing another is the kind of difference nobody would notice.
 func ParseFile(path string) (Tunnel, error) {
-	f, err := os.Open(path)
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return Tunnel{}, err
 	}
-	// Read-only: a failure to close has nothing to report.
-	defer func() { _ = f.Close() }()
+	return Parse(body, path)
+}
 
+// Parse reads a configuration out of bytes already in hand. path names where
+// they came from: the tunnel takes its name from the file name, and wg-quick is
+// handed the path rather than the contents.
+func Parse(body []byte, path string) (Tunnel, error) {
 	tun := Tunnel{
 		Name: strings.TrimSuffix(filepath.Base(path), ".conf"),
 		Path: path,
@@ -58,9 +131,11 @@ func ParseFile(path string) (Tunnel, error) {
 
 	var section string
 	var seenPeer bool
+	var number int
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(body))
 	for scanner.Scan() {
+		number++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -88,6 +163,9 @@ func ParseFile(path string) (Tunnel, error) {
 		case "interface":
 			if strings.EqualFold(key, "Address") {
 				tun.Address = value
+			}
+			if hookKeys[strings.ToLower(key)] {
+				tun.Hooks = append(tun.Hooks, Hook{Key: key, Value: value, Line: number})
 			}
 		case "peer":
 			// Only the first peer matters: every config here is a client with a

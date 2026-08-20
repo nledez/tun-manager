@@ -251,6 +251,21 @@ assertion on what `ed25519.PrivateKey.Public()` returns. It returns an
 `ed25519.PublicKey` and nothing else; the guard exists so a standard library
 that changed that would produce an error rather than a panic.
 
+### the confirmation prompt
+
+`internal/cli/confirm.go` writes the question before reading the answer:
+
+```go
+if _, err := fmt.Fprintf(w, "%s [y/N] ", question); err != nil {
+```
+
+The writer is the one every other line of the report has already gone to
+without failing — `Import` has just printed the whole configuration to it. A
+test that made this particular write fail would need a writer that accepts a
+few hundred bytes and then refuses one more, which is a fixture built to reach
+a branch rather than to describe anything. The failure is returned rather than
+ignored because a question nobody saw must not be answered on their behalf.
+
 ### filesystem races in the permission code
 
 Thirteen branches handle a filesystem that changed underneath the process.

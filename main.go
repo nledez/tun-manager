@@ -45,6 +45,7 @@ Usage:
   sudo tun-manager down --all         bring every tunnel down
   sudo tun-manager init-privileged    create the root-only half of the config
   sudo tun-manager import NAME FILE   add a .conf and list it in the all group
+                                     (shows the file and asks; --yes skips)
   sudo tun-manager backup             archive the configuration and every .conf
   tun-manager doctor                  check the environment
   tun-manager notify                  post a sample notification
@@ -143,7 +144,11 @@ func (o overrides) applyRoot(priv *profile.Privileged) *profile.Privileged {
 // place keeps the dispatch and the flag parsing testable without root, a
 // WireGuard socket or a terminal.
 type env struct {
-	out  io.Writer
+	out io.Writer
+	// in is where an answer to a question comes from. A field rather than
+	// os.Stdin reached for directly, so a test can hand over a canned answer -
+	// and so a command that asks something cannot be tested only by hand.
+	in   io.Reader
 	euid int
 
 	// now is the clock, so that a test can pin the timestamp an archive is
@@ -193,6 +198,7 @@ func main() {
 func newEnv() *env {
 	e := &env{
 		out:            os.Stdout,
+		in:             os.Stdin,
 		euid:           os.Geteuid(),
 		now:            time.Now,
 		interactive:    runTUI,
@@ -550,18 +556,26 @@ func (e *env) runInitPrivileged(args []string) error {
 // runImport adds a WireGuard configuration to the ones tun-manager manages.
 func (e *env) runImport(args []string) error {
 	fs := newFlagSet("import")
+	yes := fs.Bool("yes", false, "import without being asked to agree to the file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return errors.New("usage: sudo tun-manager import <name> <file.conf>")
+		return errors.New("usage: sudo tun-manager import [--yes] <name> <file.conf>")
 	}
 
 	cfg, _, u, err := e.acting()
 	if err != nil {
 		return err
 	}
-	return cli.Import(e.out, cfg, u, fs.Arg(0), fs.Arg(1))
+
+	// --yes answers without reading anything: whatever is on standard input
+	// belongs to whoever comes next in the pipeline.
+	ask := cli.Ask(e.in, e.out)
+	if *yes {
+		ask = cli.Assumed(true)
+	}
+	return cli.Import(e.out, ask, cfg, u, fs.Arg(0), fs.Arg(1))
 }
 
 // runBackup archives everything that would be painful to lose.

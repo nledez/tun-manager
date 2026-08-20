@@ -38,19 +38,25 @@ var shortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // Everything is checked before anything is written. An import that half
 // succeeds leaves a tunnel that appears in one place and not the other, which
 // is worse than one that did not happen.
-func Import(w io.Writer, cfg *profile.Config, u privdrop.User, name, source string) error {
+//
+// The file is shown and then agreed to, in that order. What is being added is
+// something wg-quick will read as root, so the decision belongs to a person and
+// not to the fact that they typed a command - and the moment to make it is
+// while what they are agreeing to is still on the screen.
+func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name, source string) error {
 	if !shortName.MatchString(name) {
 		return fmt.Errorf("%q is not a usable tunnel name: letters, digits, - and _, starting with a letter or a digit", name)
 	}
 
-	// Read before parsing rather than after: parsing it first would leave a
-	// read that cannot fail, which is a branch no test can reach.
+	// Read once, and parse what was read. Reading it twice - once for the body
+	// to write, once for the parser - would mean showing one file and importing
+	// another, which is a difference nobody would notice.
 	body, err := os.ReadFile(source)
 	if err != nil {
 		return err
 	}
 
-	tun, err := wgconf.ParseFile(source)
+	tun, err := wgconf.Parse(body, source)
 	if err != nil {
 		return err
 	}
@@ -65,6 +71,22 @@ func Import(w io.Writer, cfg *profile.Config, u privdrop.User, name, source stri
 	target := filepath.Join(cfg.ConfigDir, name+".conf")
 	if _, statErr := os.Stat(target); statErr == nil {
 		return fmt.Errorf("%s already exists: remove it first if you mean to replace that tunnel", target)
+	}
+
+	// Shown before anything is written: what is being imported is a file
+	// wg-quick will read as root, and the moment to look at it is now.
+	if err = Review(w, source, body, tun); err != nil {
+		return err
+	}
+	agreed, err := ask(fmt.Sprintf("import %s as %s?", filepath.Base(source), target))
+	if err != nil {
+		return err
+	}
+	if !agreed {
+		// Not an error in the sense of something going wrong, but not a success
+		// either: a script that expected a tunnel to be there afterwards has to
+		// find out.
+		return fmt.Errorf("nothing was imported: %s was not agreed to", source)
 	}
 
 	if err = os.MkdirAll(cfg.ConfigDir, WireGuardDirMode); err != nil {
@@ -110,7 +132,7 @@ func Import(w io.Writer, cfg *profile.Config, u privdrop.User, name, source stri
 	}
 
 	report := fmt.Sprintf(
-		"imported %s\n  config   %s\n  check    %s\n  group    %s in %s\n",
+		"\nimported %s\n  config   %s\n  check    %s\n  group    %s in %s\n",
 		name, target, tun.CheckIP, profile.GroupAll, cfg.Path,
 	)
 	if saved != "" {

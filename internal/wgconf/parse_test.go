@@ -1,6 +1,7 @@
 package wgconf
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,5 +328,159 @@ func TestParseFileReportsAReadFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "alpha.conf") {
 		t.Errorf("err = %v, want it to name the file", err)
+	}
+}
+
+// MARK: what wg-quick would run as root
+
+// parseString parses a configuration written out here rather than kept in
+// testdata: these tests are about lines that must never reach a real file.
+func parseString(t *testing.T, body string) Tunnel {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "alpha.conf")
+	writeFile(t, path, body)
+	tun, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	return tun
+}
+
+func TestParseCollectsTheHooksWgQuickWouldRun(t *testing.T) {
+	// They are not obeyed here and never will be. What matters is that they can
+	// be shown to somebody before the file is imported: wg-quick runs each of
+	// them as root, every time the tunnel goes up or down.
+	tun := parseString(t, `[Interface]
+PrivateKey = `+alphaKey+`
+Address = 10.20.30.2/32
+PostUp = /usr/local/bin/announce %i
+PreDown = logger stopping
+
+[Peer]
+PublicKey = `+deltaKey+`
+Endpoint = 192.0.2.10:51820
+# TO_CHECK=10.20.30.1
+`)
+
+	if len(tun.Hooks) != 2 {
+		t.Fatalf("hooks = %+v, want two", tun.Hooks)
+	}
+	if tun.Hooks[0].Key != "PostUp" || tun.Hooks[0].Value != "/usr/local/bin/announce %i" {
+		t.Errorf("first hook = %+v", tun.Hooks[0])
+	}
+	if tun.Hooks[0].Line != 4 {
+		t.Errorf("first hook is on line %d, want 4: the line is how somebody finds it", tun.Hooks[0].Line)
+	}
+	if tun.Hooks[1].Key != "PreDown" || tun.Hooks[1].Line != 5 {
+		t.Errorf("second hook = %+v", tun.Hooks[1])
+	}
+}
+
+func TestParseKeepsTheKeyAsItWasWritten(t *testing.T) {
+	// wg-quick's parser is case-insensitive. Showing "postup" back to somebody
+	// who wrote "PostUp" makes them look for a line that is not there.
+	tun := parseString(t, `[Interface]
+PrivateKey = `+alphaKey+`
+postup = touch /tmp/x
+
+[Peer]
+PublicKey = `+deltaKey+`
+# TO_CHECK=10.20.30.1
+`)
+
+	if len(tun.Hooks) != 1 || tun.Hooks[0].Key != "postup" {
+		t.Errorf("hooks = %+v, want the key as written", tun.Hooks)
+	}
+}
+
+func TestParseFindsNoHookInAFileWithout(t *testing.T) {
+	tun := parseString(t, `[Interface]
+PrivateKey = `+alphaKey+`
+
+[Peer]
+PublicKey = `+deltaKey+`
+# TO_CHECK=10.20.30.1
+`)
+
+	if len(tun.Hooks) != 0 {
+		t.Errorf("hooks = %+v, want none", tun.Hooks)
+	}
+}
+
+func TestRedactHidesEveryKeyAndNothingElse(t *testing.T) {
+	// The file is shown back before it is imported, so that somebody can read
+	// what they are about to hand to root. What they must not have to think
+	// about is whether it is safe to have it on screen.
+	body := []byte(`[Interface]
+PrivateKey = ` + alphaKey + `
+Address = 10.20.30.2/32
+
+[Peer]
+PublicKey = ` + deltaKey + `
+PresharedKey = ` + alphaKey + `
+Endpoint = 192.0.2.10:51820
+`)
+
+	got := string(Redact(body))
+
+	if strings.Contains(got, alphaKey) {
+		t.Errorf("a secret survived redaction:\n%s", got)
+	}
+	// The public key is an identity rather than a secret, and it is what
+	// matches a configuration to a live interface: hiding it would hide the one
+	// field somebody may need to compare.
+	if !strings.Contains(got, deltaKey) {
+		t.Errorf("the public key was hidden too:\n%s", got)
+	}
+	for _, want := range []string{"PrivateKey", "PresharedKey", "Address = 10.20.30.2/32"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("redaction lost %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRedactIgnoresCaseAndSpacing(t *testing.T) {
+	body := []byte("privatekey=" + alphaKey + "\n  PreSharedKey   =   " + alphaKey + "\n")
+
+	got := string(Redact(body))
+
+	if strings.Contains(got, alphaKey) {
+		t.Errorf("a secret survived redaction:\n%s", got)
+	}
+}
+
+func TestRedactKeepsTheFileReadable(t *testing.T) {
+	// Same number of lines, in the same order: it is shown with line numbers
+	// beside it, and those have to match the file on disk.
+	body := []byte("[Interface]\nPrivateKey = " + alphaKey + "\n\n[Peer]\n")
+
+	got := string(Redact(body))
+
+	if strings.Count(got, "\n") != strings.Count(string(body), "\n") {
+		t.Errorf("the line count changed:\n%s", got)
+	}
+}
+
+func TestParseAndParseFileAgree(t *testing.T) {
+	// The whole point of Parse existing: the caller shows what it read and
+	// imports what it showed. If the two disagreed, that guarantee would be
+	// worth nothing.
+	body, err := os.ReadFile(filepath.Join("testdata", "alpha.conf"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	fromFile, err := ParseFile(filepath.Join("testdata", "alpha.conf"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	fromBytes, err := Parse(body, filepath.Join("testdata", "alpha.conf"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if fmt.Sprintf("%+v", fromFile) != fmt.Sprintf("%+v", fromBytes) {
+		t.Errorf("Parse = %+v\nParseFile = %+v", fromBytes, fromFile)
 	}
 }

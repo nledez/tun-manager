@@ -353,24 +353,6 @@ sudo install -o 0 -g 0 -m 0755 "$(readlink -f "$(command -v wg-quick)")" /usr/lo
 #   wg_quick: /usr/local/sbin/wg-quick
 ```
 
-**`wg-quick` itself is checked before it is run**, every time, by the code that
-runs it rather than only by `doctor`: root executes that file, so whoever can
-write it — or any directory on the way to it — chooses what root does. Anything
-world-writable, unreadable or not executable is refused outright.
-
-One thing cannot be refused, and `doctor` says so instead. `brew install
-wireguard-tools` leaves `/opt/homebrew/bin/wg-quick` and everything behind it
-owned by the user who ran `brew`, not by root — so a process running as you can
-replace what root executes at the next `sudo tun-manager up`, whatever the mode
-says. Refusing that would refuse the installation this README documents. If you
-want it closed, put `wg-quick` somewhere root owns and point `wg_quick` at it:
-
-```sh
-sudo install -o 0 -g 0 -m 0755 "$(readlink -f "$(command -v wg-quick)")" /usr/local/sbin/wg-quick
-# then, in /private/wireguard/config/tun-manager.yaml:
-#   wg_quick: /usr/local/sbin/wg-quick
-```
-
 Those modes are not advice. Every command that touches the tunnels — the
 interface, `status`, `up`, `down`, `import`, `backup` — refuses to start while a
 `.conf`, or the directory holding them, can be read by somebody who is not root,

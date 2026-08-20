@@ -102,7 +102,10 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 	}
 
 	return &env{
-		out:  &strings.Builder{},
+		out: &strings.Builder{},
+		// Nothing to read unless a test says so: a command that asks a question
+		// and is not given an answer must fail rather than hang.
+		in:   strings.NewReader(""),
 		euid: 0,
 		// A file only root can write is a file no test can create. The loader
 		// stands in for it, and one test asserts that a real env reads the
@@ -1089,7 +1092,9 @@ func TestImportAddsTheTunnelToTheConfiguration(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := e.run([]string{"import", "charlie", source}); err != nil {
+	// --yes, because what this test is about is what import writes; that it
+	// asks first has its own tests.
+	if err := e.run([]string{"import", "--yes", "charlie", source}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 
@@ -1732,3 +1737,76 @@ func TestARealEnvironmentChecksTheModesForReal(t *testing.T) {
 // what they are about is everything around the call; the check has its own
 // tests in internal/wg.
 func installedWgQuick(string) error { return nil }
+
+func TestImportAsksBeforeItWrites(t *testing.T) {
+	e, source := importable(t)
+	e.in = strings.NewReader("n\n")
+
+	err := e.run([]string{"import", "charlie", source})
+
+	if err == nil {
+		t.Fatal("import went ahead on an answer of no")
+	}
+	if !strings.Contains(output(e), "[y/N]") {
+		t.Errorf("nothing was asked:\n%s", output(e))
+	}
+}
+
+func TestImportGoesAheadOnYes(t *testing.T) {
+	e, source := importable(t)
+	e.in = strings.NewReader("y\n")
+
+	if err := e.run([]string{"import", "charlie", source}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	if !strings.Contains(output(e), "imported charlie") {
+		t.Errorf("import did not go ahead:\n%s", output(e))
+	}
+}
+
+func TestImportWithYesAsksNothing(t *testing.T) {
+	// For a script, and for somebody importing eight configurations in a row
+	// who has already read them.
+	e, source := importable(t)
+	e.in = strings.NewReader("") // nothing to read: --yes must not need it
+
+	if err := e.run([]string{"import", "--yes", "charlie", source}); err != nil {
+		t.Fatalf("import --yes: %v", err)
+	}
+
+	if strings.Contains(output(e), "[y/N]") {
+		t.Errorf("--yes still asked:\n%s", output(e))
+	}
+	if !strings.Contains(output(e), "imported charlie") {
+		t.Errorf("--yes did not import:\n%s", output(e))
+	}
+}
+
+func TestImportWithNobodyToAskSaysSo(t *testing.T) {
+	e, source := importable(t)
+	e.in = strings.NewReader("")
+
+	err := e.run([]string{"import", "charlie", source})
+
+	if err == nil {
+		t.Fatal("import went ahead with nobody to ask")
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("error %q does not say how to import without being asked", err)
+	}
+}
+
+// importable builds an environment and a configuration worth importing.
+func importable(t *testing.T) (*env, string) {
+	t.Helper()
+
+	e := testEnv(t, &fakeRunner{})
+	source := filepath.Join(t.TempDir(), "downloaded.conf")
+	body := "[Interface]\nPrivateKey = " + alphaKey + "\n\n[Peer]\nPublicKey = " + bravoKey +
+		"\nEndpoint = 192.0.2.10:51820\n# TO_CHECK=10.20.30.1\n"
+	if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return e, source
+}

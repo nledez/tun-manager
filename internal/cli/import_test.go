@@ -45,7 +45,7 @@ func TestImportCopiesTheConfigurationAndListsTheTunnel(t *testing.T) {
 	cfg, source := importEnv(t, importable)
 	var out strings.Builder
 
-	if err := Import(&out, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestImportKeepsTheKeyToItself(t *testing.T) {
 	cfg, source := importEnv(t, importable)
 	var out strings.Builder
 
-	if err := Import(&out, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestImportSaysWhatItDid(t *testing.T) {
 	cfg, source := importEnv(t, importable)
 	var out strings.Builder
 
-	if err := Import(&out, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestImportBacksUpTheConfigurationBeforeChangingIt(t *testing.T) {
 	}
 	var out strings.Builder
 
-	if err := Import(&out, cfg, privdrop.User{}, "bravo", source); err != nil {
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "bravo", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestImportKeepsTheBackupsPermissions(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestImportHasNothingToBackUpOnAFirstRun(t *testing.T) {
 	cfg, source := importEnv(t, importable)
 	var out strings.Builder
 
-	if err := Import(&out, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestImportStopsWhenTheBackupCannotBeWritten(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import went ahead without a backup")
@@ -209,7 +209,7 @@ func TestImportRefusesAConfigurationWithoutToCheck(t *testing.T) {
 	// AllowedIPs holds a /24, which cannot be inferred as a host to ping.
 	cfg, source := importEnv(t, body)
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import accepted a configuration with no TO_CHECK")
@@ -229,7 +229,7 @@ func TestImportRefusesAnInferredCheckAddress(t *testing.T) {
 	body = strings.ReplaceAll(body, "AllowedIPs = 10.20.30.0/24", "AllowedIPs = 10.20.30.1/32")
 	cfg, source := importEnv(t, body)
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import accepted a configuration whose check address was guessed")
@@ -251,7 +251,7 @@ func TestImportRefusesToReplaceAnExistingTunnel(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import replaced an existing configuration")
@@ -265,7 +265,7 @@ func TestImportRefusesANameThatIsNotOne(t *testing.T) {
 	cfg, source := importEnv(t, importable)
 
 	for _, name := range []string{"", "../escape", "with space", "dotted.name", "-leading", "sub/dir"} {
-		if err := Import(&strings.Builder{}, cfg, privdrop.User{}, name, source); err == nil {
+		if err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, name, source); err == nil {
 			t.Errorf("Import accepted %q as a tunnel name", name)
 		}
 	}
@@ -274,7 +274,7 @@ func TestImportRefusesANameThatIsNotOne(t *testing.T) {
 func TestImportRefusesAFileThatIsNotAConfiguration(t *testing.T) {
 	cfg, source := importEnv(t, "this is not a WireGuard configuration\n")
 
-	if err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source); err == nil {
+	if err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source); err == nil {
 		t.Error("Import accepted a file with no [Peer] section")
 	}
 }
@@ -282,7 +282,7 @@ func TestImportRefusesAFileThatIsNotAConfiguration(t *testing.T) {
 func TestImportReportsASourceThatIsNotThere(t *testing.T) {
 	cfg, _ := importEnv(t, importable)
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", filepath.Join(t.TempDir(), "absent.conf"))
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", filepath.Join(t.TempDir(), "absent.conf"))
 
 	if err == nil {
 		t.Error("Import accepted a source file that does not exist")
@@ -297,7 +297,7 @@ func TestImportReportsADirectoryItCannotWriteTo(t *testing.T) {
 	}
 	cfg.ConfigDir = filepath.Join(blocker, "config")
 
-	if err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source); err == nil {
+	if err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source); err == nil {
 		t.Error("Import wrote under a regular file")
 	}
 }
@@ -315,7 +315,7 @@ func TestImportReportsATargetItCannotWrite(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	if err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source); err == nil {
+	if err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source); err == nil {
 		t.Error("Import reported success without writing the configuration")
 	}
 }
@@ -331,7 +331,7 @@ func TestImportSaysWhereTheCopyWentWhenTheConfigurationIsNotYAML(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import reported success without updating the configuration")
@@ -354,7 +354,7 @@ func TestImportSaysWhereTheCopyWentWhenTheConfigurationCannotBeUpdated(t *testin
 	}
 	cfg.Path = filepath.Join(blocker, "config.yaml")
 
-	err := Import(&strings.Builder{}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(&strings.Builder{}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if err == nil {
 		t.Fatal("Import reported success without updating the configuration")
@@ -375,7 +375,7 @@ func TestImportReportsAWriteFailure(t *testing.T) {
 	boom := errors.New("broken pipe")
 	cfg, source := importEnv(t, importable)
 
-	err := Import(failingWriter{err: boom}, cfg, privdrop.User{}, "alpha", source)
+	err := Import(failingWriter{err: boom}, Assumed(true), cfg, privdrop.User{}, "alpha", source)
 
 	if !errors.Is(err, boom) {
 		t.Errorf("Import = %v, want %v", err, boom)
@@ -391,7 +391,7 @@ func TestTheConfigDirectoryIsCreatedUnreadableToAnybodyElse(t *testing.T) {
 	// machine - the one case where the program chooses the mode at all.
 	cfg, source := importEnv(t, importable)
 
-	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(io.Discard, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -417,7 +417,7 @@ func TestADirectoryThatAlreadyExistsIsTightenedRatherThanTrusted(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 
-	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(io.Discard, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -437,7 +437,7 @@ func TestTheImportedFileIsReadableByNobodyElseWhateverTheUmaskIs(t *testing.T) {
 	// 0400.
 	cfg, source := importEnv(t, importable)
 
-	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(io.Discard, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -454,7 +454,7 @@ func TestImportAndDoctorAgreeOnWhatTheModesShouldBe(t *testing.T) {
 	// Two commands with their own opinion of the same number is how one of them
 	// starts writing what the other rejects.
 	cfg, source := importEnv(t, importable)
-	if err := Import(io.Discard, cfg, privdrop.User{}, "alpha", source); err != nil {
+	if err := Import(io.Discard, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -463,5 +463,88 @@ func TestImportAndDoctorAgreeOnWhatTheModesShouldBe(t *testing.T) {
 		if c.Status == Fail {
 			t.Errorf("%s: %s", c.Name, c.Detail)
 		}
+	}
+}
+
+func TestImportShowsTheFileBeforeItWritesAnything(t *testing.T) {
+	// The moment to look at a configuration wg-quick will read as root is
+	// before it is somewhere root reads from.
+	body := "[Interface]\nPrivateKey = " + reviewKey + "\nPostUp = touch /tmp/x\n\n" +
+		"[Peer]\nPublicKey = " + reviewPeer + "\nEndpoint = 192.0.2.10:51820\n# TO_CHECK=10.20.30.1\n"
+	cfg, source := importEnv(t, body)
+
+	var out strings.Builder
+	if err := Import(&out, Assumed(true), cfg, privdrop.User{}, "alpha", source); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	got := out.String()
+	shown := strings.Index(got, "PostUp = touch /tmp/x")
+	written := strings.Index(got, "imported alpha")
+	switch {
+	case shown < 0:
+		t.Fatalf("import did not show the file:\n%s", got)
+	case written < 0:
+		t.Fatalf("import did not report what it did:\n%s", got)
+	case shown > written:
+		t.Errorf("the file was shown after it had been imported:\n%s", got)
+	}
+	if strings.Contains(got, reviewKey) {
+		t.Errorf("import printed the private key:\n%s", got)
+	}
+}
+
+func TestImportWritesNothingWhenItIsNotAgreedTo(t *testing.T) {
+	// The whole point of showing the file: reading it has to be able to change
+	// the answer.
+	cfg, source := importEnv(t, importable)
+	var out strings.Builder
+
+	err := Import(&out, Assumed(false), cfg, privdrop.User{}, "alpha", source)
+
+	if err == nil {
+		t.Fatal("Import reported success on something nobody agreed to")
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.ConfigDir, "alpha.conf")); !os.IsNotExist(statErr) {
+		t.Error("the configuration was copied anyway")
+	}
+	if _, statErr := os.Stat(cfg.Path); !os.IsNotExist(statErr) {
+		t.Error("the user configuration was rewritten anyway")
+	}
+}
+
+func TestImportAsksAfterShowingTheFile(t *testing.T) {
+	// Asked while what is being agreed to is still on the screen, not before it
+	// has been shown.
+	cfg, source := importEnv(t, importable)
+	var out strings.Builder
+	var question string
+
+	err := Import(&out, func(q string) (bool, error) {
+		question = q
+		return true, nil
+	}, cfg, privdrop.User{}, "alpha", source)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	if !strings.Contains(question, "alpha.conf") {
+		t.Errorf("the question %q does not say what it is about", question)
+	}
+	if !strings.Contains(out.String(), "[Interface]") {
+		t.Errorf("the file was not shown before the question was put:\n%s", out.String())
+	}
+}
+
+func TestImportPassesOnAQuestionThatCouldNotBeAsked(t *testing.T) {
+	// Nobody on the other end of a pipe. The reason has to reach the caller
+	// rather than become a silent "no".
+	cfg, source := importEnv(t, importable)
+	boom := errors.New("there is nobody to answer")
+
+	err := Import(&strings.Builder{}, func(string) (bool, error) { return false, boom }, cfg, privdrop.User{}, "alpha", source)
+
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the reason it could not be asked", err)
 	}
 }
