@@ -444,6 +444,11 @@ would put two copies of a signing key in the archive. Losing it is worth
 avoiding on its own — every menu bar that pinned that key refuses the publisher
 that replaces it.
 
+It refuses to write anywhere root does not own outright: a directory somebody
+else can write is a directory where they can wait for the archive and move it,
+and one they can replace with a symbolic link before it is written. The refusal
+names the `chown` or the `chmod`.
+
 **The archive holds every private key on the machine in one file** — the
 tunnels', and the one the feed signs with. It is
 created `0600` and stays root's — unlike the configuration, which `import`

@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/profile"
 )
 
@@ -45,10 +47,11 @@ func Backup(w io.Writer, cfg *profile.Config, priv *profile.Privileged, now time
 
 	// Beside the configuration directory rather than inside it: a .conf glob
 	// must not start finding archives.
-	dest := filepath.Join(
-		filepath.Dir(cfg.ConfigDir),
-		"tun-manager-"+now.Format(archiveStamp)+".tar.gz",
-	)
+	dir := filepath.Dir(cfg.ConfigDir)
+	if err := checkArchiveDir(dir); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, "tun-manager-"+now.Format(archiveStamp)+".tar.gz")
 	if err := writeArchive(dest, members); err != nil {
 		return "", err
 	}
@@ -66,6 +69,37 @@ func Backup(w io.Writer, cfg *profile.Config, priv *profile.Privileged, now time
 		return "", err
 	}
 	return dest, nil
+}
+
+// checkArchiveDir refuses to put every private key on the machine somewhere
+// root does not own outright.
+//
+// The archive itself is 0600 and root's, and that is not enough: a directory
+// somebody else can write is a directory where they can wait for the archive
+// and move it, and one they can replace with a symbolic link before it is
+// written. The .conf files are held to the same rule before anything reads
+// them; the file that holds all of them at once is not held to a looser one.
+func checkArchiveDir(dir string) error {
+	info, err := fsx.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("no archive written: %s cannot be read: %w", dir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf(
+			"no archive written: %s is a symbolic link, and tun-manager will not follow one to "+
+				"write every private key on this machine into it", dir)
+	}
+	if uid, _ := fsx.Owner(dir, info); uid != fsx.Root {
+		return fmt.Errorf(
+			"no archive written: %s is owned by uid %d rather than root, and the archive holds "+
+				"every private key on this machine: `sudo chown 0:0 %s`", dir, uid, dir)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf(
+			"no archive written: %s is %04o and writable by others, and the archive holds every "+
+				"private key on this machine: `sudo chmod go-w %s`", dir, info.Mode().Perm(), dir)
+	}
+	return nil
 }
 
 // gather lists what goes in, in the order it goes in.
@@ -110,8 +144,11 @@ func gather(cfg *profile.Config, priv *profile.Privileged) ([]member, error) {
 // half an archive is worse than none, because it looks like a backup.
 func writeArchive(dest string, members []member) error {
 	// O_EXCL rather than a prior stat: two backups in the same second must not
-	// have one quietly overwrite the other.
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, archiveMode)
+	// have one quietly overwrite the other, and a name somebody claimed while
+	// this was gathering is a name this does not take. O_NOFOLLOW says the same
+	// thing about a symbolic link, which O_EXCL already refuses - it is there so
+	// that reading the line does not require knowing that.
+	f, err := fsx.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, archiveMode)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dest, err)
 	}
@@ -133,7 +170,7 @@ func writeArchive(dest string, members []member) error {
 	}
 
 	if err != nil {
-		os.Remove(dest) //nolint:errcheck // the failure being reported is the one that matters
+		fsx.Remove(dest) //nolint:errcheck // the failure being reported is the one that matters
 		return fmt.Errorf("write %s: %w", dest, err)
 	}
 	return nil

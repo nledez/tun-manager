@@ -22,6 +22,14 @@ func backupEnv(t *testing.T) (*profile.Config, *profile.Privileged) {
 	t.Helper()
 
 	root := t.TempDir()
+	// The archive holds every private key on the machine, so Backup refuses a
+	// destination directory root does not own outright. The mode below is real;
+	// the owner is the one thing a suite cannot arrange without sudo.
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	ownedBy(t, 0)
+
 	cfg := profile.Default()
 	cfg.ConfigDir = filepath.Join(root, "config")
 	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
@@ -473,5 +481,75 @@ func TestAnArchiveIsStillTakenWithoutAPrivilegedFile(t *testing.T) {
 	bodies, _ := archived(t, dest)
 	if _, ok := bodies["config/alpha.conf"]; !ok {
 		t.Errorf("the tunnels were not archived: %v", bodies)
+	}
+}
+
+// MARK: where every private key on the machine is allowed to land
+
+func TestBackupRefusesADestinationRootDoesNotOwn(t *testing.T) {
+	// The archive being 0600 and root's is not enough: somebody who can write
+	// the directory can wait for it and move it somewhere they can read at
+	// leisure.
+	cfg, priv := backupEnv(t)
+	ownedBy(t, 501)
+
+	_, err := Backup(&strings.Builder{}, cfg, priv, backupTaken)
+
+	if err == nil {
+		t.Fatal("Backup wrote every private key into a directory root does not own")
+	}
+	for _, want := range []string{"uid 501", "sudo chown 0:0", "private key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestBackupRefusesADestinationOthersCanWrite(t *testing.T) {
+	cfg, priv := backupEnv(t)
+	dir := filepath.Dir(cfg.ConfigDir)
+	chmod(t, dir, 0o777)
+
+	_, err := Backup(&strings.Builder{}, cfg, priv, backupTaken)
+
+	if err == nil {
+		t.Fatal("Backup wrote every private key into a directory anybody can write")
+	}
+	if !strings.Contains(err.Error(), "sudo chmod go-w") {
+		t.Errorf("refusal %q does not say how to fix it", err)
+	}
+}
+
+func TestBackupRefusesADestinationThatIsALink(t *testing.T) {
+	// Judged as a link rather than as what it points at: following one would
+	// put the archive wherever whoever made it decided.
+	cfg, priv := backupEnv(t)
+	elsewhere := t.TempDir()
+	link := filepath.Join(t.TempDir(), "wireguard")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	cfg.ConfigDir = filepath.Join(link, "config")
+
+	_, err := Backup(&strings.Builder{}, cfg, priv, backupTaken)
+
+	if err == nil {
+		t.Fatal("Backup followed a symbolic link")
+	}
+	if !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("refusal %q does not say what is wrong", err)
+	}
+	entries, readErr := os.ReadDir(elsewhere)
+	if readErr != nil || len(entries) != 0 {
+		t.Errorf("something was written on the other side of the link: %v, %v", entries, readErr)
+	}
+}
+
+func TestBackupReportsADestinationItCannotLookAt(t *testing.T) {
+	cfg, priv := backupEnv(t)
+	cfg.ConfigDir = filepath.Join(t.TempDir(), "absent", "config")
+
+	if _, err := Backup(&strings.Builder{}, cfg, priv, backupTaken); err == nil {
+		t.Error("Backup wrote into a directory that is not there")
 	}
 }
