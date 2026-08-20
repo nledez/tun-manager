@@ -99,6 +99,16 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(disabled(model.headline))
+        if model.showsOverview {
+            // At the top, above the tunnels: it is the way into the window
+            // without picking a tunnel first, and picking one to get to the
+            // table was a detour past something nobody asked to see.
+            menu.addItem(.separator())
+            let overview = action("All tunnels", #selector(showOverview), key: "")
+            overview.image = NSImage(
+                systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)
+            menu.addItem(overview)
+        }
         for section in model.sections {
             menu.addItem(.separator())
             if let header = section.header {
@@ -137,6 +147,7 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
             appVersion: info["CFBundleShortVersionString"] as? String ?? "unknown",
             build: info["NETLedezGitDescribe"] as? String ?? "unknown",
             publisherVersion: supervisor.publisherVersion,
+            publisherKey: supervisor.publisherKey,
             socketPath: socketPath,
             flavour: flavour)
     }
@@ -182,6 +193,10 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
             let tunnels = supervisor.snapshot?.tunnels
         else { return }
         details.show(tunnel: name, tunnels: tunnels)
+    }
+
+    @objc private func showOverview() {
+        details.show(tunnel: nil, tunnels: supervisor.snapshot?.tunnels ?? [])
     }
 
     @objc private func showAbout() {

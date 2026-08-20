@@ -27,4 +27,7 @@ public struct MenuModel: Sendable, Equatable {
     public let footnote: String
     /// False while there is nothing to ask.
     public let canRefresh: Bool
+    /// Whether to offer the whole table. False before anything has arrived: the
+    /// window would open on "No tunnels" and say nothing the headline does not.
+    public let showsOverview: Bool
 }

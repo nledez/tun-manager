@@ -23,6 +23,10 @@ type helloMsg struct {
 	Type    string `json:"type"`
 	Schema  int    `json:"schema"`
 	Version string `json:"version"`
+	// PublicKey is the half of the feed key that can be shown, base64. Left out
+	// when there is no key rather than sent empty: a client can then say there
+	// is none instead of showing the fingerprint of nothing.
+	PublicKey string `json:"pubkey,omitempty"`
 }
 
 // stateMsg is a whole view. The view is embedded rather than nested: one JSON

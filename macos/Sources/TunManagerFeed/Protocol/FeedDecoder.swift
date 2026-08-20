@@ -49,7 +49,7 @@ public enum FeedDecoder {
             switch envelope.type {
             case "hello":
                 let wire = try decoder.decode(WireHello.self, from: line)
-                return .hello(schema: wire.schema, version: wire.version)
+                return .hello(schema: wire.schema, version: wire.version, publicKey: wire.pubkey)
             case "state":
                 return .state(try decoder.decode(WireState.self, from: line).snapshot)
             case "sample":
@@ -81,6 +81,10 @@ private struct Envelope: Decodable {
 private struct WireHello: Decodable {
     let schema: Int
     let version: String
+    /// The public half of the key tun-manager is known by, base64. Absent from
+    /// a publisher that has no key, and from every publisher older than the
+    /// version that started sending one.
+    let pubkey: String?
 }
 
 private struct WireState: Decodable {

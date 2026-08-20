@@ -119,3 +119,21 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
 
     #expect(model.sections.map(\.header) == ["aardvark", "zebra"])
 }
+
+@Test func theMenuOffersTheWholeTableOnceThereIsOne() {
+    // The tunnels are listed one by one below, and clicking one opens its own
+    // pane. Getting to the table meant clicking a tunnel and then going back,
+    // which is a detour past something nobody asked to see.
+    let model = build(
+        .live(sawState: true), snapshot(TunnelStatus(name: "alpha", group: "needed", health: .up)))
+
+    #expect(model.showsOverview)
+}
+
+@Test func theMenuOffersNoTableBeforeThereIsAnything() {
+    // Disconnected, the window would open on "No tunnels" and say nothing the
+    // headline does not already say.
+    let model = build(.connecting, nil)
+
+    #expect(model.showsOverview == false)
+}

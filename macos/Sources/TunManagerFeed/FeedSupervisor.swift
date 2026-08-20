@@ -28,6 +28,7 @@ public final class FeedSupervisor {
     public var state: LinkState { machine.state }
     public var snapshot: Snapshot? { machine.snapshot }
     public var publisherVersion: String? { machine.publisherVersion }
+    public var publisherKey: String? { machine.publisherKey }
     /// The most recent probe of each tunnel, keyed by name.
     public var pings: [String: Ping] { machine.pings }
 

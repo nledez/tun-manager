@@ -7,6 +7,26 @@ import TunManagerFeed
 // RateSeries turns counters into rates. See macos/docs/coverage-gaps.md,
 // "the menu bar target".
 
+/// The window itself, which exists only to say what Command-Q does.
+///
+/// An accessory application has no main menu to put a Close item in, so nothing
+/// dispatches Command-W or Command-Q while this window is key: without this,
+/// one does nothing and the other reaches NSApplication and takes the menu bar
+/// icon away with it. WindowKey decides which keystrokes mean "close"; this
+/// closes.
+private final class DetailPanel: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let command = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+        guard let character = event.charactersIgnoringModifiers,
+            WindowKey.closesTheWindow(character: character, command: command)
+        else {
+            return super.performKeyEquivalent(with: event)
+        }
+        performClose(nil)
+        return true
+    }
+}
+
 /// What the window is showing, shared with the SwiftUI view.
 @MainActor
 final class DetailModel: ObservableObject {
@@ -118,7 +138,7 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
             // columns, and the last of them holds an endpoint, which can be an
             // IPv6 address with a port on the end. A window that opens needing
             // to be resized before it can be read is a window that opens wrong.
-            let window = NSWindow(
+            let window = DetailPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 1280, height: 680),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false)

@@ -253,8 +253,16 @@ glyph is unreadable there. `needed` is listed first because it is the group the
 answer to "is everything up?" depends on.
 
 `p` asks `tun-manager` for a round of probes — the same key it is in the
-terminal. Clicking a tunnel opens a window, which lists them all with what the
-terminal's table shows.
+terminal. **All tunnels**, at the top, opens the window on the whole table;
+clicking a tunnel opens it on that one. `About` shows the fingerprint of the
+key the publisher announced, which is the line to compare against
+`sudo tun-manager feed-key` when you want to know that the thing you are
+connected to is the thing on your machine.
+
+In the window, `⌘W` and `⌘Q` both close it and leave the application in the
+menu bar, where it lives. Quitting is the `Quit` item and nothing else: a menu
+bar application that exits because somebody pressed `⌘Q` in a window takes away
+the icon they put there, and the way back is to go and find it again.
 
 ![The window's overview: every tunnel in one table, with state, handshake age,
 transferred bytes, latency and endpoint. One tunnel is stale and its latency

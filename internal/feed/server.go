@@ -3,6 +3,7 @@ package feed
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,6 +126,14 @@ type Server struct {
 	Sampler Sampler
 	// Version is reported in the hello line.
 	Version string
+	// FeedKey is the seed of the key this publisher is known by. Its public
+	// half goes out in the hello, so that whoever is reading can compare the
+	// fingerprint against what `sudo tun-manager feed-key` prints - two people
+	// looking at the same machine, neither of them looking at the key.
+	//
+	// A seed rather than the public half already derived: this is what will
+	// sign, and a publisher that holds only what it publishes cannot.
+	FeedKey string
 
 	// Interval between readings while a tunnel is watched. Zero means
 	// sampleInterval; tests set it short so nothing waits on a real clock.
@@ -515,12 +524,32 @@ func (s *Server) add(conn net.Conn) {
 	go c.write()
 	go s.read(c)
 
-	s.sendTo(c, helloMsg{Type: "hello", Schema: Schema, Version: s.Version})
+	s.sendTo(c, helloMsg{
+		Type: "hello", Schema: Schema, Version: s.Version, PublicKey: s.publicKey(),
+	})
 	if have {
 		// Whoever connects between two refreshes must not sit blank until the
 		// next one, which is five minutes away by default.
 		s.sendTo(c, stateMsg{Type: "state", View: wire.Of(view)})
 	}
+}
+
+// publicKey renders the public half of the configured key, or nothing at all.
+//
+// Nothing at all covers both "there is no key" and "what is in the file is not
+// one": a field carrying an empty string would have the application show an
+// empty fingerprint rather than say there is none, and a publisher that stopped
+// publishing over an unreadable key would take the tunnel table down with it.
+// `doctor` is where a key is diagnosed.
+func (s *Server) publicKey() string {
+	if s.FeedKey == "" {
+		return ""
+	}
+	pub, err := PublicKeyOfSeed(s.FeedKey)
+	if err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(pub)
 }
 
 // write drains the queue onto the connection. Encode appends a newline, which

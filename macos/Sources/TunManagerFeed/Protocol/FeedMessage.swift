@@ -1,7 +1,7 @@
 /// Everything the publisher can say.
 public enum FeedMessage: Sendable, Equatable {
     /// The first line on every connection. `schema` is the contract's version.
-    case hello(schema: Int, version: String)
+    case hello(schema: Int, version: String, publicKey: String?)
     case state(Snapshot)
     case sample(Sample)
     /// A round of probes, as one message. Never replayed on connect: a view

@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -911,3 +912,51 @@ func TestALineNobodyCouldMeanDropsThatClientAndNobodyElse(t *testing.T) {
 		t.Errorf("clients = %d, want the shouting one dropped", s.clientCount())
 	}
 }
+
+func TestTheHelloCarriesThePublicKey(t *testing.T) {
+	// So the application can show its fingerprint beside the one
+	// `sudo tun-manager feed-key` prints, and somebody can compare the two
+	// without either of them being the key itself.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+
+	hello := dial(t, s).next(t)
+
+	pub, err := PublicKeyOfSeed(knownSeed)
+	if err != nil {
+		t.Fatalf("PublicKeyOfSeed: %v", err)
+	}
+	if got := hello["pubkey"]; got != base64.StdEncoding.EncodeToString(pub) {
+		t.Errorf("pubkey = %v, want the public half of the configured key", got)
+	}
+	if line := fmt.Sprint(hello); strings.Contains(line, knownSeed) {
+		t.Errorf("the hello carries the seed itself: %s", line)
+	}
+}
+
+func TestTheHelloSaysNothingAboutAKeyThereIsNot(t *testing.T) {
+	// A field carrying "" would have the application show an empty fingerprint
+	// rather than say there is none.
+	s := serving(t, nil)
+
+	hello := dial(t, s).next(t)
+
+	if _, carried := hello["pubkey"]; carried {
+		t.Errorf("hello = %v, want no pubkey when there is no key", hello)
+	}
+}
+
+func TestAKeyThatIsNotOneKeepsTheFeedQuietAboutIt(t *testing.T) {
+	// Truncated by a copy and paste. The publisher still publishes - the feed
+	// is what tells somebody their tunnels are down - and doctor is where the
+	// key is diagnosed.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = "not a key" })
+
+	hello := dial(t, s).next(t)
+
+	if _, carried := hello["pubkey"]; carried {
+		t.Errorf("hello = %v, want no pubkey when it cannot be read", hello)
+	}
+}
+
+// knownSeed is a key of a known shape, so a test can name what it expects.
+const knownSeed = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="

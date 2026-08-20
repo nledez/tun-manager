@@ -12,7 +12,8 @@ public enum MenuModelBuilder {
             headline: headline(state: state, snapshot: snapshot),
             sections: sections(snapshot: snapshot, now: now, locale: locale),
             footnote: footnote(state: state, snapshot: snapshot, now: now),
-            canRefresh: state.isLive)
+            canRefresh: state.isLive,
+            showsOverview: snapshot != nil)
     }
 
     private static func headline(state: LinkState, snapshot: Snapshot?) -> String {

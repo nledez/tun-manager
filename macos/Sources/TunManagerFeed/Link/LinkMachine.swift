@@ -15,6 +15,9 @@ public struct LinkMachine {
     /// what it last knew instead of going blank.
     public private(set) var snapshot: Snapshot?
     public private(set) var publisherVersion: String?
+    /// The public half of the key the publisher announced, base64, or nil when
+    /// it announced none. Shown as a fingerprint, never as itself.
+    public private(set) var publisherKey: String?
 
     /// Attempts since the last accepted hello. **Reset by an accepted hello and
     /// by nothing else** — in particular not by a successful connect(2), because
@@ -73,8 +76,9 @@ public struct LinkMachine {
         case (.connecting, .connectFailed(let code)):
             return retry(because: Self.reason(for: code))
 
-        case (.connecting, .message(.hello(let schema, let version))):
+        case (.connecting, .message(.hello(let schema, let version, let key))):
             publisherVersion = version
+            publisherKey = key
             guard schema == Self.schema else {
                 state = .blocked(theirSchema: schema)
                 return [.closeConnection]
