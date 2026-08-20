@@ -782,6 +782,9 @@ func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privilege
 		Owner:     owner,
 		Sampler:   a,
 		Version:   version,
+		// The public half of this goes out in the hello, so that the window can
+		// show a fingerprint to compare against `sudo tun-manager feed-key`.
+		FeedKey: priv.FeedKey.Reveal(),
 	}
 	if err := f.Listen(); err != nil { //nolint:contextcheck // Listen takes no context; Serve below does
 		// Handed back rather than printed: the interface is about to cover this

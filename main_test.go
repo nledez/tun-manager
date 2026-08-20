@@ -2126,3 +2126,36 @@ func TestFeedKeyRejectsAnUnknownFlag(t *testing.T) {
 		t.Fatal("feed-key accepted --replace")
 	}
 }
+
+func TestTheFeedIsGivenTheKeyItPublishesUnder(t *testing.T) {
+	// It was not, for a commit: the wiring went in as a text substitution that
+	// matched nothing, and the only symptom was the window saying "none" while
+	// `feed-key` printed a fingerprint. Nothing here knew the difference.
+	e := demoEnv(t, &fakeRunner{})
+	if _, err := e.parseFlags([]string{"--feed-socket", filepath.Join(shortSocketDir(t), "f.sock")}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f, served, _ := e.startFeed(ctx, a, priv, privdrop.User{})
+
+	if f == nil {
+		t.Fatal("the feed did not start")
+	}
+	if f.FeedKey != priv.FeedKey.Reveal() {
+		t.Errorf("the feed was given %q, want the configured key", f.FeedKey)
+	}
+	cancel()
+	<-served
+}
