@@ -23,6 +23,19 @@ public final class FeedSupervisor {
     /// Wakes the machine if the publisher never answers its challenge.
     private var proof: Task<Void, Never>?
 
+    /// Which connection the supervisor is currently interested in.
+    ///
+    /// Every connection is opened under a number, and nothing it says is
+    /// passed on once that number has moved. Cancelling the task that reads it
+    /// is not enough on its own: a real close returns before the stream it
+    /// feeds has finished, so the tail of a connection this program has walked
+    /// away from arrives whenever it arrives -- and delivered to the machine it
+    /// reads as "the link just dropped", about a link that is not the one it
+    /// describes. That took the menu bar into a loop where every fresh hello
+    /// landed in a state that ignores hellos, and only restarting the
+    /// application cleared it.
+    private var generation = 0
+
     public weak var observer: (any FeedObserver)?
 
     /// - Parameters:
@@ -103,6 +116,10 @@ public final class FeedSupervisor {
         case .connect:
             openConnection()
         case .closeConnection:
+            // The number moves first: whatever the connection being dropped
+            // says on its way out is about a link this program has already
+            // stopped believing in.
+            generation &+= 1
             connection?.close()
             connection = nil
             reader?.cancel()
@@ -142,33 +159,72 @@ public final class FeedSupervisor {
     }
 
     private func openConnection() {
+        // Closed rather than let go of. Left to its deinit, an abandoned
+        // connection is closed at some point after the next one is up, and its
+        // last gasp arrives against a link it knows nothing about.
+        connection?.close()
+        connection = nil
         reader?.cancel()
-        reader = Task { [transport] in
-            do {
-                let open = try await transport.connect()
-                self.connection = open
 
+        generation &+= 1
+        let mine = generation
+
+        reader = Task { [transport] in
+            let open: any FeedConnection
+            do {
+                open = try await transport.connect()
+            } catch let failure as ConnectFailure {
+                guard self.serving(mine) else { return }
+                self.dispatch(.connectFailed(failure.code))
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.serving(mine) else { return }
+                self.dispatch(.streamFailed)
+                return
+            }
+
+            // The connection this task went to fetch may have arrived after
+            // somebody asked for another one. Closed here, because nothing else
+            // holds it.
+            guard self.serving(mine) else {
+                open.close()
+                return
+            }
+            self.connection = open
+
+            do {
                 // Local to this task, and that is the invariant: a framer kept
                 // across connections would carry the half-line a crashed
                 // publisher left behind into the first line of the next one.
                 var framer = LineFramer()
                 for try await chunk in open.chunks {
+                    guard self.serving(mine) else { return }
                     for line in framer.push(chunk) {
                         if let message = FeedDecoder.decode(line) {
                             self.dispatch(.message(message))
                         }
                     }
                 }
+                guard self.serving(mine) else { return }
                 self.dispatch(.endOfStream)
-            } catch let failure as ConnectFailure {
-                self.dispatch(.connectFailed(failure.code))
             } catch is CancellationError {
                 // Someone asked; the machine already knows.
             } catch {
+                guard self.serving(mine) else { return }
+                // Whatever ended the read - a peer that went away, ECANCELED
+                // from this program's own close - it is a stream that stopped,
+                // not a connect that failed. Reported as a connect failure it
+                // became "cannot reach tun-manager (error 89)" about a socket
+                // this program was already reading.
                 self.dispatch(.streamFailed)
             }
         }
     }
+
+    /// Whether a connection is still the one this supervisor is reading.
+    private func serving(_ number: Int) -> Bool { number == generation }
 
     private func scheduleRetry(after delay: Duration) {
         retry?.cancel()

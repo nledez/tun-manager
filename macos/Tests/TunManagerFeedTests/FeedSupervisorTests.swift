@@ -17,7 +17,7 @@ private func proving(_ transport: FakeTransport) -> FeedSupervisor {
 /// Waits for a condition rather than for a duration: the supervisor's work
 /// happens in tasks, and sleeping a fixed amount is how a suite becomes flaky.
 @MainActor
-private func eventually(
+func eventually(
     _ what: String, timeout: Duration = .seconds(2), _ condition: () -> Bool
 ) async {
     let deadline = ContinuousClock.now + timeout
@@ -345,4 +345,90 @@ private final class RecordingKeys: PinnedKeys, @unchecked Sendable {
         return false
     }
     #expect(keys.pinned(forSocket: Proven.socket) == nil)
+}
+
+@MainActor
+@Test func theTailOfAnAbandonedConnectionCannotKnockDownTheOneThatReplacedIt() async {
+    // A real close returns before the stream it feeds has finished: DispatchIO
+    // calls its read handler on another queue, so the end of a connection this
+    // program has already walked away from lands whenever it lands - which can
+    // be after the next connection is up and being read.
+    //
+    // Delivered to the machine, it reads as "the link just dropped", and the
+    // hello of the connection that is actually open arrives in a state that
+    // ignores hellos. That is a menu bar stuck on a refusal that has been
+    // dealt with, and it took restarting the application to clear.
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"]),
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"]),
+    ])
+    let keys = RecordingKeys()
+    keys.pin("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", forSocket: Proven.socket)
+    let supervisor = FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: keys,
+        nonces: FixedNonce(Proven.nonce))
+
+    supervisor.start()
+    await eventually("the refusal") {
+        if case .unproven = supervisor.state { return true } else { return false }
+    }
+    supervisor.forgetPinnedKey()
+    await eventually("the link to come up again") { supervisor.state.isLive }
+
+    // The first connection, closed by the refusal, finally finishes.
+    transport.endStream(0)
+
+    await eventually("nothing at all to happen") { transport.attempts == 2 }
+    #expect(supervisor.state.isLive)
+}
+
+@MainActor
+@Test func whatAnAbandonedConnectionSaysOnItsWayOutIsNotAboutTheNextOne() async {
+    // A connect still in flight for a link nobody is waiting for any more. Its
+    // failure used to be handed to the machine anyway, which read it as the
+    // connection being opened right now having failed - and scheduled a retry
+    // over the top of it. On the real transport this ran forever: every fresh
+    // hello arrived in a state that ignores hellos, and only restarting the
+    // application cleared it.
+    let transport = FakeTransport([
+        .stallsThenRefuses(ECONNREFUSED),
+        .stallsThenRefuses(ECONNREFUSED),
+    ])
+    let supervisor = FeedSupervisor(transport: transport, keys: NoPinnedKeys())
+
+    supervisor.start()
+    await eventually("the first attempt to be made") { transport.attempts == 1 }
+    supervisor.stop()
+    supervisor.start()
+    await eventually("the second attempt to be made") { transport.attempts == 2 }
+
+    transport.release(0)
+
+    // Nothing to wait for: the point is that nothing happens. A moment is
+    // enough for a dispatch that was going to be made.
+    try? await Task.sleep(for: .milliseconds(50))
+    guard case .connecting = supervisor.state else {
+        Issue.record("state = \(supervisor.state), want it still connecting")
+        return
+    }
+}
+
+@MainActor
+@Test func aReadThatFailsIsNotAConnectThatFailed() async {
+    // DispatchIO reports a failed read as the same error type a failed connect
+    // throws. Told apart by the type alone, this program closed a connection,
+    // caught its own ECANCELED and announced "cannot reach tun-manager (error
+    // 89)" about a socket it had been reading a moment earlier.
+    let transport = FakeTransport([
+        .deliverThenFailToRead([Fixtures.hello + "\n" + Fixtures.auth + "\n"], ECANCELED)
+    ])
+    let supervisor = proving(transport)
+
+    supervisor.start()
+
+    await eventually("the link to give up") {
+        if case .retrying = supervisor.state { return true } else { return false }
+    }
+    guard case .retrying(let because) = supervisor.state else { return }
+    #expect(because == .lost)
 }
