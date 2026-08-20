@@ -1,9 +1,11 @@
 package fsx
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,3 +51,188 @@ func (statless) Mode() fs.FileMode  { return 0 }
 func (statless) ModTime() time.Time { return time.Time{} }
 func (statless) IsDir() bool        { return false }
 func (statless) Sys() any           { return nil }
+
+// MARK: refusing to write where somebody else pointed
+
+func TestNoSymlinksUnderAcceptsARealPath(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".cache", "tun-manager")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := NoSymlinksUnder(home, dir); err != nil {
+		t.Errorf("NoSymlinksUnder on a real path: %v", err)
+	}
+}
+
+func TestNoSymlinksUnderRefusesALinkOnTheWay(t *testing.T) {
+	// The attack this exists for: a directory somebody replaced with a link, so
+	// that root writing "into ~/.cache/tun-manager" writes wherever they said.
+	home := t.TempDir()
+	elsewhere := t.TempDir()
+	cache := filepath.Join(home, ".cache")
+	if err := os.Symlink(elsewhere, cache); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	err := NoSymlinksUnder(home, filepath.Join(cache, "tun-manager"))
+
+	if err == nil {
+		t.Fatal("NoSymlinksUnder walked through a symbolic link")
+	}
+	if !strings.Contains(err.Error(), cache) {
+		t.Errorf("error %q does not name the link", err)
+	}
+}
+
+func TestNoSymlinksUnderStopsAtTheBoundary(t *testing.T) {
+	// On darwin the way to almost anything crosses a link: /var points at
+	// /private/var, and t.TempDir() lives under it. Walking past the boundary
+	// would refuse every path this program writes.
+	home := t.TempDir()
+	dir := filepath.Join(home, "cache")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := NoSymlinksUnder(home, dir); err != nil {
+		t.Errorf("the walk went past the boundary: %v", err)
+	}
+}
+
+func TestNoSymlinksUnderWithNoBoundaryJudgesOneName(t *testing.T) {
+	// For a caller that does not know where the writable part of the path
+	// begins: the component being written, and nothing above it.
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := NoSymlinksUnder("", link); err == nil {
+		t.Error("a link at the name itself was accepted")
+	}
+	if err := NoSymlinksUnder("", dir); err != nil {
+		t.Errorf("a real name was refused: %v", err)
+	}
+}
+
+func TestNoSymlinksUnderAcceptsWhatIsNotThereYet(t *testing.T) {
+	// The file about to be created. Whatever makes it will make it, not follow
+	// something already at the name.
+	home := t.TempDir()
+
+	if err := NoSymlinksUnder(home, filepath.Join(home, "not-yet")); err != nil {
+		t.Errorf("NoSymlinksUnder on a path that does not exist: %v", err)
+	}
+}
+
+func TestNoSymlinksUnderReportsWhatItCannotLookAt(t *testing.T) {
+	boom := errors.New("input/output error")
+	previous := Lstat
+	Lstat = func(string) (os.FileInfo, error) { return nil, boom }
+	t.Cleanup(func() { Lstat = previous })
+
+	home := t.TempDir()
+	if err := NoSymlinksUnder(home, filepath.Join(home, "x")); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the failure to look", err)
+	}
+}
+
+func TestCreateNoFollowRefusesALinkAtThePath(t *testing.T) {
+	// O_NOFOLLOW covers the last component, which is the one somebody plants
+	// while root is between two runs.
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "somebody-elses-file")
+	if err := os.WriteFile(target, []byte("theirs"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(home, "icon.png")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	f, err := CreateNoFollow(home, path, 0o644)
+	if err == nil {
+		f.Close() //nolint:errcheck
+		t.Fatal("CreateNoFollow followed a symbolic link")
+	}
+
+	body, readErr := os.ReadFile(target)
+	if readErr != nil || string(body) != "theirs" {
+		t.Errorf("what the link pointed at was written through: %q, %v", body, readErr)
+	}
+}
+
+func TestCreateNoFollowWritesARealFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "icon.png")
+
+	f, err := CreateNoFollow(home, path, 0o644)
+	if err != nil {
+		t.Fatalf("CreateNoFollow: %v", err)
+	}
+	if _, writeErr := f.WriteString("a picture"); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close: %v", closeErr)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "a picture" {
+		t.Errorf("read back %q, %v", body, err)
+	}
+}
+
+func TestMkdirAllNoFollowRefusesALinkOnTheWay(t *testing.T) {
+	home := t.TempDir()
+	elsewhere := t.TempDir()
+	cache := filepath.Join(home, ".cache")
+	if err := os.Symlink(elsewhere, cache); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := MkdirAllNoFollow(home, filepath.Join(cache, "tun-manager"), 0o755); err == nil {
+		t.Fatal("MkdirAllNoFollow made a directory through a link")
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "tun-manager")); !os.IsNotExist(err) {
+		t.Error("it was made on the other side of the link")
+	}
+}
+
+func TestMkdirAllNoFollowMakesRealDirectories(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".cache", "tun-manager")
+
+	if err := MkdirAllNoFollow(home, dir, 0o755); err != nil {
+		t.Fatalf("MkdirAllNoFollow: %v", err)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		t.Errorf("stat = %v, %v", info, err)
+	}
+}
+
+func TestCreateNoFollowRefusesALinkOnTheWayToThePath(t *testing.T) {
+	// Not the last component but the one above it, which O_NOFOLLOW says
+	// nothing about.
+	home := t.TempDir()
+	elsewhere := t.TempDir()
+	cache := filepath.Join(home, ".cache")
+	if err := os.Symlink(elsewhere, cache); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	f, err := CreateNoFollow(home, filepath.Join(cache, "icon.png"), 0o644)
+
+	if err == nil {
+		f.Close() //nolint:errcheck
+		t.Fatal("CreateNoFollow wrote through a link on the way")
+	}
+	if _, statErr := os.Stat(filepath.Join(elsewhere, "icon.png")); !os.IsNotExist(statErr) {
+		t.Error("the file was written on the other side of the link")
+	}
+}

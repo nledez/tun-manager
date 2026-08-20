@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // User is the pre-sudo identity.
@@ -27,20 +29,6 @@ type User struct {
 	// It is false when the program was not started through sudo, or was started
 	// from a root shell.
 	Demotable bool
-
-	// chown is the call Chown makes. It is a field because a real chown can
-	// only ever be made to the identity the test process already has, which
-	// proves nothing about whether the right one was chosen - and asking for
-	// any other identity fails, unless the suite happens to run under sudo, in
-	// which case it succeeds instead. Neither outcome is a test.
-	chown func(path string, uid, gid int) error
-}
-
-func (u User) chownFn() func(string, int, int) error {
-	if u.chown != nil {
-		return u.chown
-	}
-	return os.Chown
 }
 
 // LookupFunc mirrors os/user.Lookup, so tests can inject a fake directory.
@@ -112,9 +100,49 @@ func (u User) CommandContext(ctx context.Context, name string, args ...string) *
 
 // Chown hands a file created by the root process back to the real user, so the
 // config and log files stay editable outside of sudo.
+//
+// Lchown rather than chown: it changes the owner of a symbolic link rather than
+// of what the link points at. Every path here is under the user's own home,
+// where that user can replace any name with a link at any moment — and root
+// chowning the far end of one is how a file that was never theirs becomes
+// theirs.
 func (u User) Chown(path string) error {
 	if !u.Demotable {
 		return nil
 	}
-	return u.chownFn()(path, u.UID, u.GID)
+	return fsx.Lchown(path, u.UID, u.GID)
+}
+
+// WriteFile writes a file under the user's home and hands it back to them.
+//
+// Root writing "into ~/.cache/tun-manager" is root writing wherever that name
+// points, and the name belongs to whoever owns the home directory. So no
+// symbolic link is followed on the way, none at the path itself, and the owner
+// is set on the open descriptor rather than on the path — there is no name in a
+// descriptor to swap between the write and the chown.
+func (u User) WriteFile(path string, data []byte, mode os.FileMode) error {
+	f, err := fsx.CreateNoFollow(u.HomeDir, path, mode)
+	if err != nil {
+		return err
+	}
+	if u.Demotable {
+		if err := fsx.FchownFile(f, u.UID, u.GID); err != nil {
+			f.Close() //nolint:errcheck // the chown is the failure being reported
+			return fmt.Errorf("hand %s to %s: %w", path, u.Username, err)
+		}
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close() //nolint:errcheck // likewise
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return f.Close()
+}
+
+// MkdirAll makes a directory under the user's home and hands it back to them,
+// refusing to walk through a symbolic link on the way.
+func (u User) MkdirAll(dir string, mode os.FileMode) error {
+	if err := fsx.MkdirAllNoFollow(u.HomeDir, dir, mode); err != nil {
+		return err
+	}
+	return u.Chown(dir)
 }

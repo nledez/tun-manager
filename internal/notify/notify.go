@@ -8,7 +8,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -89,17 +88,22 @@ func New(u privdrop.User, enabled bool) Notifier {
 // writeIcon puts the embedded image where the notification command can read it,
 // as the pre-sudo user who will be running that command. A failure is not worth
 // reporting: a notification with no icon beats no notification.
+//
+// It goes through privdrop rather than os, because this is root writing into
+// somebody else's home directory. ~/.cache/tun-manager belongs to that
+// somebody: they can replace it with a symbolic link between one run and the
+// next, and os.MkdirAll would follow it without a word. What is written here is
+// a picture, but the write is root's, and root writing where it was pointed is
+// the whole of a local privilege escalation.
 func writeIcon(u privdrop.User) string {
 	dir := u.CacheDir("tun-manager")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := u.MkdirAll(dir, 0o755); err != nil {
 		return ""
 	}
 	path := filepath.Join(dir, "icon.png")
-	if err := os.WriteFile(path, icon, 0o644); err != nil {
+	if err := u.WriteFile(path, icon, 0o644); err != nil {
 		return ""
 	}
-	_ = u.Chown(dir)
-	_ = u.Chown(path)
 	return path
 }
 

@@ -111,7 +111,7 @@ func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name
 	// Taken here rather than earlier: rewriting the configuration is the only
 	// step that can damage something the user wrote, and an import that failed
 	// before this point should not leave a copy behind to explain.
-	saved, err := backup(cfg.Path)
+	saved, err := backup(cfg.Path, u)
 	if err != nil {
 		return fmt.Errorf("%s was copied to %s, but %s could not be backed up: %w", name, target, cfg.Path, err)
 	}
@@ -144,7 +144,7 @@ func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name
 // One copy, overwritten by the next import, so it always holds the file as it
 // was before the most recent change - which is the one worth undoing. There is
 // nothing to copy the first time, and that is not a failure.
-func backup(path string) (string, error) {
+func backup(path string, u privdrop.User) (string, error) {
 	body, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
@@ -158,8 +158,10 @@ func backup(path string) (string, error) {
 		mode = info.Mode().Perm()
 	}
 
+	// Through privdrop: this is root writing beside a file in somebody's home,
+	// and that somebody can put a symbolic link where the copy is about to go.
 	dest := path + backupSuffix
-	if err := os.WriteFile(dest, body, mode); err != nil {
+	if err := u.WriteFile(dest, body, mode); err != nil {
 		return "", err
 	}
 	return dest, nil

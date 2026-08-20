@@ -494,3 +494,19 @@ func TestCloseLeavesBehindWhatIsNoLongerItsOwnSocket(t *testing.T) {
 		t.Errorf("Close removed a file that was not its socket: %v", err)
 	}
 }
+
+func TestListenReportsASocketItCannotUnlink(t *testing.T) {
+	// A stale socket in a directory that has gone read-only. Binding on top of
+	// it is not possible, and pretending otherwise leaves a feed that looks
+	// like it works and serves nobody.
+	path := socketPath(t)
+	staleSocket(t, path)
+	boom := errors.New("permission denied")
+	previous := fsx.Remove
+	fsx.Remove = func(string) error { return boom }
+	t.Cleanup(func() { fsx.Remove = previous })
+
+	if err := (&Server{Path: path}).Listen(); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the failure to unlink", err)
+	}
+}

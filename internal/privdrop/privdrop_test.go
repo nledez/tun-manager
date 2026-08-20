@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 func fakeLookup(users map[string]*user.User) func(string) (*user.User, error) {
@@ -155,12 +157,29 @@ type chownCall struct {
 	uid, gid int
 }
 
-// recordingChown returns a chown that succeeds and remembers what it was asked.
-func recordingChown(calls *[]chownCall) func(string, int, int) error {
-	return func(path string, uid, gid int) error {
+// recordingChown makes every handover succeed and remembers what it was asked.
+// A real one can only ever be made to the identity the test process already
+// has, which proves nothing about whether the right one was chosen — and asking
+// for any other fails, unless the suite happens to run under sudo, in which
+// case it succeeds instead. Neither outcome is a test.
+func recordingChown(t *testing.T, calls *[]chownCall) {
+	t.Helper()
+
+	previous := fsx.Lchown
+	fsx.Lchown = func(path string, uid, gid int) error {
 		*calls = append(*calls, chownCall{path: path, uid: uid, gid: gid})
 		return nil
 	}
+	t.Cleanup(func() { fsx.Lchown = previous })
+}
+
+// failingChown makes every handover fail with the error given.
+func failingChown(t *testing.T, err error) {
+	t.Helper()
+
+	previous := fsx.Lchown
+	fsx.Lchown = func(string, int, int) error { return err }
+	t.Cleanup(func() { fsx.Lchown = previous })
 }
 
 func TestChownGivesTheFileBackToTheRealUser(t *testing.T) {
@@ -169,7 +188,8 @@ func TestChownGivesTheFileBackToTheRealUser(t *testing.T) {
 	// identity the test already has, so it would pass with the wrong ids
 	// hard-coded, and under sudo it succeeds for any of them.
 	var calls []chownCall
-	u := User{UID: 501, GID: 20, Demotable: true, chown: recordingChown(&calls)}
+	recordingChown(t, &calls)
+	u := User{UID: 501, GID: 20, Demotable: true}
 
 	if err := u.Chown("/tmp/tun-manager.log"); err != nil {
 		t.Fatalf("Chown: %v", err)
@@ -187,7 +207,8 @@ func TestChownReportsWhatTheSystemSaid(t *testing.T) {
 	// The caller decides whether a failed handover matters; Chown does not get
 	// to swallow it.
 	boom := errors.New("operation not permitted")
-	u := User{UID: 501, GID: 20, Demotable: true, chown: func(string, int, int) error { return boom }}
+	failingChown(t, boom)
+	u := User{UID: 501, GID: 20, Demotable: true}
 
 	if err := u.Chown("/tmp/tun-manager.log"); !errors.Is(err, boom) {
 		t.Errorf("Chown = %v, want %v", err, boom)
@@ -214,7 +235,8 @@ func TestChownIsANoOpWithoutADemotableUser(t *testing.T) {
 	// Nobody to give the file to, so nothing is attempted: the recorder proves
 	// the syscall was not merely tolerated but skipped.
 	var calls []chownCall
-	u := User{chown: recordingChown(&calls)}
+	recordingChown(t, &calls)
+	u := User{}
 
 	if err := u.Chown("/nonexistent/path"); err != nil {
 		t.Errorf("Chown = %v, want nil: there is nobody to give the file to", err)
@@ -294,5 +316,176 @@ func TestCacheDirSitsUnderTheRealUserHome(t *testing.T) {
 	want := filepath.Join("/home/operator", ".cache", "tun-manager")
 	if got != want {
 		t.Errorf("CacheDir = %q, want %q", got, want)
+	}
+}
+
+// MARK: writing into somebody else's home, as root
+
+func TestWriteFileWritesAndHandsOver(t *testing.T) {
+	// The two halves of the same act: root creates the file, and the user it
+	// belongs to owns it afterwards. A file left root-owned under ~/.cache is
+	// one its owner can no longer replace.
+	var calls []chownCall
+	home := t.TempDir()
+	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
+	previous := fsx.FchownFile
+	fsx.FchownFile = func(f *os.File, uid, gid int) error {
+		calls = append(calls, chownCall{path: f.Name(), uid: uid, gid: gid})
+		return nil
+	}
+	t.Cleanup(func() { fsx.FchownFile = previous })
+
+	path := filepath.Join(home, "icon.png")
+	if err := u.WriteFile(path, []byte("a picture"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "a picture" {
+		t.Errorf("read back %q, %v", body, err)
+	}
+	if len(calls) != 1 || calls[0].uid != 501 || calls[0].gid != 20 {
+		t.Errorf("handed over as %+v, want the pre-sudo uid and gid", calls)
+	}
+}
+
+func TestWriteFileRefusesALinkSomebodyPlanted(t *testing.T) {
+	// The whole reason this does not go through os.WriteFile: between two runs,
+	// the owner of that home can replace the name with a link to anywhere, and
+	// root would write there.
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "not-theirs")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(home, "icon.png")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
+
+	err := u.WriteFile(path, []byte("a picture"), 0o644)
+
+	if err == nil {
+		t.Fatal("WriteFile followed a symbolic link")
+	}
+	body, readErr := os.ReadFile(target)
+	if readErr != nil || string(body) != "original" {
+		t.Errorf("what the link pointed at was written through: %q, %v", body, readErr)
+	}
+}
+
+func TestWriteFileReportsAHandoverItCannotMake(t *testing.T) {
+	// Leaving a root-owned file in somebody's cache would look like it worked
+	// and then stop them replacing it.
+	home := t.TempDir()
+	boom := errors.New("operation not permitted")
+	previous := fsx.FchownFile
+	fsx.FchownFile = func(*os.File, int, int) error { return boom }
+	t.Cleanup(func() { fsx.FchownFile = previous })
+	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
+
+	if err := u.WriteFile(filepath.Join(home, "icon.png"), []byte("x"), 0o644); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the handover failure", err)
+	}
+}
+
+func TestWriteFileWithNobodyToHandItToStillWrites(t *testing.T) {
+	// A real root login rather than sudo: there is nobody to give the file to,
+	// and the icon is still worth writing.
+	home := t.TempDir()
+	handed := 0
+	previous := fsx.FchownFile
+	fsx.FchownFile = func(*os.File, int, int) error { handed++; return nil }
+	t.Cleanup(func() { fsx.FchownFile = previous })
+	u := User{HomeDir: home}
+
+	if err := u.WriteFile(filepath.Join(home, "icon.png"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if handed != 0 {
+		t.Errorf("handed over %d time(s), want none", handed)
+	}
+}
+
+func TestWriteFileReportsAWriteItCannotFinish(t *testing.T) {
+	home := t.TempDir()
+	boom := errors.New("no space left on device")
+	previous := fsx.OpenFile
+	fsx.OpenFile = func(path string, flag int, mode os.FileMode) (*os.File, error) {
+		f, err := previous(path, flag, mode)
+		if err != nil {
+			return nil, err
+		}
+		// Closed underneath, so the write that follows fails the way a full
+		// disk does.
+		_ = f.Close()
+		return f, nil
+	}
+	t.Cleanup(func() { fsx.OpenFile = previous })
+	u := User{HomeDir: home}
+
+	err := u.WriteFile(filepath.Join(home, "icon.png"), []byte("x"), 0o644)
+
+	if err == nil {
+		t.Fatal("WriteFile reported success on a descriptor that was gone")
+	}
+	_ = boom
+}
+
+func TestMkdirAllMakesAndHandsOver(t *testing.T) {
+	var calls []chownCall
+	recordingChown(t, &calls)
+	home := t.TempDir()
+	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
+	dir := filepath.Join(home, ".cache", "tun-manager")
+
+	if err := u.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Errorf("stat = %v, %v", info, err)
+	}
+	if len(calls) != 1 || calls[0].path != dir {
+		t.Errorf("handed over %+v, want the directory itself", calls)
+	}
+}
+
+func TestMkdirAllRefusesALinkSomebodyPlanted(t *testing.T) {
+	home := t.TempDir()
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(home, ".cache")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
+
+	err := u.MkdirAll(filepath.Join(home, ".cache", "tun-manager"), 0o755)
+
+	if err == nil {
+		t.Fatal("MkdirAll made a directory through a link")
+	}
+	if _, statErr := os.Stat(filepath.Join(elsewhere, "tun-manager")); !os.IsNotExist(statErr) {
+		t.Error("it was made on the other side of the link")
+	}
+}
+
+func TestChownChangesTheLinkAndNotWhatItPointsAt(t *testing.T) {
+	// The difference between os.Lchown and os.Chown, which is the difference
+	// between handing back a file and handing somebody the file it points at.
+	// A dangling link is what tells them apart without root: Lchown changes the
+	// link itself and succeeds, Chown follows it, finds nothing and fails.
+	dir := t.TempDir()
+	link := filepath.Join(dir, "config.yaml")
+	if err := os.Symlink(filepath.Join(dir, "nothing-here"), link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	// The identity this process already has: what is being checked is which of
+	// the two calls is made, not which uid it is given.
+	u := User{UID: os.Getuid(), GID: os.Getgid(), Demotable: true}
+
+	if err := u.Chown(link); err != nil {
+		t.Errorf("Chown = %v, want the link itself to have been changed", err)
 	}
 }

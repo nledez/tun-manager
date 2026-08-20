@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // writeConfig puts a configuration file in a temporary directory and returns
@@ -303,6 +305,33 @@ func TestReplaceReportsADocumentItCannotRender(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), path) {
 		t.Errorf("error %q does not name the file", err)
+	}
+	if readConfig(t, path) != before {
+		t.Error("the configuration was rewritten anyway")
+	}
+}
+
+func TestAddToGroupReportsAWriteItCannotFinish(t *testing.T) {
+	// The disk filling up between the create and the write. Renaming a
+	// half-written temporary over the configuration is the one outcome worse
+	// than failing.
+	path := writeConfig(t, "groups:\n  all: [alpha]\n")
+	before := readConfig(t, path)
+	previous := fsx.OpenFile
+	fsx.OpenFile = func(name string, flag int, mode os.FileMode) (*os.File, error) {
+		f, err := previous(name, flag, mode)
+		if err != nil {
+			return nil, err
+		}
+		// Closed underneath, so the write that follows fails the way a full
+		// disk does.
+		_ = f.Close()
+		return f, nil
+	}
+	t.Cleanup(func() { fsx.OpenFile = previous })
+
+	if err := AddToGroup(path, GroupAll, "bravo"); err == nil {
+		t.Fatal("AddToGroup reported success on a descriptor that was gone")
 	}
 	if readConfig(t, path) != before {
 		t.Error("the configuration was rewritten anyway")

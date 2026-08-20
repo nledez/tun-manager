@@ -337,6 +337,14 @@ sudo tun-manager import --yes <name> <file.conf>    # for scripts, and for the
                                                     # eighth one in a row
 ```
 
+Everything it writes under your home — the copy of `config.yaml` it keeps before
+editing, the group it adds — is written without following a symbolic link at the
+path or on the way to it, and handed back to you with `lchown` rather than
+`chown`. All of it is done by root, into a directory whose owner can replace any
+name in it with a link at any moment, and root writing where it was pointed is
+the whole of a local privilege escalation. The same goes for the notification
+icon under `~/.cache/tun-manager`.
+
 Copies the `.conf` into `/private/wireguard/config` as `<name>.conf`, mode `0600`
 and owned by root — it holds a private key, and `wg-quick` reads it as root — then lists
 `<name>` under `groups: all` in your configuration.

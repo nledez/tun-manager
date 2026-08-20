@@ -13,9 +13,13 @@
 package fsx
 
 import (
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -72,4 +76,80 @@ func realOwner(_ string, info os.FileInfo) (uid, gid int) {
 		return -1, -1
 	}
 	return int(stat.Uid), int(stat.Gid)
+}
+
+// Lchown is os.Lchown: it changes the owner of a symbolic link rather than of
+// what the link points at. os.Chown is never used in this program. Root
+// changing the owner of a path that somebody else can replace with a link is
+// the shape of a dozen local privilege escalations, and the difference between
+// the two calls is the whole of it.
+var Lchown = os.Lchown
+
+// FchownFile changes the owner of an open descriptor. There is no path in it to
+// swap, which is what makes it the safe half of the pair above.
+var FchownFile = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+
+// NoSymlinksUnder refuses a path reached through a symbolic link somewhere
+// below under.
+//
+// It lstats every step from the path up to that boundary. What it is looking
+// for is a directory somebody else has replaced with a link: root writing "into
+// ~/.cache/tun-manager" is root writing wherever that name points, and every
+// name under a home directory belongs to whoever owns it.
+//
+// It stops at the boundary rather than walking to the root, because on darwin
+// the way to almost anything crosses one: /var is a link to /private/var, /tmp
+// to /private/tmp, and /etc to /private/etc. Those are the system's, set at
+// install and not something a user can move; the ones worth refusing are the
+// ones below a directory somebody can write.
+func NoSymlinksUnder(under, path string) error {
+	for name := path; under == "" || isUnder(under, name); name = Dir(name) {
+		info, err := Lstat(name)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// Nothing there yet: whatever creates it will be made, not followed.
+		case err != nil:
+			return fmt.Errorf("look at %s: %w", name, err)
+		case info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf(
+				"%s is a symbolic link: tun-manager will not follow one to write as root, "+
+					"because what it points at is not its to choose", name)
+		}
+		// An empty boundary means "this name and no further": the caller does
+		// not know where the writable part of the path begins, so only the
+		// component being written is judged.
+		if under == "" || name == Dir(name) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// isUnder reports whether name sits inside dir, which is what bounds the walk.
+func isUnder(dir, name string) bool {
+	return name == dir || strings.HasPrefix(name, strings.TrimSuffix(dir, "/")+"/")
+}
+
+// CreateNoFollow opens a file for writing without following a symbolic link at
+// the path, and without following one on the way to it from under.
+//
+// O_NOFOLLOW covers the last component; NoSymlinksUnder covers the rest. The
+// caller closes what it gets.
+func CreateNoFollow(under, path string, mode os.FileMode) (*os.File, error) {
+	if err := NoSymlinksUnder(under, Dir(path)); err != nil {
+		return nil, err
+	}
+	return OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+}
+
+// MkdirAllNoFollow makes a directory and its parents, refusing to walk through
+// a symbolic link below under.
+//
+// os.MkdirAll follows one without a word, which is how a directory somebody
+// replaced with a link becomes somewhere root writes.
+func MkdirAllNoFollow(under, dir string, mode os.FileMode) error {
+	if err := NoSymlinksUnder(under, dir); err != nil {
+		return err
+	}
+	return MkdirAll(dir, mode)
 }

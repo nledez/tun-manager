@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // defaultConfigMode is what a configuration file created from nothing gets. It
@@ -100,12 +102,33 @@ func scalar(value string) *yaml.Node {
 // writeNew creates a configuration holding nothing but the group, for the case
 // where there was no file at all. Everything else keeps its built-in default,
 // and writing those out would freeze today's values into the user's file.
+// This is written by root, under the home of somebody who can replace any name
+// in it with a symbolic link, so nothing on the way is followed. The file is
+// handed back to that user by whoever called AddToGroup, which is the one that
+// knows who they are.
 func writeNew(path, group, tunnel string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fsx.MkdirAllNoFollow("", filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	body := fmt.Sprintf("groups:\n  %s:\n    - %s\n", group, tunnel)
-	return os.WriteFile(path, []byte(body), defaultConfigMode)
+	return writeNoFollow(path, []byte(body), defaultConfigMode)
+}
+
+// writeNoFollow writes a file without following a symbolic link at the path or
+// on the way to it.
+func writeNoFollow(path string, body []byte, mode os.FileMode) error {
+	// No boundary: this package does not know whose home the file is under, so
+	// only the component being written is judged. What is above it is checked by
+	// privdrop, which does know.
+	f, err := fsx.CreateNoFollow("", path, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		f.Close() //nolint:errcheck // the write is the failure being reported
+		return err
+	}
+	return f.Close()
 }
 
 // replace rewrites the file through a temporary one in the same directory, so
@@ -128,20 +151,20 @@ func replace(path string, doc *yaml.Node) error {
 	}
 
 	mode := defaultConfigMode
-	if info, statErr := os.Stat(path); statErr == nil {
+	if info, statErr := fsx.Lstat(path); statErr == nil {
 		mode = info.Mode().Perm()
 	}
 
 	// Written beside the original and moved over it, so an interrupted write
 	// cannot leave the configuration truncated.
 	tmp := path + ".tmp"
-	defer os.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
+	defer fsx.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
 
 	// The umask can take a bite out of mode, which tightens the file and never
 	// widens it. Tightening a configuration is safe; a chmod to put the bit
 	// back would be a branch that cannot fail on a file just written.
-	if err := os.WriteFile(tmp, buf.Bytes(), mode); err != nil {
+	if err := writeNoFollow(tmp, buf.Bytes(), mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return fsx.Rename(tmp, path)
 }
