@@ -25,6 +25,35 @@ const (
 	// tunnels exist and where they connect; it is for one person.
 	SocketMode os.FileMode = 0o600
 
+	// maxClients is how many connections the publisher will hold at once.
+	//
+	// One person runs one menu bar, and a second window is the same process; a
+	// handful more covers a script watching the feed and somebody with `nc`
+	// open. What the number is really for is the other case: a client that
+	// opens connections and never closes them costs a goroutine and a
+	// descriptor each, and root running out of descriptors takes the interface
+	// down with it.
+	maxClients = 32
+
+	// maxWatch is how many tunnels one client may follow at once.
+	//
+	// A machine with more than this many tunnels is not one this program has
+	// met, and a client can ask to watch a name before any view has arrived to
+	// say whether it exists - which is the window where a map with no bound
+	// could be grown from the wire.
+	maxWatch = 64
+
+	// maxLine is the longest line a client may send. The vocabulary is four
+	// verbs and a tunnel name - a few dozen bytes - so eight kilobytes is
+	// generous by two orders of magnitude. What it stops is a peer that opens a
+	// connection and writes without ever sending a newline, which would
+	// otherwise grow a buffer until the process died.
+	//
+	// Lower than bufio's own default, and that is the point: left at the
+	// default, this would be a limit nobody chose, that no test could tell from
+	// its absence, and that a later version of Go could move.
+	maxLine = 8 << 10
+
 	// sendQueue is how many messages a client may fall behind by. Sixteen is
 	// several seconds of sampling: a client that cannot keep up with one
 	// message a second is not going to recover.
@@ -154,6 +183,14 @@ func (s *Server) requestsLocked() chan Request {
 		s.requests = make(chan Request, 1)
 	}
 	return s.requests
+}
+
+// full reports whether the publisher is already holding as many clients as it
+// will.
+func (s *Server) full() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.clients) >= maxClients
 }
 
 // clientCount reports how many clients are connected. It exists for the tests:
@@ -450,6 +487,15 @@ func (s *Server) add(conn net.Conn) {
 		conn.Close() //nolint:errcheck // there is nothing to say to it
 		return
 	}
+	if s.full() {
+		// Told why, rather than closed in silence: a client that reconnects
+		// forever against a publisher that will not have it is a client whose
+		// author has no way of finding out.
+		refused, _ := json.Marshal(refusedMsg{Type: "refused", Reason: "too many clients"}) //nolint:errcheck // a struct of two strings
+		conn.Write(append(refused, '\n'))                                                   //nolint:errcheck // it is going away either way
+		conn.Close()                                                                        //nolint:errcheck // likewise
+		return
+	}
 
 	c := &client{conn: conn, out: make(chan any, sendQueue), watch: map[string]bool{}}
 
@@ -497,6 +543,16 @@ func (s *Server) read(c *client) {
 	defer s.drop(c)
 
 	lines := bufio.NewScanner(c.conn)
+	// A line longer than this ends the scan, which drops the client. That is
+	// the right end for it: nothing in the vocabulary is that long, so a peer
+	// sending one is not a client this feed can talk to.
+	//
+	// No read deadline goes with it. The one client this program has says
+	// nothing at all until somebody opens the menu, so an idle timeout would
+	// disconnect the healthy case every few minutes and teach it to reconnect
+	// in a loop. What bounds a peer that connects and goes quiet is maxClients,
+	// which is a bound on the thing that actually costs something.
+	lines.Buffer(make([]byte, 0, 4096), maxLine)
 	for lines.Scan() {
 		var msg clientMsg
 		if err := json.Unmarshal(lines.Bytes(), &msg); err != nil {
@@ -524,6 +580,12 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 				s.mu.Unlock()
 				return
 			}
+		}
+		if len(c.watch) >= maxWatch {
+			// A client following more tunnels than this machine has is a client
+			// that has stopped being one.
+			s.mu.Unlock()
+			return
 		}
 		c.watch[msg.Tunnel] = true
 		s.mu.Unlock()

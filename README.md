@@ -205,6 +205,12 @@ object per line, plus a `hello` on connect, a `sample` once a second for each
 tunnel a client asked to watch, a `ping` when a probe round finishes, and a
 `bye` on the way out.
 
+What one client may cost is bounded: thirty-two connections at once — the
+thirty-third is told why and closed — sixty-four watched tunnels each, and eight
+kilobytes to a line. There is no idle timeout, deliberately: the menu bar says
+nothing at all until somebody opens it, so disconnecting a quiet client would
+disconnect the healthy one.
+
 **Nothing on that socket can start or stop a tunnel.** A client may watch a
 tunnel's counters, ask for a refresh, and ask for a ping. That is the whole
 vocabulary.

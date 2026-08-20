@@ -48,6 +48,15 @@ type pingMsg struct {
 	Results []wire.Ping `json:"results"`
 }
 
+// refusedMsg is the last line to a client the publisher will not hold, and the
+// only message that carries a reason. A client that reconnects forever against
+// a publisher that will not have it is a client whose author has no way of
+// finding out why.
+type refusedMsg struct {
+	Type   string `json:"type"`
+	Reason string `json:"reason"`
+}
+
 // byeMsg is the last line before the publisher goes away, so that a client can
 // tell a shutdown from a crash.
 type byeMsg struct {

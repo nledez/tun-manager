@@ -2,6 +2,7 @@ package feed
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -812,5 +813,101 @@ func TestAPeerTheKernelWillNotVouchForIsRefused(t *testing.T) {
 
 	if uid, err := realPeerUID(conn); err == nil {
 		t.Errorf("realPeerUID = %d, want the refusal the kernel gave", uid)
+	}
+}
+
+// MARK: what one client is allowed to cost
+
+func TestThePublisherHoldsOnlySoManyClients(t *testing.T) {
+	// A client that opens connections and never closes them costs a goroutine
+	// and a descriptor each, and root running out of descriptors takes the
+	// interface down with it.
+	s := serving(t, nil)
+	for range maxClients {
+		dial(t, s).next(t) // read the hello, so the client is well and truly in
+	}
+
+	over := dial(t, s)
+
+	if got := over.next(t)["type"]; got != "refused" {
+		t.Errorf("first line = %v, want the publisher saying it is full", got)
+	}
+	if s.clientCount() != maxClients {
+		t.Errorf("clients = %d, want %d", s.clientCount(), maxClients)
+	}
+}
+
+func TestARefusedClientIsToldWhy(t *testing.T) {
+	// Closed in silence, a client reconnects forever against a publisher that
+	// will not have it, and whoever wrote it has no way of finding out.
+	s := serving(t, nil)
+	for range maxClients {
+		dial(t, s).next(t)
+	}
+
+	line := dial(t, s).next(t)
+
+	if reason, _ := line["reason"].(string); reason == "" {
+		t.Errorf("line = %v, want a reason in it", line)
+	}
+}
+
+func TestAClientFollowingMoreTunnelsThanExistIsCutOff(t *testing.T) {
+	// A name can be watched before any view has arrived to say whether it
+	// exists, which is the window where a map with no bound could be grown from
+	// the wire.
+	s := serving(t, nil)
+	c := dial(t, s)
+	c.next(t) // hello
+
+	for i := range maxWatch + 10 {
+		c.send(t, fmt.Sprintf(`{"type":"watch","tunnel":"tunnel-%d"}`, i))
+	}
+
+	var watched int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		watched = 0
+		for client := range s.clients {
+			watched = len(client.watch)
+		}
+		s.mu.Unlock()
+		if watched >= maxWatch || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if watched != maxWatch {
+		t.Errorf("watching %d tunnels, want it stopped at %d", watched, maxWatch)
+	}
+}
+
+func TestALineNobodyCouldMeanDropsThatClientAndNobodyElse(t *testing.T) {
+	// A peer writing without ever sending a newline would otherwise grow a
+	// buffer until the process died. It is dropped; the publisher and every
+	// other client carry on.
+	s := serving(t, nil)
+	quiet := dial(t, s)
+	quiet.next(t)
+	shouting := dial(t, s)
+	shouting.next(t)
+
+	// The write may well fail half way: the publisher drops the client the
+	// moment the line is too long, which closes the socket underneath it. That
+	// is the outcome, not a problem with the test.
+	_, _ = shouting.Write([]byte(strings.Repeat("x", maxLine+1024) + "\n"))
+
+	// The shouting one goes; the quiet one still gets what is published.
+	s.Publish(aView("alpha"))
+	if got := quiet.next(t)["type"]; got != "state" {
+		t.Errorf("the other client got %v, want the view", got)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for s.clientCount() > 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if s.clientCount() != 1 {
+		t.Errorf("clients = %d, want the shouting one dropped", s.clientCount())
 	}
 }
