@@ -3,26 +3,32 @@
 # Copy to ~/.config/tun-manager/config.yaml, then replace the tunnel names below
 # with your own.
 #
+# This is the half of the configuration you own: how the program behaves. How
+# often it refreshes, whether it notifies, which tunnel belongs to which group
+# on which network. Nothing here decides what runs as root.
+#
+# The other half is /private/wireguard/config/tun-manager.yaml, owned by root
+# and readable by nobody else: which binary is executed, which socket is bound,
+# whether the hooks in a .conf may run. Those are not settings a program
+# running as you should be able to change, because the next `sudo tun-manager`
+# would honour them. See configs/tun-manager.example.yaml.
+#
+# The .conf files themselves live in /private/wireguard/config, one per tunnel,
+# each file name being the tunnel name. That is not a setting either, in either
+# file: a directory that can be named is a directory that can be filled with
+# .conf files of somebody's own, and wg-quick runs those as root.
+#
 # Every field is optional, but the built-in defaults define no group and no
 # network context: without this file every tunnel is listed and none belongs to
 # a group, so the group commands and keys have nothing to act on.
 #
 # A key tun-manager does not recognise is refused rather than ignored, naming
 # the file and the line. A misspelling that did nothing in silence would be
-# indistinguishable from a setting that does not work.
+# indistinguishable from a setting that does not work. A key that used to be
+# here and has moved is refused by name, saying where it went.
 #
 # The tunnel names here are placeholders and the addresses come from the ranges
 # reserved for documentation (RFC 5737).
-
-# Where the WireGuard .conf files live. Each file name is the tunnel name.
-config_dir: /private/wireguard/config
-
-# wg-quick is what actually creates the utun interface and the routes.
-wg_quick: /opt/homebrew/bin/wg-quick
-
-# Where wg-quick records the interface name of each live tunnel. This is how a
-# config is matched to its interface; peer public keys are not unique enough.
-run_dir: /var/run/wireguard
 
 # How often the TUI refreshes on its own.
 refresh_interval: 5m
@@ -35,16 +41,6 @@ refresh_interval: 5m
 # without demoting anything. Leave this on if you do not run it, or you will get
 # none from anywhere.
 notify: false
-
-# The status feed: a unix socket, published while the TUI runs, that the menu bar
-# application subscribes to. Nothing sent to it can start or stop a tunnel, which
-# is why it needs no privileges of its own. A client can ask for a ping, which
-# probes an address this file already names - never one the client chose.
-#
-# The socket is created by root and handed to whoever ran `sudo tun-manager`,
-# mode 0600. It exists only while the TUI is running: there is no daemon.
-feed: true
-feed_socket: /var/run/tun-manager.sock
 
 # Recognisable networks. The first rule whose CIDR matches an address on one of
 # its interfaces wins; when none matches, the context is "default".

@@ -49,19 +49,25 @@ Usage:
   tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
 
-Flags, before the command:
+Flags, before the command (simulation only, refused under sudo):
   --config PATH       read this configuration instead of the user's
   --config-dir DIR    read the .conf files from here
   --feed-socket PATH  bind the status feed here
+  --wg-quick PATH     run this instead of the configured wg-quick
   --wg-socket DIR     read WireGuard from the UAPI sockets in this directory,
                       and look there for the interface-name files too
   --fake-ping         invent the round trips instead of measuring them
 
-The last two exist for the demo: internal/tools/wgsim serves a directory of
-sockets that look like tunnels, and its addresses answer nothing. The doctor
+Every one of these exists for the demo: internal/tools/wgsim serves a directory
+of sockets that look like tunnels, and its addresses answer nothing. The doctor
 command says so when either is in use.
 
+Under sudo they are all refused. Each names something root would then read,
+run, bind or unlink, and what root touches is decided by
+/private/wireguard/config alone - not by whoever typed the command.
+
 Configuration: ~/.config/tun-manager/config.yaml
+               /private/wireguard/config/tun-manager.yaml (root only)
 `
 
 // overrides are the flags that move where the program looks, or what it
@@ -75,7 +81,9 @@ type overrides struct {
 	// config is the configuration file to read, replacing the one under the
 	// pre-sudo user's home.
 	config string
-	// configDir replaces config_dir.
+	// configDir replaces the fixed /private/wireguard/config. There is no
+	// setting for it and no way to reach it under root: a simulated run reads
+	// a directory of fixtures owned by whoever cloned the repository.
 	configDir string
 	// feedSocket replaces feed_socket.
 	feedSocket string
@@ -83,22 +91,51 @@ type overrides struct {
 	// interface-name files are looked for in. One flag for both because that is
 	// how the real /var/run/wireguard is: sockets and names side by side.
 	wgSocket string
+	// wgQuick replaces the binary brought up and down with. A simulated run
+	// cannot read the privileged file the real one comes from - that file is
+	// root's - and pointing a demo at the real wg-quick would rewrite the
+	// routing table of whoever is watching.
+	wgQuick string
 	// fakePing answers probes without sending anything.
 	fakePing bool
 }
 
-// apply puts the overrides onto a configuration that has just been read.
+// apply puts the overrides onto a user configuration that has just been read.
 func (o overrides) apply(cfg *profile.Config) *profile.Config {
 	if o.configDir != "" {
 		cfg.ConfigDir = o.configDir
 	}
-	if o.feedSocket != "" {
-		cfg.FeedSocket = o.feedSocket
+	return cfg
+}
+
+// simulating reports whether the flags point the program at something other
+// than the machine it is running on.
+//
+// It is what decides that the privileged file is not read: that file is root's,
+// a simulated run is not root, and trying to read it would turn every demo into
+// a permission error. The flags cannot be set under sudo, so the two cases
+// never meet.
+func (o overrides) simulating() bool {
+	return o.config != "" || o.configDir != "" || o.feedSocket != "" ||
+		o.wgSocket != "" || o.wgQuick != "" || o.fakePing
+}
+
+// applyRoot puts the overrides onto the root-only half.
+//
+// It runs whether that half came from the file or from the built-in values,
+// which costs nothing: the flags it reads cannot be set under sudo, and the
+// file is only ever read under sudo. The two never meet.
+func (o overrides) applyRoot(priv *profile.Privileged) *profile.Privileged {
+	if o.wgQuick != "" {
+		priv.WgQuick = o.wgQuick
 	}
 	if o.wgSocket != "" {
-		cfg.RunDir = o.wgSocket
+		priv.RunDir = o.wgSocket
 	}
-	return cfg
+	if o.feedSocket != "" {
+		priv.FeedSocket = o.feedSocket
+	}
+	return priv
 }
 
 // env is everything the commands touch outside of themselves. Holding it in one
@@ -114,6 +151,16 @@ type env struct {
 
 	// config loads the user configuration; doctor needs it without root.
 	config func() (*profile.Config, privdrop.User, error)
+	// privileged loads the half of the configuration only root can write. It
+	// is a second loader rather than a second return value of the first
+	// because doctor has to report why it failed while every other command
+	// refuses to start, and because a test needs to stand in for a file it
+	// cannot create.
+	privileged func() (*profile.Privileged, error)
+	// privilegedPath is the file that loader reads. A field, not the constant
+	// inlined, so a test can point at one it is allowed to write - and one
+	// test asserts that a real env points at the constant.
+	privilegedPath string
 	// build opens the WireGuard control socket and assembles the application.
 	build func() (*app.App, error)
 	// notifier is optional; without one the TUI posts no notification.
@@ -139,14 +186,16 @@ func main() {
 
 func newEnv() *env {
 	e := &env{
-		out:         os.Stdout,
-		euid:        os.Geteuid(),
-		now:         time.Now,
-		interactive: runTUI,
+		out:            os.Stdout,
+		euid:           os.Geteuid(),
+		now:            time.Now,
+		interactive:    runTUI,
+		privilegedPath: profile.PrivilegedPath,
 	}
 	// Methods rather than package functions: both read the flags, and both
 	// stay replaceable by a test.
 	e.config = e.loadConfig
+	e.privileged = e.loadPrivileged
 	e.build = e.buildApp
 	return e
 }
@@ -226,6 +275,7 @@ func (e *env) parseFlags(args []string) ([]string, error) {
 	fs.StringVar(&e.flags.configDir, "config-dir", "", "directory of .conf files")
 	fs.StringVar(&e.flags.feedSocket, "feed-socket", "", "where to bind the status feed")
 	fs.StringVar(&e.flags.wgSocket, "wg-socket", "", "directory of WireGuard UAPI sockets")
+	fs.StringVar(&e.flags.wgQuick, "wg-quick", "", "binary to bring tunnels up and down with")
 	fs.BoolVar(&e.flags.fakePing, "fake-ping", false, "invent round trips instead of measuring them")
 
 	if err := fs.Parse(args); err != nil {
@@ -238,6 +288,13 @@ func (e *env) parseFlags(args []string) ([]string, error) {
 		return nil, fmt.Errorf("%w\n\n%s", err, usage)
 	}
 
+	// Checked here, once, rather than at each site that reads a flag: a check
+	// per site is how one of them ends up honoured by `status` and refused by
+	// `doctor`.
+	if err := refuseSimulationUnderRoot(fs, e.euid); err != nil {
+		return nil, err
+	}
+
 	overrides := e.flags
 	base := e.config
 	e.config = func() (*profile.Config, privdrop.User, error) {
@@ -247,7 +304,68 @@ func (e *env) parseFlags(args []string) ([]string, error) {
 		}
 		return overrides.apply(cfg), u, nil
 	}
+
+	basePrivileged := e.privileged
+	e.privileged = func() (*profile.Privileged, error) {
+		priv, err := basePrivileged()
+		if err != nil {
+			return nil, err
+		}
+		return overrides.applyRoot(priv), nil
+	}
 	return fs.Args(), nil
+}
+
+// simulationFlags are the flags that move where the program looks, or what it
+// believes. Every one of them decides something root would then do: which file
+// says what to run, which directory holds the .conf files wg-quick executes,
+// which socket is unlinked and bound, whether a probe is real.
+//
+// They exist so the program can be run against internal/tools/wgsim by
+// somebody who is not root, on a machine with no tunnels. That is also exactly
+// why they are refused under sudo: as a plain user they point at fixtures the
+// caller already owns, and as root they would point at anything.
+var simulationFlags = map[string]bool{
+	"config":      true,
+	"config-dir":  true,
+	"feed-socket": true,
+	"wg-socket":   true,
+	"wg-quick":    true,
+	"fake-ping":   true,
+}
+
+// refuseSimulationUnderRoot rejects the flags that must not survive a sudo.
+//
+// fs.Visit walks the flags that were actually set, not every flag defined, so a
+// run that passes none of them is not affected by any of this.
+func refuseSimulationUnderRoot(fs *flag.FlagSet, euid int) error {
+	if euid != 0 {
+		return nil
+	}
+
+	var named []string
+	fs.Visit(func(f *flag.Flag) {
+		if simulationFlags[f.Name] {
+			named = append(named, "--"+f.Name)
+		}
+	})
+	if len(named) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%s cannot be used under sudo: %s is a simulation flag, and honouring it as root "+
+			"would let whoever typed the command choose what root reads, runs, binds or unlinks. "+
+			"Run the demo without sudo (see docs/simulator.md), or drop the flag",
+		strings.Join(named, ", "), plural(named))
+}
+
+// plural keeps the sentence above grammatical without two copies of it.
+func plural(named []string) string {
+	if len(named) == 1 {
+		return "it"
+	}
+	return "each of them"
 }
 
 // signalled returns a context cancelled by an interrupt, so a long batch of
@@ -279,8 +397,28 @@ func (e *env) loadConfig() (*profile.Config, privdrop.User, error) {
 	return cfg, u, nil
 }
 
+// loadPrivileged reads the half of the configuration only root can write, or
+// builds it from the flags when the run is a simulation.
+//
+// A failure is a failure: it never falls back to the built-in values. Defaults
+// that appear when the file cannot be read are defaults somebody can arrange to
+// get by making it unreadable.
+func (e *env) loadPrivileged() (*profile.Privileged, error) {
+	if e.flags.simulating() {
+		// The flags stand in for the file, and parseFlags is what puts them on.
+		priv := profile.DefaultPrivileged()
+		priv.Path = "(simulated: no privileged configuration was read)"
+		return priv, nil
+	}
+	return profile.LoadPrivileged(e.privilegedPath)
+}
+
 func (e *env) buildApp() (*app.App, error) {
 	cfg, _, err := e.config()
+	if err != nil {
+		return nil, err
+	}
+	priv, err := e.privileged()
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +427,7 @@ func (e *env) buildApp() (*app.App, error) {
 	// Same protocol and same parsing below either way; only the directory
 	// differs, so the demo exercises the path that ships.
 	if e.flags.wgSocket != "" {
-		return e.assemble(cfg, wg.NewReaderIn(e.flags.wgSocket)), nil
+		return e.assemble(cfg, priv, wg.NewReaderIn(e.flags.wgSocket)), nil
 	}
 
 	reader, err := wg.NewReader()
@@ -303,11 +441,15 @@ func (e *env) buildApp() (*app.App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.assemble(cfg, reader), nil
+	return e.assemble(cfg, priv, reader), nil
 }
 
 // assemble wires the application around whichever reader it was given.
-func (e *env) assemble(cfg *profile.Config, reader wg.Reader) *app.App {
+//
+// It takes both halves of the configuration, and that is the point of the
+// signature: what root executes and where it looks come from priv, and there is
+// no way to build an App without having read it.
+func (e *env) assemble(cfg *profile.Config, priv *profile.Privileged, reader wg.Reader) *app.App {
 	var pinger probe.Pinger = probe.New()
 	if e.flags.fakePing {
 		// The demo's check addresses reach nothing, so a real probe would take
@@ -319,9 +461,9 @@ func (e *env) assemble(cfg *profile.Config, reader wg.Reader) *app.App {
 		Config:  cfg,
 		Reader:  reader,
 		Pinger:  pinger,
-		Locator: wg.RunDirLocator{Dir: cfg.RunDir},
+		Locator: wg.RunDirLocator{Dir: priv.RunDir},
 		Control: &wg.Controller{
-			WgQuick: cfg.WgQuick,
+			WgQuick: priv.WgQuick,
 			Runner:  wg.ExecRunner{},
 			Pinger:  pinger,
 		},
@@ -363,7 +505,11 @@ func (e *env) runBackup(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = cli.Backup(e.out, cfg, e.now())
+	priv, err := e.privileged()
+	if err != nil {
+		return err
+	}
+	_, err = cli.Backup(e.out, cfg, priv, e.now())
 	return err
 }
 
@@ -373,12 +519,26 @@ func (e *env) runDoctor() error {
 		return err
 	}
 
+	// The one command that reports the privileged file rather than refusing to
+	// start without it. Telling somebody why root cannot read what it needs is
+	// the job; failing here would leave them with the failure and no report.
+	priv, privErr := e.privileged()
+	if privErr != nil {
+		priv = profile.DefaultPrivileged()
+	}
+
 	var opts []cli.Option
 	if e.flags.wgSocket != "" {
 		opts = append(opts, cli.RootNotNeeded())
 	}
 
-	checks := cli.Doctor(cfg, u, e.euid, version, opts...)
+	checks := cli.Doctor(cfg, priv, u, e.euid, version, opts...)
+	if !e.flags.simulating() {
+		// A simulated run reads no privileged file, so there is nothing to
+		// report about one; the simulated line below says where its settings
+		// came from instead.
+		checks = append([]cli.Check{cli.PrivilegedFile(e.privilegedPath, privErr, e.euid)}, checks...)
+	}
 	if simulated, ok := cli.Simulation(e.flags.wgSocket, e.flags.fakePing); ok {
 		// First, not last: everything below it describes whatever the flags
 		// pointed at rather than this machine.
@@ -438,6 +598,10 @@ func (e *env) runTUI() error {
 	if err != nil {
 		return err
 	}
+	priv, err := e.privileged()
+	if err != nil {
+		return err
+	}
 
 	notifier := e.notifier
 	var owner privdrop.User
@@ -452,7 +616,7 @@ func (e *env) runTUI() error {
 	ctx, stop := signalled()
 	defer stop()
 
-	f, served := e.startFeed(ctx, a, owner)
+	f, served := e.startFeed(ctx, a, priv, owner)
 	if f != nil {
 		// Cancelling before waiting is the whole point: closing the socket
 		// first would break the accept loop out with clients still connected
@@ -475,13 +639,13 @@ func (e *env) runTUI() error {
 // The returned channel closes once Serve has returned, so the caller can wait
 // for the goodbye and the socket removal it is responsible for rather than
 // racing them.
-func (e *env) startFeed(ctx context.Context, a *app.App, owner privdrop.User) (*feed.Server, <-chan struct{}) {
-	if !a.Config.Feed {
+func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privileged, owner privdrop.User) (*feed.Server, <-chan struct{}) {
+	if !priv.Feed {
 		return nil, nil
 	}
 
 	f := &feed.Server{
-		Path:    a.Config.FeedSocket,
+		Path:    priv.FeedSocket,
 		Owner:   owner,
 		Sampler: a,
 		Version: version,

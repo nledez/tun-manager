@@ -80,7 +80,9 @@ make install            # /usr/local/bin/tun-manager
 sudo mkdir -p /private/wireguard/config
 sudo chown 0:0 /private/wireguard /private/wireguard/config
 sudo chmod 700 /private/wireguard /private/wireguard/config
-sudo ls -ld /private/wireguard /private/wireguard/config
+sudo cp configs/tun-manager.example.yaml /private/wireguard/config/tun-manager.yaml
+sudo chmod 0600 /private/wireguard/config/tun-manager.yaml
+sudo ls -ld /private/wireguard /private/wireguard/config /private/wireguard/config/tun-manager.yaml
 
 mkdir -p ~/.config/tun-manager
 cp configs/config.example.yaml ~/.config/tun-manager/config.yaml
@@ -127,7 +129,7 @@ sudo tun-manager up --group needed  # resolved against the current network
 sudo tun-manager down --all
 sudo tun-manager import work ~/Downloads/work.conf
 sudo tun-manager backup             # tar.gz of the configuration and every .conf
-tun-manager doctor                  # environment check; sudo to see config_dir
+tun-manager doctor                  # environment check; sudo to see the tunnels
 ```
 
 ### Keys
@@ -168,6 +170,10 @@ has one, which is skipped rather than queued.
 While `tun-manager` runs it publishes what it knows on a unix socket, so a
 menu bar application can show tunnel state, graph traffic and raise
 notifications without any privilege of its own.
+
+In `/private/wireguard/config/tun-manager.yaml`, the half only root can write —
+binding a socket and unlinking whatever was at its path are things root does, so
+the path is not somebody else's to choose:
 
 ```yaml
 feed: true                              # default
@@ -245,14 +251,23 @@ make demo
 ```
 
 That prints the two commands to run, one per window. **No `sudo`:** nothing a
-simulated run reads is root-only.
+simulated run reads is root-only — and, since these flags are refused under
+`sudo`, that is not a convenience but the condition for them to exist at all.
+Each names something root would otherwise read, run, bind or unlink; as a plain
+user they can only reach fixtures that user already owns.
 
-Under the hood it is four flags, and they work on their own:
+Under the hood it is six flags, and they work on their own:
 
 ```sh
 tun-manager --config <file> --config-dir <dir> --wg-socket <dir> \
-            --feed-socket <path> --fake-ping
+            --feed-socket <path> --wg-quick <path> --fake-ping
 ```
+
+`--wg-quick` is what a simulated run brings tunnels up with. The real one comes
+from `/private/wireguard/config/tun-manager.yaml`, which a run that is not root
+cannot read — and pointing a demo at the real `wg-quick` would rewrite the
+routing table of whoever is watching. `make demo` passes the stub in
+`configs/demo/`.
 
 `--wg-socket` names a *directory*, not a socket: WireGuard's userspace API is one
 socket per interface, and the `<name>.name` files live beside them. One flag
@@ -314,8 +329,8 @@ first single-host `AllowedIPs` entry, then from the endpoint host.
 sudo tun-manager import <name> <file.conf>
 ```
 
-Copies the `.conf` into `config_dir` as `<name>.conf`, mode `0600` and owned by
-root — it holds a private key, and `wg-quick` reads it as root — then lists
+Copies the `.conf` into `/private/wireguard/config` as `<name>.conf`, mode `0600`
+and owned by root — it holds a private key, and `wg-quick` reads it as root — then lists
 `<name>` under `groups: all` in your configuration.
 
 Everything is checked before anything is written, and the one check worth
@@ -343,12 +358,20 @@ sorts by age, which is how a directory of them gets read.
 
 ```
 tun-manager-20260818-142305.tar.gz
-├── config.yaml          your ~/.config/tun-manager/config.yaml
-└── config/alpha.conf    one per tunnel, original modes preserved
+├── config.yaml                  your ~/.config/tun-manager/config.yaml
+├── config/tun-manager.yaml      the root-only half, feed signing key included
+└── config/alpha.conf            one per tunnel, original modes preserved
     config/bravo.conf
 ```
 
-**The archive holds every private key on the machine in one file.** It is
+The privileged file is named rather than found by the glob beside it, which asks
+for `*.conf`: it lives in the same directory, and a glob that grew to `*.yaml`
+would put two copies of a signing key in the archive. Losing it is worth
+avoiding on its own — every menu bar that pinned that key refuses the publisher
+that replaces it.
+
+**The archive holds every private key on the machine in one file** — the
+tunnels', and the one the feed signs with. It is
 created `0600` and stays root's — unlike the configuration, which `import`
 hands back to you. Keeping the file modes inside the archive means a restore
 puts a `0600` `.conf` back as `0600`, rather than as whatever the umask of the
@@ -359,6 +382,30 @@ fails partway removes what it had written: half an archive is worse than none,
 because it looks like a backup.
 
 ## Configuration
+
+`~/.config/tun-manager/config.yaml` says how the program should behave: how
+often to refresh, whether to notify, which tunnel belongs to which group on
+which network. It says nothing about what runs as root.
+
+**Where the `.conf` files live is not a setting.** They are read from
+`/private/wireguard/config`, always. There is no key for it, and the flag that
+moves it is refused under `sudo`. A directory named in a file a plain user can
+write is a directory that user can fill with `.conf` files of their own — and
+`wg-quick` executes those as root, `PostUp` and all. A path that cannot be
+chosen is a path that does not have to be defended.
+
+If you are upgrading, four keys have moved to that file — `wg_quick`, `run_dir`,
+`feed` and `feed_socket` — and `config_dir` is gone entirely. The program refuses
+to start while any of them is still in your file, and each refusal says by name
+what moved, where to, and why it could not stay.
+
+The rest of the configuration — the binary run as root, the socket bound and
+unlinked, whether a `.conf` may carry hooks — lives in
+`/private/wireguard/config/tun-manager.yaml`, owned by root and mode `0600`.
+See [`configs/tun-manager.example.yaml`](configs/tun-manager.example.yaml) for
+what goes in it and why each key is on that side of the line. tun-manager
+refuses to read that file if anybody but root could have written it, and says
+which `chmod` or `chown` would put it right.
 
 See [`configs/config.example.yaml`](configs/config.example.yaml). Every field is
 optional and a key left out gets its default, but **a key tun-manager does not

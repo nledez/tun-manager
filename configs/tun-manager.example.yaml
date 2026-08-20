@@ -1,0 +1,85 @@
+# tun-manager, the half of the configuration that only root may write
+#
+# This file belongs at /private/wireguard/config/tun-manager.yaml, owned by
+# root:root, mode 0600, in a directory that is 0700 and root's. tun-manager
+# refuses to read it otherwise, and says which chmod or chown would put it
+# right.
+#
+#   sudo tun-manager init-privileged     # creates it, with these defaults
+#   sudo tun-manager doctor              # says whether it is readable and sound
+#
+# Why it is not in ~/.config/tun-manager/config.yaml with everything else:
+# every key below decides something root will then do — which binary is
+# executed, which directory is read as the list of tunnels, which socket is
+# unlinked and bound. A setting a plain user can write is a setting a program
+# running as that user can write, and the next `sudo tun-manager` would honour
+# it. Splitting the file is what keeps a compromised browser from choosing what
+# root runs.
+#
+# Everything about how the program *behaves* — refresh interval, notifications,
+# groups, network contexts — stays in the user's file, where it can be edited
+# without a password. See configs/config.example.yaml.
+#
+# Every field is optional and a key left out gets the default shown here. A key
+# tun-manager does not recognise is refused rather than ignored, naming the
+# file and the line.
+
+# The binary that creates the utun interface and rewrites the routing table.
+# It is run as root, with a .conf as its argument.
+#
+# Homebrew installs it here. `which wg-quick` says where yours is; a path
+# writable by anybody but root is a path somebody else can replace between two
+# runs.
+wg_quick: /opt/homebrew/bin/wg-quick
+
+# Where wg-quick records the interface name of each live tunnel, as
+# "<tunnel>.name" files. This is how a config is matched to its interface: peer
+# public keys are not unique enough, since two configs reaching the same server
+# through different endpoints share one.
+#
+# The UAPI sockets tun-manager reads the live state from live here too, which is
+# why one setting names both.
+run_dir: /var/run/wireguard
+
+# The status feed: a unix socket, published while the TUI runs, that the menu
+# bar application subscribes to.
+#
+# Nothing sent to that socket can start or stop a tunnel, which is why the
+# application needs no privileges of its own. A client can watch a tunnel's
+# counters, ask for a refresh and ask for a ping — and a ping names a *tunnel*,
+# never an address, so no name arriving on the socket can make tun-manager
+# reach somewhere the .conf files did not already name.
+#
+# The socket is created by root and handed to whoever ran `sudo tun-manager`,
+# mode 0600. It exists only while the TUI is running: there is no daemon.
+feed: true
+
+# Where that socket is bound — and, before it is bound, the path tun-manager
+# unlinks. /var/run is cleared on reboot, which disposes of a socket left
+# behind by a crash for free.
+#
+# It is here rather than in the user's file because of that unlink: a path
+# named by a plain user would be a path root removes on their behalf.
+feed_socket: /var/run/tun-manager.sock
+
+# The seed of the Ed25519 key the feed signs with, base64, 32 bytes.
+#
+# It is what lets "Tun Manager.app" tell this publisher from any other program
+# that happens to be listening on a socket. The application pins the public half
+# the first time it connects and refuses a different one afterwards, the way ssh
+# treats a host key.
+#
+# Left empty here on purpose: a key shipped in an example is a key everybody
+# has. `sudo tun-manager init-privileged` generates one, and
+# `sudo tun-manager feed-key` prints its fingerprint so it can be compared with
+# the one the application shows.
+feed_key: ""
+
+# Whether a .conf carrying PreUp, PostUp, PreDown or PostDown may be used.
+#
+# wg-quick executes those lines as root. A configuration downloaded from a VPN
+# provider can contain one, and it will run with every privilege this program
+# has. Off means tun-manager refuses such a file rather than discovering it
+# later; `import` shows the offending lines and takes --allow-hooks for the
+# case where they have been read and are wanted.
+allow_hooks: false

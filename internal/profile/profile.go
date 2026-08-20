@@ -12,21 +12,20 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"ledez.net/tun-manager/internal/netctx"
-	"ledez.net/tun-manager/internal/wg"
 )
 
 // Defaults for the environment only. Group membership and network contexts are
 // deliberately empty: they describe one person's tunnels, so they belong in the
 // user's configuration file, not in the binary.
 const (
-	DefaultConfigDir = "/private/wireguard/config"
-	DefaultWgQuick   = "/opt/homebrew/bin/wg-quick"
-	DefaultRefresh   = 5 * time.Minute
+	DefaultWgQuick = "/opt/homebrew/bin/wg-quick"
+	DefaultRefresh = 5 * time.Minute
 
 	// DefaultFeedSocket is where the status feed binds. /var/run is cleared on
 	// reboot, which disposes of a socket left behind by a crash for free.
@@ -50,21 +49,22 @@ type Override struct {
 }
 
 // Config is the whole user configuration.
+//
+// What is missing from it is the point: nothing here decides which binary root
+// executes or which directory it reads as the list of tunnels. Those live in
+// Privileged, in a file only root can write.
 type Config struct {
-	ConfigDir string `yaml:"config_dir"`
-	WgQuick   string `yaml:"wg_quick"`
-	// RunDir is where wg-quick records the interface name of each live tunnel.
-	RunDir          string        `yaml:"run_dir"`
-	RefreshInterval time.Duration `yaml:"refresh_interval"`
-	Notify          bool          `yaml:"notify"`
-	// Feed publishes state on a unix socket for a menu bar application to
-	// read. Nothing on that socket can start or stop a tunnel.
-	Feed bool `yaml:"feed"`
-	// FeedSocket is where that socket is bound.
-	FeedSocket string              `yaml:"feed_socket"`
-	Contexts   []netctx.Rule       `yaml:"contexts"`
-	Groups     map[string][]string `yaml:"groups"`
-	Overrides  []Override          `yaml:"overrides"`
+	// ConfigDir is where the .conf files are read from. It is not a setting:
+	// it is always profile.ConfigDir, there is no key for it and no flag under
+	// root. The field exists because the tests, and the simulator, have to
+	// point at a directory they are allowed to write — and a package that can
+	// only be tested as root is a package nobody tests.
+	ConfigDir       string              `yaml:"-"`
+	RefreshInterval time.Duration       `yaml:"refresh_interval"`
+	Notify          bool                `yaml:"notify"`
+	Contexts        []netctx.Rule       `yaml:"contexts"`
+	Groups          map[string][]string `yaml:"groups"`
+	Overrides       []Override          `yaml:"overrides"`
 
 	// Path is the file the configuration was read from, for `doctor`.
 	Path string `yaml:"-"`
@@ -77,13 +77,9 @@ type Config struct {
 // group, so the group commands and keys have nothing to act on.
 func Default() *Config {
 	return &Config{
-		ConfigDir:       DefaultConfigDir,
-		WgQuick:         DefaultWgQuick,
-		RunDir:          wg.DefaultRunDir,
+		ConfigDir:       ConfigDir,
 		RefreshInterval: DefaultRefresh,
 		Notify:          true,
-		Feed:            true,
-		FeedSocket:      DefaultFeedSocket,
 		Groups:          map[string][]string{},
 	}
 }
@@ -134,11 +130,60 @@ func Load(path string) (*Config, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		// io.EOF is an empty file: somebody created it and has not filled it in.
+		if moved := movedKey(err); moved != "" {
+			return nil, fmt.Errorf("%s: %s", path, movedKeys[moved])
+		}
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.Path = path
 	cfg.applyDefaults()
 	return cfg, nil
+}
+
+// movedKeys are the settings that used to live in the user's file and no longer
+// can. Each one decided something root would then do, from a file a plain user
+// can write.
+//
+// Refusing them is not pedantry: somebody upgrading has a file that used to
+// work, and the alternative is a setting that silently stops applying. The
+// message is the whole feature, so it says what moved, where to, and why.
+var movedKeys = map[string]string{
+	"config_dir": "config_dir is no longer a setting. The .conf files are read from " +
+		ConfigDir + " and from nowhere else, because a directory named by a file " +
+		"a plain user can write is a directory that user can point at .conf files " +
+		"of their own — and wg-quick runs those as root. Remove the key. " +
+		"Everything of that kind now lives in " + PrivilegedPath + ".",
+	"wg_quick":    movedToRoot("wg_quick", "it names the binary tun-manager executes as root"),
+	"run_dir":     movedToRoot("run_dir", "it names the directory tun-manager believes the live state is in"),
+	"feed":        movedToRoot("feed", "it decides whether root binds a socket at all"),
+	"feed_socket": movedToRoot("feed_socket", "it names a path root unlinks before binding it"),
+}
+
+// movedToRoot writes the sentence somebody upgrading will read. One shape for
+// all of them: what moved, where to, why it could not stay, and what to type.
+func movedToRoot(key, because string) string {
+	return key + " has moved to " + PrivilegedPath + ", which only root can write, because " +
+		because + " — and a setting a plain user can write is a setting any program running as " +
+		"that user can write, which the next `sudo tun-manager` would then honour. " +
+		"Move the key there (see configs/tun-manager.example.yaml) and remove it here."
+}
+
+// movedKey reports which moved setting a decode error is about, or "" when it
+// is about something else.
+//
+// It matches on the message yaml produces for an unknown field, which is the
+// only thing it gives us: KnownFields reports "field <name> not found in type
+// …". A yaml that changed that wording would cost the friendly message, not the
+// refusal — the key would still be unknown, and the file would still be
+// rejected.
+func movedKey(err error) string {
+	message := err.Error()
+	for key := range movedKeys {
+		if strings.Contains(message, "field "+key+" not found") {
+			return key
+		}
+	}
+	return ""
 }
 
 // applyDefaults fills anything a document set to an empty value. Load starts
@@ -148,15 +193,6 @@ func (c *Config) applyDefaults() {
 	d := Default()
 	if c.ConfigDir == "" {
 		c.ConfigDir = d.ConfigDir
-	}
-	if c.WgQuick == "" {
-		c.WgQuick = d.WgQuick
-	}
-	if c.RunDir == "" {
-		c.RunDir = d.RunDir
-	}
-	if c.FeedSocket == "" {
-		c.FeedSocket = d.FeedSocket
 	}
 	if c.RefreshInterval <= 0 {
 		c.RefreshInterval = d.RefreshInterval

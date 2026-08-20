@@ -41,6 +41,7 @@ bin/tun-manager \
     --config-dir configs/wireguard \
     --wg-socket /tmp/tm-demo/wireguard \
     --feed-socket /tmp/tm-demo/feed.sock \
+    --wg-quick configs/demo/wg-quick-stub.sh \
     --fake-ping
 
 # 3. the menu bar application, pointed at tun-manager
@@ -48,16 +49,15 @@ bin/tun-manager \
     --socket /tmp/tm-demo/feed.sock
 ```
 
-The configuration in step 2 is `configs/config.example.yaml` with `wg_quick`
-pointed at `configs/demo/wg-quick-stub.sh`, which `make demo` writes for you:
+The configuration in step 2 is `configs/config.example.yaml`, copied as it is —
+`make demo` does that for you. What used to be a `wg_quick` key in it is now the
+`--wg-quick` flag: the real one lives in
+`/private/wireguard/config/tun-manager.yaml`, which only root can read, and a
+simulated run is not root.
 
-```sh
-sed "s#^wg_quick:.*#wg_quick: $PWD/configs/demo/wg-quick-stub.sh#" \
-    configs/config.example.yaml > /tmp/tm-demo/config.yaml
-```
-
-That stub refuses every call and says why. Without it, `s` or `space` pressed
-during a demo would reach the machine's real tunnels through the real `wg-quick`.
+`configs/demo/wg-quick-stub.sh` refuses every call and says why. Without it, `s`
+or `space` pressed during a demo would reach the machine's real tunnels through
+the real `wg-quick`.
 
 ## Its flags
 

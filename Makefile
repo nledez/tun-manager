@@ -111,8 +111,7 @@ DEMO_CONFIGS := configs/wireguard
 
 demo: build demo-configs
 	@mkdir -p $(DEMO_DIR)/wireguard
-	@sed 's#^wg_quick:.*#wg_quick: $(CURDIR)/configs/demo/wg-quick-stub.sh#' \
-		configs/config.example.yaml > $(DEMO_DIR)/config.yaml
+	@cp configs/config.example.yaml $(DEMO_DIR)/config.yaml
 	@echo "starting the simulator in $(DEMO_DIR)/wireguard"
 	@go run ./internal/tools/wgsim \
 		--config configs/config.example.yaml \
@@ -122,7 +121,8 @@ demo: build demo-configs
 	echo; \
 	echo "  the terminal:"; \
 	echo "    $(BIN) --config $(DEMO_DIR)/config.yaml --config-dir $(DEMO_CONFIGS) \\"; \
-	echo "      --wg-socket $(DEMO_DIR)/wireguard --feed-socket $(DEMO_DIR)/feed.sock --fake-ping"; \
+	echo "      --wg-socket $(DEMO_DIR)/wireguard --feed-socket $(DEMO_DIR)/feed.sock \\"; \
+	echo "      --wg-quick $(CURDIR)/configs/demo/wg-quick-stub.sh --fake-ping"; \
 	echo; \
 	echo "  the window:"; \
 	echo "    'macos/build/Tun Manager (dev).app/Contents/MacOS/tun-manager-menubar' \\"; \

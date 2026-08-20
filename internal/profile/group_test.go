@@ -49,7 +49,7 @@ func TestAddToGroupKeepsEveryComment(t *testing.T) {
 	// This is a file the user maintains by hand. Re-marshalling the Config
 	// struct would produce a correct configuration that had lost all of this.
 	body := `# tun-manager configuration
-config_dir: /private/wireguard/config
+notify: true
 
 groups:
   # everything, for the stop-all key
@@ -68,7 +68,7 @@ groups:
 		"# tun-manager configuration",
 		"# everything, for the stop-all key",
 		"# the important one",
-		"config_dir: /private/wireguard/config",
+		"notify: true",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q was lost:\n%s", want, got)
@@ -119,7 +119,7 @@ func TestAddToGroupIsIdempotent(t *testing.T) {
 }
 
 func TestAddToGroupCreatesTheGroupWhenTheFileHasNone(t *testing.T) {
-	path := writeConfig(t, "config_dir: /private/wireguard/config\n")
+	path := writeConfig(t, "notify: true\n")
 
 	if err := AddToGroup(path, GroupAll, "alpha"); err != nil {
 		t.Fatalf("AddToGroup: %v", err)
@@ -132,8 +132,8 @@ func TestAddToGroupCreatesTheGroupWhenTheFileHasNone(t *testing.T) {
 	if got := cfg.Groups[GroupAll]; len(got) != 1 || got[0] != "alpha" {
 		t.Errorf("all = %v, want alpha", got)
 	}
-	if cfg.ConfigDir != "/private/wireguard/config" {
-		t.Errorf("config_dir = %q, want it kept", cfg.ConfigDir)
+	if !cfg.Notify {
+		t.Error("notify = false, want the untouched key kept")
 	}
 }
 
@@ -171,7 +171,7 @@ func TestAddToGroupWritesAConfigurationWhenThereIsNone(t *testing.T) {
 	if got := cfg.Groups[GroupAll]; len(got) != 1 || got[0] != "alpha" {
 		t.Errorf("all = %v, want alpha", got)
 	}
-	if strings.Contains(readConfig(t, path), "wg_quick") {
+	if strings.Contains(readConfig(t, path), "refresh_interval") {
 		t.Errorf("the built-in defaults were written out:\n%s", readConfig(t, path))
 	}
 }

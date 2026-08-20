@@ -218,10 +218,15 @@ future `io/fs` implementation — and this program does not build on one. The
 alternative is no guard at all, which turns that hypothetical into a panic
 inside a diagnostic command, which is the worst place for one.
 
+`internal/profile/privileged.go` carries the same assertion, for the same
+reason: it decides whether the file that says what root will execute is owned
+by root, and the two packages cannot share the variable without `profile`
+importing `cli`, which is backwards. Both markers name this section.
+
 ### filesystem races in the permission code
 
-Three branches in `internal/cli` handle a filesystem that changed underneath
-the process:
+Five branches handle a filesystem that changed underneath the process. Three
+are in `internal/cli/permissions.go` and `internal/cli/import.go`:
 
 - `permissions.go` stats the directory holding `config_dir` immediately after
   statting `config_dir` itself. The first stat walked through the second path,
@@ -231,6 +236,11 @@ the process:
   the listing and the read.
 - `import.go` chmods the directory it has just created, or that it already owns
   as root.
+
+Two more are in `internal/profile/privileged.go`:
+
+- `LoadPrivileged` fstats the descriptor it has just opened.
+- `checkPrivilegedParent` stats the directory the open above walked through.
 
 Each is reachable in production — a `rm -rf` landing in the same millisecond, a
 read-only filesystem — and none is arrangeable from a test. Opening the first

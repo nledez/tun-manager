@@ -20,8 +20,6 @@ const examplePath = "../../configs/config.example.yaml"
 // Every value below is invented. Addresses come from the ranges reserved for
 // documentation (RFC 5737).
 const sampleYAML = `
-config_dir: /etc/wireguard
-wg_quick: /usr/bin/wg-quick
 refresh_interval: 5m
 notify: true
 
@@ -59,12 +57,6 @@ func loadString(t *testing.T, yaml string) *Config {
 func TestLoadReadsScalarSettings(t *testing.T) {
 	cfg := loadString(t, sampleYAML)
 
-	if cfg.ConfigDir != "/etc/wireguard" {
-		t.Errorf("ConfigDir = %q", cfg.ConfigDir)
-	}
-	if cfg.WgQuick != "/usr/bin/wg-quick" {
-		t.Errorf("WgQuick = %q", cfg.WgQuick)
-	}
 	if cfg.RefreshInterval != 5*time.Minute {
 		t.Errorf("RefreshInterval = %v, want 5m", cfg.RefreshInterval)
 	}
@@ -170,7 +162,7 @@ func TestLoadMissingFileYieldsUsableDefaults(t *testing.T) {
 		t.Fatalf("Load of a missing file must not fail: %v", err)
 	}
 
-	if cfg.ConfigDir == "" || cfg.WgQuick == "" || cfg.RunDir == "" {
+	if cfg.ConfigDir == "" {
 		t.Errorf("defaults incomplete: %+v", cfg)
 	}
 	if cfg.RefreshInterval != DefaultRefresh {
@@ -213,8 +205,8 @@ func TestHasGroupsSeesAnOverrideOnItsOwn(t *testing.T) {
 func TestLoadFillsMissingFieldsWithDefaults(t *testing.T) {
 	cfg := loadString(t, "groups:\n  needed: [alpha]\n")
 
-	if cfg.ConfigDir != DefaultConfigDir {
-		t.Errorf("ConfigDir = %q, want the default %q", cfg.ConfigDir, DefaultConfigDir)
+	if cfg.ConfigDir != ConfigDir {
+		t.Errorf("ConfigDir = %q, want the default %q", cfg.ConfigDir, ConfigDir)
 	}
 	if cfg.RefreshInterval != DefaultRefresh {
 		t.Errorf("RefreshInterval = %v, want %v", cfg.RefreshInterval, DefaultRefresh)
@@ -271,40 +263,6 @@ func TestLoadReportsAReadFailureThatIsNotAMissingFile(t *testing.T) {
 	}
 }
 
-func TestTheFeedIsOnByDefault(t *testing.T) {
-	// The socket is 0600 and owned by one person, so there is nothing to
-	// protect by making it opt-in, and an application that needs configuration
-	// before it works once is an application nobody runs twice.
-	cfg := Default()
-
-	if !cfg.Feed {
-		t.Error("Feed = false, want the feed available without configuration")
-	}
-	if cfg.FeedSocket != DefaultFeedSocket {
-		t.Errorf("FeedSocket = %q, want %q", cfg.FeedSocket, DefaultFeedSocket)
-	}
-}
-
-func TestTheFeedCanBeSwitchedOff(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("feed: false\nfeed_socket: /tmp/other.sock\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if cfg.Feed {
-		t.Error("Feed = true, want it off")
-	}
-	if cfg.FeedSocket != "/tmp/other.sock" {
-		t.Errorf("FeedSocket = %q, want the configured path", cfg.FeedSocket)
-	}
-}
-
 func TestAConfigurationFileWithoutTheFeedKeyStillGetsTheFeed(t *testing.T) {
 	// The keys are optional and what is left out falls back to the built-in
 	// default — which for a bool means the zero value unless Load is careful,
@@ -313,24 +271,7 @@ func TestAConfigurationFileWithoutTheFeedKeyStillGetsTheFeed(t *testing.T) {
 	// existed, silently, with the menu bar reporting "not running" while
 	// tun-manager was running.
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\nnotify: true\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if !cfg.Feed {
-		t.Error("Feed = false, want the default for a key the file does not mention")
-	}
-}
-
-func TestAConfigurationFileWithoutTheNotifyKeyStillNotifies(t *testing.T) {
-	// The same trap, and it has been there longer.
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("notify: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -344,10 +285,10 @@ func TestAConfigurationFileWithoutTheNotifyKeyStillNotifies(t *testing.T) {
 	}
 }
 
-func TestAFeedTurnedOffInTheFileStaysOff(t *testing.T) {
-	// The other half: a default that cannot be overridden is not a default.
+func TestAConfigurationFileWithoutTheNotifyKeyStillNotifies(t *testing.T) {
+	// The same trap, and it has been there longer.
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("feed: false\nnotify: false\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("notify: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -356,9 +297,23 @@ func TestAFeedTurnedOffInTheFileStaysOff(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Feed {
-		t.Error("Feed = true, want it off")
+	if !cfg.Notify {
+		t.Error("Notify = false, want the default for a key the file does not mention")
 	}
+}
+
+func TestANotificationTurnedOffInTheFileStaysOff(t *testing.T) {
+	// The other half: a default that cannot be overridden is not a default.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("notify: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
 	if cfg.Notify {
 		t.Error("Notify = true, want it off")
 	}
@@ -369,7 +324,7 @@ func TestAFieldWrittenOutAsBlankFallsBackToItsDefault(t *testing.T) {
 	// defaults. This is a document that mentions a key and gives it nothing —
 	// a mistake rather than an intent, and answered with the default rather
 	// than with a confusing failure much later.
-	body := "config_dir: \"\"\nwg_quick: \"\"\nrun_dir: \"\"\nfeed_socket: \"\"\nrefresh_interval: 0s\ngroups:\n"
+	body := "refresh_interval: 0s\ngroups:\n"
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
@@ -381,11 +336,8 @@ func TestAFieldWrittenOutAsBlankFallsBackToItsDefault(t *testing.T) {
 	}
 
 	d := Default()
-	if cfg.ConfigDir != d.ConfigDir || cfg.WgQuick != d.WgQuick || cfg.RunDir != d.RunDir {
-		t.Errorf("paths = %q %q %q, want the defaults", cfg.ConfigDir, cfg.WgQuick, cfg.RunDir)
-	}
-	if cfg.FeedSocket != d.FeedSocket {
-		t.Errorf("FeedSocket = %q, want %q", cfg.FeedSocket, d.FeedSocket)
+	if cfg.ConfigDir != d.ConfigDir {
+		t.Errorf("ConfigDir = %q, want the default %q", cfg.ConfigDir, d.ConfigDir)
 	}
 	if cfg.RefreshInterval != d.RefreshInterval {
 		t.Errorf("RefreshInterval = %v, want %v", cfg.RefreshInterval, d.RefreshInterval)
@@ -405,7 +357,7 @@ func TestTheShippedExampleParses(t *testing.T) {
 		t.Fatalf("the example does not load: %v", err)
 	}
 
-	if cfg.ConfigDir == "" || cfg.WgQuick == "" {
+	if cfg.ConfigDir == "" {
 		t.Errorf("paths are empty: %+v", cfg)
 	}
 	if len(cfg.Groups[GroupAll]) == 0 {
@@ -416,28 +368,6 @@ func TestTheShippedExampleParses(t *testing.T) {
 	}
 	if len(cfg.Overrides) == 0 {
 		t.Error("the example documents overrides and defines none")
-	}
-}
-
-func TestTheShippedExampleLeavesTheFeedOn(t *testing.T) {
-	// The feed is not a matter of taste: with it off the menu bar reports
-	// "tun-manager is not running" while tun-manager is running, which is the
-	// most confusing answer this program can give. Every configuration derived
-	// from the example would say it.
-	//
-	// `notify` is deliberately not asserted here. Whether the shipped example
-	// posts notifications is the maintainer's preference, and a test that
-	// pinned it would be a test about taste.
-	cfg, err := Load(examplePath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if !cfg.Feed {
-		t.Error("the example turns the feed off, so a copy of it has no menu bar")
-	}
-	if cfg.FeedSocket != DefaultFeedSocket {
-		t.Errorf("FeedSocket = %q, want the default %q", cfg.FeedSocket, DefaultFeedSocket)
 	}
 }
 
@@ -462,7 +392,7 @@ func TestAKeyThisProgramDoesNotKnowIsRefused(t *testing.T) {
 	// `feeed: false`, watches nothing happen, and has no way to find out why.
 	// Refusing costs a clear failure at startup instead of a silent one later.
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("config_dir: /tmp/wg\nfeeed: false\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("notify: true\nfeeed: false\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -492,7 +422,7 @@ func TestAnEmptyConfigurationFileIsAllDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if !cfg.Feed || !cfg.Notify || cfg.ConfigDir != DefaultConfigDir {
+	if !cfg.Notify || cfg.ConfigDir != ConfigDir {
 		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
 	}
 }
@@ -508,7 +438,68 @@ func TestAFileThatIsOnlyCommentsIsAllDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if !cfg.Feed {
+	if !cfg.Notify {
 		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
+	}
+}
+
+func TestLoadRefusesConfigDirAndSaysWhereItWent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("config_dir: /Users/someone/wireguard\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err == nil {
+		t.Fatalf("Load = %v, want a refusal: config_dir decides what root reads", cfg)
+	}
+
+	// Somebody upgrading reads this message and nothing else. It has to name
+	// the key, say where the directory is now, and say why it moved.
+	message := err.Error()
+	for _, want := range []string{"config_dir", ConfigDir, path} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestTheConfigDirectoryIsTheFixedOneByDefault(t *testing.T) {
+	cfg := loadString(t, "notify: true\n")
+
+	if cfg.ConfigDir != ConfigDir {
+		t.Errorf("ConfigDir = %q, want the fixed %q", cfg.ConfigDir, ConfigDir)
+	}
+}
+
+func TestLoadRefusesEveryKeyThatMovedToTheRootOnlyFile(t *testing.T) {
+	// Each of these decided something root would then do. A file a plain user
+	// can write must not be able to say any of it, so the key is refused by
+	// name rather than quietly ignored — somebody upgrading has a file that
+	// used to work, and needs to be told what to do with it.
+	for key, line := range map[string]string{
+		"wg_quick":    "wg_quick: /tmp/anywhere/wg-quick\n",
+		"run_dir":     "run_dir: /tmp/anywhere/wireguard\n",
+		"feed":        "feed: false\n",
+		"feed_socket": "feed_socket: /tmp/anywhere/feed.sock\n",
+	} {
+		t.Run(key, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load = %v, want %s refused", cfg, key)
+			}
+			for _, want := range []string{key, PrivilegedPath} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("message %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }

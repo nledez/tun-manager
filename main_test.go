@@ -86,15 +86,16 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 	// The defaults point at a Homebrew wg-quick and at /var/run/wireguard.
 	// Depending on either would make these tests pass or fail according to what
 	// happens to be installed on the machine running them.
-	cfg.WgQuick = fakeExecutable(t)
-	cfg.RunDir = t.TempDir()
+	priv := profile.DefaultPrivileged()
+	priv.WgQuick = fakeExecutable(t)
+	priv.RunDir = t.TempDir()
 	// The feed defaults to on and bound at /var/run/tun-manager.sock: off here so
 	// the TUI path in these tests never touches a real, non-hermetic socket, and
 	// pointed at a short path regardless of that, so a test that flips it back on
 	// still binds somewhere private rather than failing on this test's own long
 	// name overflowing a unix socket path.
-	cfg.Feed = false
-	cfg.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
+	priv.Feed = false
+	priv.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
 	cfg.Groups = map[string][]string{
 		profile.GroupNeeded: {"alpha", "bravo"},
 		profile.GroupAll:    {"alpha", "bravo"},
@@ -103,6 +104,11 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 	return &env{
 		out:  &strings.Builder{},
 		euid: 0,
+		// A file only root can write is a file no test can create. The loader
+		// stands in for it, and one test asserts that a real env reads the
+		// fixed path instead.
+		privileged:     func() (*profile.Privileged, error) { return priv, nil },
+		privilegedPath: profile.PrivilegedPath,
 		config: func() (*profile.Config, privdrop.User, error) {
 			// A real directory: notify.New writes the icon into the user's
 			// cache, and a test must not write outside its own tree.
@@ -208,7 +214,7 @@ func TestDoctorRunsWithoutRoot(t *testing.T) {
 }
 
 func TestDoctorSucceedsWhenEveryCheckPasses(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 
 	// Through --wg-socket, which is the only shape of clean report reachable
 	// from here: a fixture is owned by whoever runs the suite, and the
@@ -492,15 +498,17 @@ func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
 func TestTheInterfaceStartsWithAFeedWhenItIsOn(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	sock := filepath.Join(shortSocketDir(t), "f.sock")
-	baseBuild := e.build
-	e.build = func() (*app.App, error) {
-		a, err := baseBuild()
+	// Turning the feed on is a change to the root-only half now, so it happens
+	// there rather than on the App.
+	basePrivileged := e.privileged
+	e.privileged = func() (*profile.Privileged, error) {
+		priv, err := basePrivileged()
 		if err != nil {
 			return nil, err
 		}
-		a.Config.Feed = true
-		a.Config.FeedSocket = sock
-		return a, nil
+		priv.Feed = true
+		priv.FeedSocket = sock
+		return priv, nil
 	}
 	var got *feed.Server
 	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server) error {
@@ -529,15 +537,15 @@ func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
 	// Losing the menu bar must never cost the ability to bring a tunnel up: a
 	// feed that cannot start is reported and stepped over, not fatal.
 	e := testEnv(t, &fakeRunner{})
-	baseBuild := e.build
-	e.build = func() (*app.App, error) {
-		a, err := baseBuild()
+	basePrivileged := e.privileged
+	e.privileged = func() (*profile.Privileged, error) {
+		priv, err := basePrivileged()
 		if err != nil {
 			return nil, err
 		}
-		a.Config.Feed = true
-		a.Config.FeedSocket = filepath.Join(shortSocketDir(t), "no-such-dir", "f.sock")
-		return a, nil
+		priv.Feed = true
+		priv.FeedSocket = filepath.Join(shortSocketDir(t), "no-such-dir", "f.sock")
+		return priv, nil
 	}
 	var got *feed.Server
 	var started bool
@@ -572,11 +580,15 @@ func TestStartFeedsServedChannelClosesOnlyOnceServeReturns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	a.Config.Feed = true
-	a.Config.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+	priv.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	f, served := e.startFeed(ctx, a, privdrop.User{})
+	f, served := e.startFeed(ctx, a, priv, privdrop.User{})
 	if f == nil {
 		t.Fatal("feed = nil, want one when feed is on")
 	}
@@ -595,7 +607,7 @@ func TestStartFeedsServedChannelClosesOnlyOnceServeReturns(t *testing.T) {
 		t.Fatal("served never closed after the context was cancelled")
 	}
 
-	if _, err := os.Stat(a.Config.FeedSocket); !os.IsNotExist(err) {
+	if _, err := os.Stat(priv.FeedSocket); !os.IsNotExist(err) {
 		t.Error("socket still present once served closed, want Serve's own shutdown to have removed it")
 	}
 }
@@ -606,9 +618,13 @@ func TestStartFeedReturnsNoChannelWhenThereIsNoFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	a.Config.Feed = false
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = false
 
-	f, served := e.startFeed(context.Background(), a, privdrop.User{})
+	f, served := e.startFeed(context.Background(), a, priv, privdrop.User{})
 
 	if f != nil || served != nil {
 		t.Errorf("startFeed = (%v, %v), want (nil, nil) when the feed is off", f, served)
@@ -740,12 +756,24 @@ func TestLoadConfigReportsAnUnresolvableSudoUser(t *testing.T) {
 	}
 }
 
-func TestBuildWiresTheApplicationFromTheConfiguration(t *testing.T) {
+func TestBuildWiresTheApplicationFromBothHalvesOfTheConfiguration(t *testing.T) {
 	// buildApp is what the injected env.build stands in for everywhere else, so
 	// nothing else ever runs it.
+	//
+	// Driven as a simulated run, because the real path reads
+	// /private/wireguard/config/tun-manager.yaml, which is root's: a test that
+	// needed that file would only pass on a machine set up for production.
 	isolatedHome(t)
+	stub := fakeExecutable(t)
+	runDir := t.TempDir()
 
-	a, err := newEnv().buildApp()
+	e := newEnv()
+	e.euid = 501
+	if _, err := e.parseFlags([]string{"--wg-quick", stub, "--wg-socket", runDir}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	a, err := e.buildApp()
 	if err != nil {
 		t.Fatalf("buildApp: %v", err)
 	}
@@ -758,16 +786,32 @@ func TestBuildWiresTheApplicationFromTheConfiguration(t *testing.T) {
 	if a.Reader == nil || a.Pinger == nil || a.Control == nil {
 		t.Fatalf("application incomplete: %+v", a)
 	}
-	if a.Control.WgQuick != a.Config.WgQuick {
-		t.Errorf("controller uses %q, config says %q", a.Control.WgQuick, a.Config.WgQuick)
+	// The two fields that come from the root-only half. Assembling an App
+	// without having read it is not expressible: assemble takes it.
+	if a.Control.WgQuick != stub {
+		t.Errorf("controller uses %q, want the privileged %q", a.Control.WgQuick, stub)
 	}
-	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != a.Config.RunDir {
-		t.Errorf("locator = %+v, want it to follow run_dir %q", a.Locator, a.Config.RunDir)
+	if got, ok := a.Locator.(wg.RunDirLocator); !ok || got.Dir != runDir {
+		t.Errorf("locator = %+v, want it to follow run_dir %q", a.Locator, runDir)
 	}
 	// The pre-check that skips a tunnel whose address already answers only
 	// happens if the controller has a pinger.
 	if a.Control.Pinger == nil {
 		t.Error("the controller has no pinger, so up would never skip")
+	}
+}
+
+func TestBuildRefusesToRunWithoutThePrivilegedConfiguration(t *testing.T) {
+	// Not defaults, and not a warning: a machine where that file cannot be read
+	// is a machine where nothing should be brought up.
+	isolatedHome(t)
+
+	e := newEnv()
+	e.euid = 0
+	e.privilegedPath = filepath.Join(t.TempDir(), "tun-manager.yaml")
+
+	if _, err := e.buildApp(); err == nil {
+		t.Fatal("buildApp succeeded without the privileged configuration")
 	}
 }
 
@@ -1150,9 +1194,9 @@ func TestBackupNeedsRoot(t *testing.T) {
 func TestAFlagBeforeTheCommandLeavesTheCommandAlone(t *testing.T) {
 	// flag stops at the first argument that is not a flag, which is what lets a
 	// command keep its own flags.
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 
-	rest, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo", "status", "--json"})
+	rest, err := e.parseFlags([]string{"--feed-socket", "/tmp/tm-demo/feed.sock", "status", "--json"})
 
 	if err != nil {
 		t.Fatalf("parseFlags: %v", err)
@@ -1162,39 +1206,39 @@ func TestAFlagBeforeTheCommandLeavesTheCommandAlone(t *testing.T) {
 	}
 }
 
-func TestConfigDirReachesEveryCommandRatherThanJustOne(t *testing.T) {
+func TestAnOverrideReachesEveryCommandRatherThanJustOne(t *testing.T) {
 	// Applied once, around the loader. Applying it at each call site is how one
 	// of these ends up honoured by status and forgotten by doctor.
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 
-	if _, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo/conf"}); err != nil {
+	if _, err := e.parseFlags([]string{"--wg-socket", "/tmp/tm-demo/wireguard"}); err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
-	cfg, _, err := e.config()
+	priv, err := e.privileged()
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatalf("privileged: %v", err)
 	}
-	if cfg.ConfigDir != "/tmp/tm-demo/conf" {
-		t.Errorf("ConfigDir = %q, want the flag to have won", cfg.ConfigDir)
+	if priv.RunDir != "/tmp/tm-demo/wireguard" {
+		t.Errorf("RunDir = %q, want the flag to have won", priv.RunDir)
 	}
 }
 
 func TestTheFeedSocketCanBeMovedOffTheDefault(t *testing.T) {
 	// So a demo publishes somewhere the installed menu bar application is not
 	// listening, and cannot be mistaken for the real thing.
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 
 	if _, err := e.parseFlags([]string{"--feed-socket", "/tmp/tm-demo/feed.sock"}); err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
-	cfg, _, err := e.config()
+	priv, err := e.privileged()
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatalf("privileged: %v", err)
 	}
-	if cfg.FeedSocket != "/tmp/tm-demo/feed.sock" {
-		t.Errorf("FeedSocket = %q, want the flag to have won", cfg.FeedSocket)
+	if priv.FeedSocket != "/tmp/tm-demo/feed.sock" {
+		t.Errorf("FeedSocket = %q, want the flag to have won", priv.FeedSocket)
 	}
 }
 
@@ -1202,52 +1246,52 @@ func TestTheWireGuardDirectoryMovesTheInterfaceNamesToo(t *testing.T) {
 	// One flag for both, because that is how /var/run/wireguard is: the sockets
 	// and the "<name>.name" files sit side by side. Moving one without the
 	// other would resolve every tunnel against the real machine.
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 
 	if _, err := e.parseFlags([]string{"--wg-socket", "/tmp/tm-demo/wireguard"}); err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
-	cfg, _, err := e.config()
+	priv, err := e.privileged()
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatalf("privileged: %v", err)
 	}
-	if cfg.RunDir != "/tmp/tm-demo/wireguard" {
-		t.Errorf("RunDir = %q, want it to follow --wg-socket", cfg.RunDir)
+	if priv.RunDir != "/tmp/tm-demo/wireguard" {
+		t.Errorf("RunDir = %q, want it to follow --wg-socket", priv.RunDir)
 	}
 }
 
 func TestAFlagLeftUnsetChangesNothing(t *testing.T) {
 	// The overrides are applied unconditionally; an empty one must not blank
 	// the configured value.
-	e := testEnv(t, &fakeRunner{})
-	before, _, err := e.config()
+	e := demoEnv(t, &fakeRunner{})
+	before, err := e.privileged()
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatalf("privileged: %v", err)
 	}
-	dir, socket, runDir := before.ConfigDir, before.FeedSocket, before.RunDir
+	socket, runDir := before.FeedSocket, before.RunDir
 
 	if _, parseErr := e.parseFlags(nil); parseErr != nil {
 		t.Fatalf("parseFlags: %v", parseErr)
 	}
 
-	after, _, err := e.config()
+	after, err := e.privileged()
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatalf("privileged: %v", err)
 	}
-	if after.ConfigDir != dir || after.FeedSocket != socket || after.RunDir != runDir {
-		t.Errorf("config changed with no flags set: %+v", after)
+	if after.FeedSocket != socket || after.RunDir != runDir {
+		t.Errorf("the privileged settings changed with no flags set: %+v", after)
 	}
 }
 
 func TestAConfigurationThatCannotBeReadIsStillReportedThroughTheOverrides(t *testing.T) {
 	// The wrapper must pass the failure on rather than apply overrides to a nil
 	// configuration.
-	e := testEnv(t, &fakeRunner{})
+	e := demoEnv(t, &fakeRunner{})
 	boom := errors.New("unreadable config")
 	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
 
-	if _, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo"}); err != nil {
+	if _, err := e.parseFlags([]string{"--feed-socket", "/tmp/tm-demo/feed.sock"}); err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
 
@@ -1259,7 +1303,7 @@ func TestAConfigurationThatCannotBeReadIsStillReportedThroughTheOverrides(t *tes
 func TestAnotherConfigurationFileCanBeRead(t *testing.T) {
 	isolatedHome(t)
 	path := filepath.Join(t.TempDir(), "demo.yaml")
-	if err := os.WriteFile(path, []byte("config_dir: /tmp/tm-demo/conf\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("notify: false\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -1275,8 +1319,8 @@ func TestAnotherConfigurationFileCanBeRead(t *testing.T) {
 	if cfg.Path != path {
 		t.Errorf("Path = %q, want %q", cfg.Path, path)
 	}
-	if cfg.ConfigDir != "/tmp/tm-demo/conf" {
-		t.Errorf("ConfigDir = %q, want the file's own value", cfg.ConfigDir)
+	if cfg.Notify {
+		t.Error("Notify = true, want the file's own value")
 	}
 }
 
@@ -1369,12 +1413,146 @@ func TestHelpIsPrintedEvenWhenItLooksLikeAFlag(t *testing.T) {
 func TestDoctorSaysWhenItIsLookingAtASimulator(t *testing.T) {
 	// Every line below it would otherwise describe something that does not
 	// exist.
-	e := testEnv(t, &fakeRunner{})
-	e.euid = 0
+	e := demoEnv(t, &fakeRunner{})
 
 	_ = e.run([]string{"--wg-socket", "/tmp/tm-demo/wireguard", "--fake-ping", "doctor"})
 
 	if !strings.Contains(output(e), "simulated") {
 		t.Errorf("doctor did not say it was simulating:\n%s", output(e))
+	}
+}
+
+func TestEverySimulationFlagIsRefusedUnderRoot(t *testing.T) {
+	// Each of these names something root would then read, run, bind or unlink.
+	// Under sudo they are refused outright: what root touches is decided by
+	// /private/wireguard/config, not by whoever typed the command.
+	for _, args := range [][]string{
+		{"--config", "/tmp/anywhere/config.yaml"},
+		{"--config-dir", "/tmp/anywhere"},
+		{"--feed-socket", "/tmp/anywhere/feed.sock"},
+		{"--wg-socket", "/tmp/anywhere/wireguard"},
+		{"--wg-quick", "/tmp/anywhere/wg-quick"},
+		{"--fake-ping"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			e := testEnv(t, &fakeRunner{}) // euid 0
+
+			_, err := e.parseFlags(args)
+
+			if err == nil {
+				t.Fatalf("parseFlags(%v) was accepted under root", args)
+			}
+			if !strings.Contains(err.Error(), args[0]) {
+				t.Errorf("error %q does not name %s", err, args[0])
+			}
+			if !strings.Contains(err.Error(), "sudo") {
+				t.Errorf("error %q does not say what to do about it", err)
+			}
+		})
+	}
+}
+
+func TestTheConfigDirectoryFlagIsHonouredWithoutRoot(t *testing.T) {
+	// The simulator writes its .conf files where it likes and runs as nobody
+	// in particular. That is the whole reason these flags are safe there.
+	e := demoEnv(t, &fakeRunner{})
+
+	if _, err := e.parseFlags([]string{"--config-dir", "/tmp/tm-demo/conf"}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.ConfigDir != "/tmp/tm-demo/conf" {
+		t.Errorf("ConfigDir = %q, want the flag to have won", cfg.ConfigDir)
+	}
+}
+
+func TestTheConfigDirectoryIsTheFixedOneUnderRoot(t *testing.T) {
+	e := testEnv(t, &fakeRunner{}) // euid 0
+	if _, err := e.parseFlags(nil); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	// testEnv points it at a temporary directory, the way a test has to. What
+	// this asserts is that nothing on the command line moved it.
+	if cfg.ConfigDir == "/tmp/anywhere" {
+		t.Error("ConfigDir followed a flag under root")
+	}
+}
+
+// demoEnv is testEnv as a plain user, which is what a simulated run is. The
+// flags that move where the program looks are only honoured there.
+func demoEnv(t *testing.T, runner wg.Runner, live ...string) *env {
+	t.Helper()
+
+	e := testEnv(t, runner, live...)
+	e.euid = 501
+	return e
+}
+
+func TestARootRunReadsThePrivilegedFileAndNothingElse(t *testing.T) {
+	// The path is a constant. What this checks is that the constant is what the
+	// loader is pointed at: a run under sudo takes its dangerous settings from
+	// that file, and there is no flag, no environment variable and no user key
+	// that moves it.
+	if newEnv().privilegedPath != profile.PrivilegedPath {
+		t.Errorf("privilegedPath = %q, want %q", newEnv().privilegedPath, profile.PrivilegedPath)
+	}
+}
+
+func TestARootRunFailsWhenThePrivilegedFileCannotBeRead(t *testing.T) {
+	// Not defaults. A file that cannot be read must not become a set of
+	// built-in values, because that is a state an attacker can arrange by
+	// making the file unreadable.
+	e := testEnv(t, &fakeRunner{}) // euid 0
+	e.privileged = e.loadPrivileged
+	e.privilegedPath = filepath.Join(t.TempDir(), "tun-manager.yaml")
+
+	_, err := e.loadPrivileged()
+
+	if err == nil {
+		t.Fatal("loadPrivileged accepted a missing file, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "init-privileged") {
+		t.Errorf("error %q does not say how to create it", err)
+	}
+}
+
+func TestASimulatedRunTakesItsDangerousSettingsFromTheFlags(t *testing.T) {
+	// A simulated run is not root, so it cannot read the privileged file at
+	// all — and must not be made to try. The flags stand in for it, and they
+	// are refused the moment the run is root.
+	e := demoEnv(t, &fakeRunner{})
+	e.privileged = e.loadPrivileged
+	e.privilegedPath = filepath.Join(t.TempDir(), "absent.yaml")
+
+	if _, err := e.parseFlags([]string{
+		"--wg-quick", "/tmp/tm-demo/stub.sh",
+		"--wg-socket", "/tmp/tm-demo/wireguard",
+		"--feed-socket", "/tmp/tm-demo/feed.sock",
+	}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+
+	if priv.WgQuick != "/tmp/tm-demo/stub.sh" {
+		t.Errorf("WgQuick = %q, want the flag", priv.WgQuick)
+	}
+	if priv.RunDir != "/tmp/tm-demo/wireguard" {
+		t.Errorf("RunDir = %q, want the flag", priv.RunDir)
+	}
+	if priv.FeedSocket != "/tmp/tm-demo/feed.sock" {
+		t.Errorf("FeedSocket = %q, want the flag", priv.FeedSocket)
 	}
 }

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +58,7 @@ func RootNotNeeded() Option { return func(e *expectations) { e.rootNeeded = fals
 
 // Doctor inspects the environment and reports what would stop tun-manager from
 // working.
-func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string, opts ...Option) []Check {
+func Doctor(cfg *profile.Config, priv *profile.Privileged, u privdrop.User, euid int, version string, opts ...Option) []Check {
 	want := expectations{rootNeeded: true}
 	for _, opt := range opts {
 		opt(&want)
@@ -65,9 +67,9 @@ func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string, opts
 	checks := []Check{
 		{Name: "version", Status: Pass, Detail: version},
 		checkRoot(euid, want.rootNeeded),
-		checkWgQuick(cfg.WgQuick),
+		checkWgQuick(priv.WgQuick),
 		checkConfigDir(cfg.ConfigDir),
-		checkRunDir(cfg.RunDir),
+		checkRunDir(priv.RunDir),
 		checkConfigFile(cfg),
 	}
 	// Skipped for a simulated run. Its config_dir is a directory of fixtures in
@@ -80,7 +82,7 @@ func Doctor(cfg *profile.Config, u privdrop.User, euid int, version string, opts
 	return append(checks, []Check{
 		checkGroups(cfg),
 		checkNotifications(u),
-		checkFeed(cfg, u),
+		checkFeed(priv, u),
 	}...)
 }
 
@@ -109,6 +111,32 @@ func Simulation(wgSocket string, fakePing bool) (Check, bool) {
 		Status: Warn,
 		Detail: strings.Join(what, "; "),
 	}, true
+}
+
+// PrivilegedFile reports whether the root-only half of the configuration could
+// be read, and why not when it could not.
+//
+// Separate from Doctor, like Simulation, because it is the one check whose
+// failure means every line below it describes built-in defaults rather than
+// this machine — and because doctor is the one command that must still run
+// when it fails. Everything else refuses to start.
+func PrivilegedFile(path string, err error, euid int) Check {
+	const name = "privileged config"
+
+	switch {
+	case err == nil:
+		return Check{Name: name, Status: Pass, Detail: path + " 0600 root:root"}
+	case euid != 0 && errors.Is(err, fs.ErrPermission):
+		// The file is 0600 and root's, so a plain user cannot read it. That is
+		// the design working, not a fault, and reporting it as a failure would
+		// teach people to chmod it.
+		return Check{
+			Name: name, Status: Warn,
+			Detail: path + " is readable by root only, as it should be: `sudo tun-manager doctor` to check it",
+		}
+	default:
+		return Check{Name: name, Status: Fail, Detail: err.Error()}
+	}
 }
 
 func checkRoot(euid int, needed bool) Check {
@@ -225,15 +253,15 @@ func checkNotifications(u privdrop.User) Check {
 
 // checkFeed reports whether the status feed can bind, and who would be allowed
 // to read it. It is the first thing to look at when the menu bar shows nothing.
-func checkFeed(cfg *profile.Config, u privdrop.User) Check {
-	if !cfg.Feed {
+func checkFeed(priv *profile.Privileged, u privdrop.User) Check {
+	if !priv.Feed {
 		return Check{
 			Name: "status feed", Status: Warn,
 			Detail: "disabled (feed: false)",
 		}
 	}
 
-	dir := filepath.Dir(cfg.FeedSocket)
+	dir := filepath.Dir(priv.FeedSocket)
 	info, err := os.Stat(dir)
 	if err != nil {
 		return Check{Name: "status feed", Status: Fail, Detail: fmt.Sprintf("%s: %v", dir, err)}
@@ -248,7 +276,7 @@ func checkFeed(cfg *profile.Config, u privdrop.User) Check {
 	}
 	return Check{
 		Name: "status feed", Status: Pass,
-		Detail: fmt.Sprintf("%s, mode %o, readable by %s", cfg.FeedSocket, feed.SocketMode, owner),
+		Detail: fmt.Sprintf("%s, mode %o, readable by %s", priv.FeedSocket, feed.SocketMode, owner),
 	}
 }
 

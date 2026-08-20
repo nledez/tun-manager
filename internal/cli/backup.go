@@ -29,12 +29,13 @@ type member struct {
 	info   os.FileInfo
 }
 
-// Backup writes a tar.gz of the configuration and every tunnel .conf beside the
-// configuration directory, and reports where it went.
+// Backup writes a tar.gz of both configurations and every tunnel .conf beside
+// the configuration directory, and reports where it went.
 //
-// The archive holds private keys. It is created 0600 and stays root's.
-func Backup(w io.Writer, cfg *profile.Config, now time.Time) (string, error) {
-	members, err := gather(cfg)
+// The archive holds every private key on the machine: the tunnels' own, and the
+// key the feed signs with. It is created 0600 and stays root's.
+func Backup(w io.Writer, cfg *profile.Config, priv *profile.Privileged, now time.Time) (string, error) {
+	members, err := gather(cfg, priv)
 	if err != nil {
 		return "", err
 	}
@@ -57,6 +58,10 @@ func Backup(w io.Writer, cfg *profile.Config, now time.Time) (string, error) {
 	for _, m := range members {
 		report.WriteString("  " + m.name + "\n") //nolint:errcheck // likewise
 	}
+	// Said out loud, because the next thing somebody does with an archive is
+	// copy it somewhere convenient.
+	report.WriteString("\nIt holds the tunnels' private keys and the feed signing key. " + //nolint:errcheck // likewise
+		"It is 0600 and root's; keep it that way.\n")
 	if _, err := io.WriteString(w, report.String()); err != nil {
 		return "", err
 	}
@@ -64,11 +69,25 @@ func Backup(w io.Writer, cfg *profile.Config, now time.Time) (string, error) {
 }
 
 // gather lists what goes in, in the order it goes in.
-func gather(cfg *profile.Config) ([]member, error) {
+//
+// The privileged file is named rather than globbed, and the glob beside it asks
+// for *.conf: it sits in the same directory, and a glob that grew to *.yaml
+// would archive it twice - two copies of a signing key, in a file nobody
+// re-reads.
+func gather(cfg *profile.Config, priv *profile.Privileged) ([]member, error) {
 	var members []member
 
 	if info, err := os.Stat(cfg.Path); err == nil && info.Mode().IsRegular() {
 		members = append(members, member{cfg.Path, filepath.Base(cfg.Path), info})
+	}
+	if info, err := os.Stat(priv.Path); err == nil && info.Mode().IsRegular() {
+		// Under config/, where it lives, so a restore puts it back beside the
+		// .conf files rather than beside the user's own configuration.
+		members = append(members, member{
+			priv.Path,
+			filepath.Join("config", filepath.Base(priv.Path)),
+			info,
+		})
 	}
 
 	confs, err := filepath.Glob(filepath.Join(cfg.ConfigDir, "*.conf"))

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +12,7 @@ import (
 	"ledez.net/tun-manager/internal/profile"
 )
 
-func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
+func healthyEnv(t *testing.T) (*profile.Config, *profile.Privileged, privdrop.User) {
 	t.Helper()
 
 	confDir := t.TempDir()
@@ -29,14 +31,16 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 
 	cfg := profile.Default()
 	cfg.ConfigDir = confDir
-	cfg.WgQuick = wgQuick
+	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
+
+	priv := profile.DefaultPrivileged()
+	priv.WgQuick = wgQuick
 	// Pinned to a temporary directory: leaving the default would make these
 	// checks depend on whether WireGuard happens to be running on the machine.
-	cfg.RunDir = t.TempDir()
-	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
+	priv.RunDir = t.TempDir()
 	// Same reasoning: the default socket lives under /var/run, and whether the
 	// feed check passes must not depend on that directory happening to exist.
-	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
+	priv.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
 
 	// A fixture is owned by whoever runs the suite, and the permission checks
 	// want root on the WireGuard side and the pre-sudo user on the other. Making
@@ -44,7 +48,7 @@ func healthyEnv(t *testing.T) (*profile.Config, privdrop.User) {
 	// it only on a machine nobody develops on.
 	ownedPerPath(t, map[string]int{filepath.Dir(cfg.Path): 1000}, 0)
 
-	return cfg, privdrop.User{Username: "operator", HomeDir: "/home/operator", UID: 1000, Demotable: true}
+	return cfg, priv, privdrop.User{Username: "operator", HomeDir: "/home/operator", UID: 1000, Demotable: true}
 }
 
 func findCheck(checks []Check, substr string) (Check, bool) {
@@ -57,9 +61,9 @@ func findCheck(checks []Check, substr string) (Check, bool) {
 }
 
 func TestDoctorPassesOnAHealthySetup(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	for _, c := range checks {
 		if c.Status == Fail {
@@ -72,9 +76,9 @@ func TestDoctorPassesOnAHealthySetup(t *testing.T) {
 }
 
 func TestDoctorFailsWhenNotRoot(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 
-	checks := Doctor(cfg, u, 501, "test")
+	checks := Doctor(cfg, priv, u, 501, "test")
 
 	c, ok := findCheck(checks, "root")
 	if !ok {
@@ -89,10 +93,10 @@ func TestDoctorFailsWhenNotRoot(t *testing.T) {
 }
 
 func TestDoctorFailsOnMissingWgQuick(t *testing.T) {
-	cfg, u := healthyEnv(t)
-	cfg.WgQuick = filepath.Join(t.TempDir(), "absent")
+	cfg, priv, u := healthyEnv(t)
+	priv.WgQuick = filepath.Join(t.TempDir(), "absent")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "wg-quick")
 	if !ok {
@@ -104,12 +108,12 @@ func TestDoctorFailsOnMissingWgQuick(t *testing.T) {
 }
 
 func TestDoctorFailsOnAWgQuickThatIsNotExecutable(t *testing.T) {
-	cfg, u := healthyEnv(t)
-	if err := os.Chmod(cfg.WgQuick, 0o644); err != nil {
+	cfg, priv, u := healthyEnv(t)
+	if err := os.Chmod(priv.WgQuick, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, _ := findCheck(checks, "wg-quick")
 	if c.Status != Fail {
@@ -118,10 +122,10 @@ func TestDoctorFailsOnAWgQuickThatIsNotExecutable(t *testing.T) {
 }
 
 func TestDoctorFailsOnAConfigDirWithoutTunnels(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.ConfigDir = t.TempDir()
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "config dir")
 	if !ok {
@@ -133,10 +137,10 @@ func TestDoctorFailsOnAConfigDirWithoutTunnels(t *testing.T) {
 }
 
 func TestDoctorWarnsWhenNotificationsCannotReachTheSession(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	u.Demotable = false
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "notification")
 	if !ok {
@@ -151,10 +155,10 @@ func TestDoctorWarnsWhenNotificationsCannotReachTheSession(t *testing.T) {
 }
 
 func TestDoctorReportsWhichConfigFileIsInUse(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.IsDefault = true
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "configuration")
 	if !ok {
@@ -188,10 +192,10 @@ func TestWriteDoctorRendersEveryCheck(t *testing.T) {
 }
 
 func TestDoctorReportsTheWireGuardRunDirectory(t *testing.T) {
-	cfg, u := healthyEnv(t)
-	cfg.RunDir = t.TempDir()
+	cfg, priv, u := healthyEnv(t)
+	priv.RunDir = t.TempDir()
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "run dir")
 	if !ok {
@@ -204,10 +208,10 @@ func TestDoctorReportsTheWireGuardRunDirectory(t *testing.T) {
 
 func TestDoctorWarnsWhenTheRunDirectoryIsUnreadable(t *testing.T) {
 	// Without it, tunnels sharing a peer public key cannot be told apart.
-	cfg, u := healthyEnv(t)
-	cfg.RunDir = filepath.Join(t.TempDir(), "absent")
+	cfg, priv, u := healthyEnv(t)
+	priv.RunDir = filepath.Join(t.TempDir(), "absent")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, _ := findCheck(checks, "run dir")
 	if c.Status != Warn {
@@ -220,11 +224,11 @@ func TestDoctorWarnsWhenTheRunDirectoryIsUnreadable(t *testing.T) {
 
 func TestDoctorWarnsWhenNoGroupIsConfigured(t *testing.T) {
 	// Without groups, `down --all` and the s/n/e keys have nothing to act on.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.Groups = map[string][]string{}
 	cfg.Overrides = nil
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "groups")
 	if !ok {
@@ -239,10 +243,10 @@ func TestDoctorWarnsWhenNoGroupIsConfigured(t *testing.T) {
 }
 
 func TestDoctorPassesWhenGroupsAreConfigured(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.Groups = map[string][]string{"needed": {"alpha"}}
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "groups")
 	if !ok {
@@ -262,10 +266,10 @@ func TestStatusStringsAreStable(t *testing.T) {
 }
 
 func TestDoctorFailsOnAConfigDirThatIsNotThere(t *testing.T) {
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.ConfigDir = filepath.Join(t.TempDir(), "absent")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, _ := findCheck(checks, "config dir")
 	if c.Status != Fail {
@@ -283,14 +287,14 @@ func TestADirectoryItCannotReadIsNotReportedAsAnEmptyOne(t *testing.T) {
 	// A regular file where the directory belongs, rather than a chmod: the
 	// suite is run under sudo often enough, and root can read a 0000 directory,
 	// so a permission test would pass by not testing anything.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	notADirectory := filepath.Join(t.TempDir(), "config")
 	if err := os.WriteFile(notADirectory, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	cfg.ConfigDir = notADirectory
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, _ := findCheck(checks, "config dir")
 	if c.Status != Fail {
@@ -307,10 +311,10 @@ func TestADirectoryItCannotReadIsNotReportedAsAnEmptyOne(t *testing.T) {
 func TestADirectoryThatHoldsNoTunnelSaysSo(t *testing.T) {
 	// The other half of the pair above: this one really is empty, and must not
 	// borrow the wording of a failure to look.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	cfg.ConfigDir = t.TempDir()
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	if c, _ := findCheck(checks, "config dir"); !strings.Contains(c.Detail, "no *.conf") {
 		t.Errorf("detail = %q, want it to say the directory holds none", c.Detail)
@@ -322,7 +326,7 @@ func TestADirectoryNamedLikeAPatternIsStillJustADirectory(t *testing.T) {
 	// was a malformed pattern rather than a name; it is now a path like any
 	// other, and this pins that a name nobody expected does not take a
 	// different route through the check.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	dir := filepath.Join(t.TempDir(), "wireguard[")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -332,7 +336,7 @@ func TestADirectoryNamedLikeAPatternIsStillJustADirectory(t *testing.T) {
 	}
 	cfg.ConfigDir = dir
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	if c, _ := findCheck(checks, "config dir"); c.Status != Pass {
 		t.Errorf("status = %v (%s), want the tunnel found", c.Status, c.Detail)
@@ -341,14 +345,14 @@ func TestADirectoryNamedLikeAPatternIsStillJustADirectory(t *testing.T) {
 
 func TestADirectoryEndingInConfIsNotCountedAsATunnel(t *testing.T) {
 	// The count is what "5 tunnel(s)" means, and a directory is not one.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "spare.conf"), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	cfg.ConfigDir = dir
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	if c, _ := findCheck(checks, "config dir"); c.Status != Fail {
 		t.Errorf("status = %v (%s), want a directory not to count", c.Status, c.Detail)
@@ -357,11 +361,11 @@ func TestADirectoryEndingInConfIsNotCountedAsATunnel(t *testing.T) {
 
 func TestDoctorReportsWhereTheFeedWouldBind(t *testing.T) {
 	// It is the first thing to look at when the menu bar shows nothing.
-	cfg, u := healthyEnv(t)
-	cfg.Feed = true
-	cfg.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
+	cfg, priv, u := healthyEnv(t)
+	priv.Feed = true
+	priv.FeedSocket = filepath.Join(t.TempDir(), "f.sock")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "status feed")
 	if !ok {
@@ -376,10 +380,10 @@ func TestDoctorReportsWhereTheFeedWouldBind(t *testing.T) {
 }
 
 func TestDoctorSaysSoWhenTheFeedIsOff(t *testing.T) {
-	cfg, u := healthyEnv(t)
-	cfg.Feed = false
+	cfg, priv, u := healthyEnv(t)
+	priv.Feed = false
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "status feed")
 	if !ok {
@@ -391,11 +395,11 @@ func TestDoctorSaysSoWhenTheFeedIsOff(t *testing.T) {
 }
 
 func TestDoctorFailsWhenTheFeedHasNowhereToBind(t *testing.T) {
-	cfg, u := healthyEnv(t)
-	cfg.Feed = true
-	cfg.FeedSocket = filepath.Join(t.TempDir(), "no-such-dir", "f.sock")
+	cfg, priv, u := healthyEnv(t)
+	priv.Feed = true
+	priv.FeedSocket = filepath.Join(t.TempDir(), "no-such-dir", "f.sock")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "status feed")
 	if !ok {
@@ -409,15 +413,15 @@ func TestDoctorFailsWhenTheFeedHasNowhereToBind(t *testing.T) {
 func TestDoctorFailsWhenTheFeedSocketsDirectoryIsAFile(t *testing.T) {
 	// filepath.Dir of the configured socket resolves to something that stat
 	// succeeds on but that cannot hold a socket: a plain file, not a directory.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 	notADir := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	cfg.Feed = true
-	cfg.FeedSocket = filepath.Join(notADir, "f.sock")
+	priv.Feed = true
+	priv.FeedSocket = filepath.Join(notADir, "f.sock")
 
-	checks := Doctor(cfg, u, 0, "test")
+	checks := Doctor(cfg, priv, u, 0, "test")
 
 	c, ok := findCheck(checks, "status feed")
 	if !ok {
@@ -476,9 +480,9 @@ func TestRootIsNotRequiredOfARunThatReadsASimulator(t *testing.T) {
 	// Nothing a simulated run touches is root-only, so asking for a password
 	// would be asking for one to read /tmp - and a demo whose own diagnostic
 	// exits non-zero is one nobody believes the rest of.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 
-	checks := Doctor(cfg, u, 501, "test", RootNotNeeded())
+	checks := Doctor(cfg, priv, u, 501, "test", RootNotNeeded())
 
 	root, ok := findCheck(checks, "root")
 	if !ok {
@@ -497,12 +501,50 @@ func TestRootIsNotRequiredOfARunThatReadsASimulator(t *testing.T) {
 
 func TestRootIsStillRequiredOfAnOrdinaryRun(t *testing.T) {
 	// The flag is the only thing that lifts it.
-	cfg, u := healthyEnv(t)
+	cfg, priv, u := healthyEnv(t)
 
-	checks := Doctor(cfg, u, 501, "test")
+	checks := Doctor(cfg, priv, u, 501, "test")
 
 	root, _ := findCheck(checks, "root")
 	if root.Status != Fail {
 		t.Errorf("status = %v, want a failure without the option", root.Status)
+	}
+}
+
+func TestThePrivilegedFileIsReportedAsReadWhenItWas(t *testing.T) {
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", nil, 0)
+
+	if check.Status != Pass {
+		t.Errorf("status = %v, want Pass", check.Status)
+	}
+	if !strings.Contains(check.Detail, "/private/wireguard/config/tun-manager.yaml") {
+		t.Errorf("detail %q does not name the file", check.Detail)
+	}
+}
+
+func TestAPrivilegedFileAPlainUserCannotReadIsOnlyAWarning(t *testing.T) {
+	// It is 0600 and root's. A plain user being unable to read it is the design
+	// working, and a FAIL there would teach people to chmod it.
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", fs.ErrPermission, 501)
+
+	if check.Status != Warn {
+		t.Errorf("status = %v, want Warn", check.Status)
+	}
+	if !strings.Contains(check.Detail, "sudo tun-manager doctor") {
+		t.Errorf("detail %q does not say how to check it", check.Detail)
+	}
+}
+
+func TestAPrivilegedFileRootCannotReadIsAFailure(t *testing.T) {
+	// Root can read anything it is allowed to read. If it cannot, the file is
+	// missing, a symbolic link, or owned by somebody else - and the reason has
+	// to reach the report rather than be softened into a warning.
+	check := PrivilegedFile("/private/wireguard/config/tun-manager.yaml", errors.New("is a symbolic link"), 0)
+
+	if check.Status != Fail {
+		t.Errorf("status = %v, want Fail", check.Status)
+	}
+	if !strings.Contains(check.Detail, "symbolic link") {
+		t.Errorf("detail %q loses the reason", check.Detail)
 	}
 }
