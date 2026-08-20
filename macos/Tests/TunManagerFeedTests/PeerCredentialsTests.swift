@@ -9,18 +9,22 @@ import Testing
 /// libdispatch's own assertion about a descriptor going away under an active
 /// channel. A property of the harness, not of the program - in use there is one
 /// connection at a time, opened and closed by the supervisor on the main actor.
+private let mine: UInt32 = 501
+private let root = PeerPolicy(requiresRoot: true, me: mine)
+private let demo = PeerPolicy(requiresRoot: false, me: mine)
+private let somebodyElse: UInt32 = 502
+
 extension RealSockets {
 @Suite struct Credentials {
 
-private let root = PeerPolicy(requiresRoot: true)
-private let demo = PeerPolicy(requiresRoot: false)
 
 @Test func rootIsTheOnlyPeerThisApplicationTalksTo() throws {
     // tun-manager runs as root. Anything else answering on that socket is
-    // something else, whatever it says about itself afterwards.
+    // something else, whatever it says about itself afterwards - including
+    // something running as this very user.
     try root.check(peer: 0)
 
-    #expect(throws: PublisherNotRoot(uid: 501, found: .peer)) { try root.check(peer: 501) }
+    #expect(throws: PublisherNotRoot(uid: mine, found: .peer)) { try root.check(peer: mine) }
 }
 
 @Test func aCredentialThatCannotBeReadIsARefusal() {
@@ -34,9 +38,18 @@ private let demo = PeerPolicy(requiresRoot: false)
     // directory replaces.
     try root.check(socketOwner: 0)
 
-    #expect(throws: PublisherNotRoot(uid: 501, found: .socketFile)) {
-        try root.check(socketOwner: 501)
+    #expect(throws: PublisherNotRoot(uid: somebodyElse, found: .socketFile)) {
+        try root.check(socketOwner: somebodyElse)
     }
+}
+
+@Test func theSocketBelongingToThisUserIsWhatARealInstallationLooksLike() throws {
+    // tun-manager binds it as root and then hands it over: chowned to whoever
+    // ran `sudo tun-manager`, mode 0600. That is the only reason an application
+    // running as that user can open it at all, and a rule demanding root here
+    // refused every real installation while letting no attack through - nobody
+    // else can own that file either way.
+    try root.check(socketOwner: mine)
 }
 
 @Test func noSocketAtAllIsNotSomebodyElsesSocket() throws {
@@ -50,9 +63,9 @@ private let demo = PeerPolicy(requiresRoot: false)
     // It can reach nothing this user could not reach anyway, which is what
     // makes it safe to run. Requiring root there would mean the demo could only
     // be run in the one way it must never be run.
-    try demo.check(peer: 501)
+    try demo.check(peer: mine)
     try demo.check(peer: nil)
-    try demo.check(socketOwner: 501)
+    try demo.check(socketOwner: somebodyElse)
 }
 
 @Test func onlyTheFlagMakesADemo() {
@@ -86,9 +99,9 @@ private let demo = PeerPolicy(requiresRoot: false)
     defer { publisher.stop() }
 
     let transport = UnixSocketTransport(
-        path: publisher.path, policy: root, peer: { _ in 501 }, owner: { _ in 0 })
+        path: publisher.path, policy: root, peer: { _ in mine }, owner: { _ in 0 })
 
-    await #expect(throws: PublisherNotRoot(uid: 501, found: .peer)) {
+    await #expect(throws: PublisherNotRoot(uid: mine, found: .peer)) {
         _ = try await transport.connect()
     }
 }
@@ -109,9 +122,10 @@ private let demo = PeerPolicy(requiresRoot: false)
     // whoever is there. There is no publisher in this test at all: the refusal
     // has to happen without one.
     let transport = UnixSocketTransport(
-        path: "/tmp/nothing-is-here.sock", policy: root, peer: { _ in 0 }, owner: { _ in 501 })
+        path: "/tmp/nothing-is-here.sock", policy: root, peer: { _ in 0 },
+        owner: { _ in somebodyElse })
 
-    await #expect(throws: PublisherNotRoot(uid: 501, found: .socketFile)) {
+    await #expect(throws: PublisherNotRoot(uid: somebodyElse, found: .socketFile)) {
         _ = try await transport.connect()
     }
 }

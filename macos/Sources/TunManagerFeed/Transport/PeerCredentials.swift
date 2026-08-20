@@ -52,8 +52,13 @@ public struct PeerPolicy: Sendable, Equatable {
     /// reach anyway.
     public let requiresRoot: Bool
 
-    public init(requiresRoot: Bool) {
+    /// Who this application is running as. The socket file is expected to
+    /// belong to root or to them, and to nobody else.
+    public let me: UInt32
+
+    public init(requiresRoot: Bool, me: UInt32 = UInt32(getuid())) {
         self.requiresRoot = requiresRoot
+        self.me = me
     }
 
     /// The rule for a socket the user named on the command line, versus the one
@@ -80,6 +85,13 @@ public struct PeerPolicy: Sendable, Equatable {
     /// directory replaces. A publisher that binds a socket where root's used to
     /// be is caught here before a single byte is read.
     ///
+    /// Root **or this user**, and that is not a weakening: it is what
+    /// tun-manager does. The socket is bound by root and then handed to
+    /// whoever ran `sudo tun-manager` — chowned to them, mode 0600 — which is
+    /// the only reason an application running as that user can open it at all.
+    /// Requiring root here refused every real installation while letting no
+    /// attack through, because nobody else can own that file either way.
+    ///
     /// A file that could not be looked at is *not* refused here, and that is
     /// the one place these two rules differ. There being no file is the normal
     /// state of this machine — there is no daemon — and connect(2) is about to
@@ -89,7 +101,7 @@ public struct PeerPolicy: Sendable, Equatable {
     /// answers still has to be root, and that check does refuse silence.
     public func check(socketOwner uid: UInt32?) throws {
         guard requiresRoot, let uid else { return }
-        guard uid == 0 else { throw PublisherNotRoot(uid: uid, found: .socketFile) }
+        guard uid == 0 || uid == me else { throw PublisherNotRoot(uid: uid, found: .socketFile) }
     }
 }
 

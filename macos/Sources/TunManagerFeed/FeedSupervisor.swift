@@ -179,7 +179,7 @@ public final class FeedSupervisor {
                 return
             } catch let refusal as PublisherNotRoot {
                 guard self.serving(mine) else { return }
-                self.dispatch(.publisherNotRoot(uid: refusal.uid))
+                self.dispatch(.publisherNotRoot(uid: refusal.uid, found: refusal.found))
                 return
             } catch is CancellationError {
                 return

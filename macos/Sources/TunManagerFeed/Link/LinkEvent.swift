@@ -6,7 +6,7 @@ public enum LinkEvent: Sendable, Equatable {
     /// The socket was reachable and whoever is on it is not root. A refusal
     /// made by this program rather than by the kernel, which is why it is not a
     /// connectFailed with an errno in it.
-    case publisherNotRoot(uid: UInt32?)
+    case publisherNotRoot(uid: UInt32?, found: PublisherNotRoot.Found)
     case message(FeedMessage)
     /// A clean end of stream.
     case endOfStream

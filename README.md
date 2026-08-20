@@ -275,10 +275,14 @@ connected to is the thing on your machine.
 **And it checks who is answering.** After a connect that succeeded, the
 application asks the kernel for the peer's credentials — `LOCAL_PEERCRED` — and
 refuses anything that is not root, before a line is read. It also refuses a
-socket file root does not own, which is the same question asked of the name
-rather than of the process: a socket somebody else bound where root's used to be
-fails the first check, and a socket root bound that somebody else now answers on
-fails the second. A credential that cannot be read is a refusal too. The one
+socket file that belongs to neither root nor you, which is the same question
+asked of the name rather than of the process: a socket somebody else bound where
+tun-manager's used to be fails that check, and a socket tun-manager bound that
+somebody else now answers on fails the credentials one. Not root alone, because
+the real socket is not root's for long — `tun-manager` binds it and then hands it
+to whoever ran `sudo tun-manager`, 0600, which is what lets an application
+running as that user open it at all. A credential that cannot be read is a
+refusal too. The one
 exception is a publisher named with `--socket`, which is a demo and is not root
 — that is exactly why it is safe, and the menu says so for as long as it is
 connected.

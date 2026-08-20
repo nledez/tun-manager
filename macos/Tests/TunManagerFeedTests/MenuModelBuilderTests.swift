@@ -227,17 +227,27 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
     #expect(machine.handle(.userAskedToRetry).contains(.connect))
 }
 
-@Test func somethingOnThatSocketThatIsNotRootIsNamedAsSuch() {
+@Test func somethingAnsweringOnThatSocketThatIsNotRootIsNamedAsSuch() {
     // Not "cannot reach tun-manager": it was reached. What answered is not a
     // program running as root, so it is not tun-manager whatever else it is.
-    let model = build(.retrying(because: .notRoot(uid: 501)), nil)
+    let model = build(.retrying(because: .notRoot(uid: 501, found: .peer)), nil)
 
     #expect(model.headline.contains("uid 501"))
-    #expect(model.headline.contains("root"))
+    #expect(model.headline.contains("answering"))
+}
+
+@Test func aFileAtThatPathThatIsNobodysBusinessGetsADifferentSentence() {
+    // A different check with a different remedy: this one is about the name,
+    // and the socket a real installation leaves there belongs to root or to
+    // the person running the application.
+    let model = build(.retrying(because: .notRoot(uid: 502, found: .socketFile)), nil)
+
+    #expect(model.headline.contains("belongs to uid 502"))
+    #expect(model.headline.contains("hands it to you"))
 }
 
 @Test func aPeerThatWouldNotSayWhoItIsGetsItsOwnSentence() {
-    let model = build(.retrying(because: .notRoot(uid: nil)), nil)
+    let model = build(.retrying(because: .notRoot(uid: nil, found: .peer)), nil)
 
     #expect(model.headline.contains("will not say"))
 }

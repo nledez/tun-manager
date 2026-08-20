@@ -15,9 +15,11 @@ public enum Disconnection: Sendable, Equatable {
     /// End of stream after a live connection. A crash, or this client was
     /// dropped for falling behind. Indistinguishable from here.
     case lost
-    /// Something that is not root is on that socket, or bound it. Nothing was
-    /// read from it: this is decided before the first line.
-    case notRoot(uid: UInt32?)
+    /// Something that is not root is answering on that socket, or a file that
+    /// is neither root's nor this user's is at that path. Nothing was read from
+    /// it: this is decided before the first line. `found` says which of the two
+    /// it was, because they are different news and have different remedies.
+    case notRoot(uid: UInt32?, found: PublisherNotRoot.Found)
     case failed(Int32)
 }
 

@@ -93,14 +93,22 @@ public enum MenuModelBuilder {
             return "tun-manager is shutting down"
         case .lost:
             return "Lost the connection to tun-manager"
-        case .notRoot(let uid):
+        case .notRoot(let uid, let found):
             // Named as what it is rather than as a connection problem: the
-            // socket answered, and what is behind it is not a program running
-            // as root, so it is not tun-manager whatever else it may be.
-            guard let uid else {
-                return "Something is on that socket and will not say who it is running as"
+            // socket was reached. Which of the two checks refused it matters,
+            // because they are not the same news - one is about the process
+            // answering, the other about the file at that path.
+            switch found {
+            case .peer:
+                guard let uid else {
+                    return "Something is on that socket and will not say who it is running as"
+                }
+                return "Something running as uid \(uid) is answering on that socket — "
+                    + "tun-manager runs as root"
+            case .socketFile:
+                return "That socket belongs to uid \(uid.map(String.init) ?? "somebody else") — "
+                    + "tun-manager keeps it as root or hands it to you"
             }
-            return "Something running as uid \(uid) is on that socket — tun-manager runs as root"
         case .failed(let code):
             return "Cannot reach tun-manager (error \(code))"
         }
