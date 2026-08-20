@@ -292,3 +292,57 @@ private final class RecordingKeys: PinnedKeys, @unchecked Sendable {
     func pin(_ key: String, forSocket path: String) { keys[path] = key }
     func forget(socket path: String) { keys[path] = nil }
 }
+
+@MainActor
+@Test func trustingTheNewKeyForgetsTheOldOneAndPinsWhatAnswersNext() async {
+    // What the panel's one way out does. The rotation was real, so the key on
+    // that socket becomes the key this application knows it by — and it is
+    // written down, or the same panel appears again on the next connection.
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"]),
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"]),
+    ])
+    let keys = RecordingKeys()
+    keys.pin("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", forSocket: Proven.socket)
+    let supervisor = FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: keys,
+        nonces: FixedNonce(Proven.nonce))
+
+    supervisor.start()
+    await eventually("the refusal") {
+        if case .unproven = supervisor.state { return true } else { return false }
+    }
+
+    supervisor.forgetPinnedKey()
+
+    await eventually("the link to come up on the new key") { supervisor.state.isLive }
+    #expect(keys.pinned(forSocket: Proven.socket) == Proven.key)
+}
+
+@MainActor
+@Test func forgettingThePinnedKeyDoesNotTrustTheKeyThatWasOffered() async {
+    // Forgetting is not accepting: the next publisher still has to sign the
+    // challenge before anything it says is shown. A relay that got somebody to
+    // click the button would otherwise be through.
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"]),
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.wrongAuth + "\n"]),
+    ])
+    let keys = RecordingKeys()
+    keys.pin("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", forSocket: Proven.socket)
+    let supervisor = FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: keys,
+        nonces: FixedNonce(Proven.nonce))
+
+    supervisor.start()
+    await eventually("the refusal") {
+        if case .unproven = supervisor.state { return true } else { return false }
+    }
+    supervisor.forgetPinnedKey()
+
+    await eventually("the second refusal") {
+        if case .unproven = supervisor.state, transport.attempts == 2 { return true }
+        return false
+    }
+    #expect(keys.pinned(forSocket: Proven.socket) == nil)
+}

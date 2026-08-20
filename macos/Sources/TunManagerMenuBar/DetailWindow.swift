@@ -39,6 +39,11 @@ final class DetailModel: ObservableObject {
     @Published var rates: [Rate] = []
     @Published var peakDown: Double = 0
     @Published var peakUp: Double = 0
+    /// Set while the publisher on that socket has not proved which one it is.
+    /// The table is emptied at the same time: what it held came from a session
+    /// that was proved, and leaving it up under whatever is there now would
+    /// lend it a list of tunnels it never sent.
+    @Published var refusal: PublisherWarning?
 
     /// One history per tunnel, kept for as long as the window is open. The
     /// subscriptions stay open too, so switching away and back shows a
@@ -169,6 +174,16 @@ final class DetailWindowController: NSObject, NSWindowDelegate {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The publisher stopped being one this application will repeat. Takes the
+    /// table down with it and says why, in the place the table was.
+    func refuse(_ warning: PublisherWarning?) {
+        model.refusal = warning
+        if warning != nil {
+            model.tunnels = []
+            model.forgetHistory()
+        }
     }
 
     func update(tunnels: [TunnelStatus]) {

@@ -41,6 +41,8 @@ these files:
 | how a byte count and an age are written | `Formatting` |
 | when to reconnect, and how soon | `LinkMachine`, `ReconnectPolicy` |
 | what a line on the wire means | `FeedDecoder` |
+| what to say about a publisher that did not prove itself | `PublisherWarning` |
+| whether that panel is offered, and when it opens by itself | `PublisherWarning.of`, `WarningPrompt` |
 
 The rule that keeps it that way: **an `if` in the AppKit layer is a bug of
 placement.** If one appears, the decision belongs in `TunManagerFeed`, where a

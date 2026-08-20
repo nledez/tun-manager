@@ -186,7 +186,15 @@ private struct OverviewPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.rows.isEmpty {
+            if let refusal = model.refusal {
+                // Not "No tunnels": there may well be tunnels, and this
+                // application has decided not to believe what it was told about
+                // them. Saying the empty thing instead would be reporting the
+                // refusal as an absence.
+                ContentUnavailableView(
+                    refusal.title, systemImage: "exclamationmark.shield.fill",
+                    description: Text(refusal.summary))
+            } else if model.rows.isEmpty {
                 ContentUnavailableView(
                     "No tunnels", systemImage: "shield",
                     description: Text("tun-manager has not reported any."))

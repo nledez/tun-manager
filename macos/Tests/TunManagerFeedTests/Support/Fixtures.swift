@@ -18,6 +18,12 @@ enum Fixtures {
     static let auth =
         #"{"type":"auth","nonce":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","signature":"N0zb6kCOKreEzkejmsMp94YoDsz4nHcX40btcVOQFbma1sxBjNWWszuHJfz8dyAWTGDNxSi2uHjqComOT0HaDA=="}"#
 
+    /// The same answer with one bit of the signature flipped: a publisher that
+    /// echoes the nonce back and cannot sign it. Ed25519 has no near misses, so
+    /// this is what everything short of the real key looks like.
+    static let wrongAuth =
+        #"{"type":"auth","nonce":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","signature":"Nkzb6kCOKreEzkejmsMp94YoDsz4nHcX40btcVOQFbma1sxBjNWWszuHJfz8dyAWTGDNxSi2uHjqComOT0HaDA=="}"#
+
     /// A full view: one tunnel up with everything filled in, one down with
     /// every optional key omitted.
     static let state = """

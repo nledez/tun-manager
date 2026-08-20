@@ -30,4 +30,12 @@ public struct MenuModel: Sendable, Equatable {
     /// Whether to offer the whole table. False before anything has arrived: the
     /// window would open on "No tunnels" and say nothing the headline does not.
     public let showsOverview: Bool
+    /// What to explain about a publisher that did not prove which one it is,
+    /// or nil when there is nothing to explain.
+    ///
+    /// Separate from the headline because it does not fit in one: a menu line
+    /// carrying two fingerprints and a remedy is a menu line nobody reads. The
+    /// headline says which of the three things happened, and this is offered
+    /// beside it for the rest.
+    public let warning: PublisherWarning?
 }

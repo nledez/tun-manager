@@ -13,6 +13,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private let details: DetailWindowController
     private let flavour = Flavour(bundleIdentifier: Bundle.main.bundleIdentifier)
     private var model: MenuModel?
+    /// Decides whether a refusal is news, so that the comparison is somewhere a
+    /// test can reach it rather than here.
+    private var prompt = WarningPrompt()
 
     init(supervisor: FeedSupervisor, socketPath: String, notifications: NotificationPoster) {
         self.supervisor = supervisor
@@ -41,6 +44,10 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     func linkDidChange(state: LinkState, snapshot: Snapshot?, publisherVersion: String?) {
         redraw()
+        // The window follows the menu: a refusal empties both, or the table
+        // would go on showing a proved session's tunnels under whatever is on
+        // that socket now.
+        details.refuse(model?.warning)
         // A round of probes arrives as a change like any other: the machine
         // keeps the results, and whoever draws reads them from it.
         details.refreshPings()
@@ -73,7 +80,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private func redraw() {
         let glyph = StatusGlyph.of(state: supervisor.state, snapshot: supervisor.snapshot)
         model = MenuModelBuilder.build(
-            state: supervisor.state, snapshot: supervisor.snapshot, now: Date())
+            state: supervisor.state, snapshot: supervisor.snapshot, now: Date(),
+            socketPath: socketPath)
+        announce(model?.warning)
 
         let image = NSImage(systemSymbolName: glyph.symbol, accessibilityDescription: glyph.description)
         image?.isTemplate = !flavour.isTinted
@@ -98,7 +107,13 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         guard let model else { return }
         menu.removeAllItems()
 
-        menu.addItem(disabled(model.headline))
+        menu.addItem(disabled(model.headline, prominent: model.warning != nil))
+        if model.warning != nil {
+            // Right under the line it explains, and worded as a question rather
+            // than as a warning: the line above is the warning, and this is the
+            // way to what it does not have room to say.
+            menu.addItem(action("Why Is This Refused?…", #selector(showWarning), key: ""))
+        }
         if model.showsOverview {
             // At the top, above the tunnels: it is the way into the window
             // without picking a tunnel first, and picking one to get to the
@@ -197,6 +212,51 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
 
     @objc private func showOverview() {
         details.show(tunnel: nil, tunnels: supervisor.snapshot?.tunnels ?? [])
+    }
+
+    /// Opens the panel by itself the first time a refusal appears.
+    ///
+    /// A menu bar item that quietly changes its glyph is a menu bar item nobody
+    /// looks at, and this is the one thing this application knows that somebody
+    /// has to be told rather than left to find. Once per refusal: the panel is
+    /// offered from the menu afterwards.
+    private func announce(_ warning: PublisherWarning?) {
+        guard prompt.opens(for: warning), let warning else { return }
+        // Out of the redraw rather than inside it: this is called from the
+        // middle of the machine dispatching, and a modal run loop started there
+        // would run the next event on top of the one still being handled.
+        Task { @MainActor [weak self] in self?.present(warning) }
+    }
+
+    /// Shows the refusal, and does what the reply says.
+    ///
+    /// NOT TESTED: an NSAlert cannot be run in a suite, and there is nothing
+    /// here to decide — the wording is PublisherWarning's, tested, and what the
+    /// one button does is FeedSupervisor.forgetPinnedKey, tested.
+    /// See macos/docs/coverage-gaps.md, "the menu bar target".
+    private func present(_ warning: PublisherWarning) {
+        let alert = NSAlert()
+        alert.messageText = warning.title
+        alert.informativeText = warning.details.joined(separator: "\n")
+        // A warning rather than critical: critical is for what cannot be undone,
+        // and nothing here has happened yet — the application is refusing, which
+        // is the safe outcome already in force.
+        alert.alertStyle = .warning
+        // First is the default, and the default here is to keep refusing.
+        // Trusting a key means every later connection is compared against it,
+        // which is not a thing to do by pressing return on a panel that just
+        // appeared.
+        alert.addButton(withTitle: warning.dismiss)
+        alert.addButton(withTitle: warning.accept)
+
+        NSApplication.shared.activate()
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        supervisor.forgetPinnedKey()
+    }
+
+    @objc private func showWarning() {
+        guard let warning = model?.warning else { return }
+        present(warning)
     }
 
     @objc private func showAbout() {

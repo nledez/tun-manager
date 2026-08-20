@@ -147,16 +147,49 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
     #expect(model.canRefresh == false)
 }
 
-@Test func theMenuNamesBothFingerprintsWhenTheKeyHasChanged() {
-    // The comparison somebody has to make, and the only one that answers the
-    // question: is this a key I rotated, or somebody else on that socket?
+@Test func theHeadlineFitsOnALineAndTheFingerprintsGoInThePanel() {
+    // Both fingerprints on one menu line was 130 characters of grey text that
+    // ran off the edge, so the one comparison that answers the question was the
+    // part nobody could read. The line says what happened; the panel carries
+    // the comparison.
     let pinned = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
     let offered = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 
     let model = build(.unproven(pinned: pinned, offered: offered), nil)
 
-    #expect(model.headline.contains(Fingerprint.of(base64: pinned)!))
-    #expect(model.headline.contains(Fingerprint.of(base64: offered)!))
+    #expect(model.headline == "This is not the tun-manager you pinned")
+    #expect(model.headline.count < 60)
+    let panel = model.warning?.details.joined(separator: "\n") ?? ""
+    #expect(panel.contains(Fingerprint.of(base64: pinned)!))
+    #expect(panel.contains(Fingerprint.of(base64: offered)!))
+}
+
+@Test func theWarningNamesTheSocketItIsAbout() {
+    // A demo publisher on /tmp and the real one on /var/run are pinned
+    // separately, so which socket this is about is part of the news.
+    let model = MenuModelBuilder.build(
+        state: .unproven(pinned: nil, offered: nil), snapshot: nil, now: now,
+        socketPath: "/var/run/tun-manager.sock", locale: english)
+
+    #expect(model.warning?.socketPath == "/var/run/tun-manager.sock")
+}
+
+@Test func aRefusedPublisherTakesTheWholeViewWithIt() {
+    // Even a view from a session that was proved: leaving it up would put the
+    // tunnel names under whatever is on that socket now, which reads as though
+    // it had sent them.
+    let model = build(
+        .unproven(pinned: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=", offered: nil),
+        snapshot(TunnelStatus(name: "alpha", group: "needed", health: .up)))
+
+    #expect(model.sections.isEmpty)
+    #expect(model.showsOverview == false)
+    #expect(model.canRefresh == false)
+}
+
+@Test func aWorkingLinkIsOfferedNoExplanation() {
+    // The panel is reachable from the menu only while it has something to say.
+    #expect(build(.live(sawState: true), snapshot()).warning == nil)
 }
 
 @Test func theMenuSaysWhenWhateverIsThereAnnouncedNoKey() {
@@ -171,6 +204,12 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
     let model = build(.unproven(pinned: nil, offered: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="), nil)
 
     #expect(model.headline.contains("could not prove"))
+}
+
+@Test func aPinnedPublisherThatStopsAnnouncingAKeyIsItsOwnLine() {
+    let model = build(.unproven(pinned: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=", offered: nil), nil)
+
+    #expect(model.headline.contains("announced no key"))
 }
 
 @Test func aLinkThatCannotBeProvedIsRetriedByHandAndNeverOnATimer() {

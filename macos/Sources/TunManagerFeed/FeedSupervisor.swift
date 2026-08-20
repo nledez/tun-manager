@@ -55,6 +55,23 @@ public final class FeedSupervisor {
     public func systemDidWake() { dispatch(.systemDidWake) }
     public func userAskedToRetry() { dispatch(.userAskedToRetry) }
 
+    /// Forget the key pinned for this socket, and connect again so the next one
+    /// offered is pinned in its place.
+    ///
+    /// The only way out of a refusal, and deliberately the only one: there is
+    /// no "trust just this once". Somebody who rotated the key on purpose says
+    /// so once and is done; somebody who did not now has an application that
+    /// remembers a key they never chose, which is a thing they can see in About
+    /// and compare against `sudo tun-manager feed-key`.
+    ///
+    /// Forgotten in the store before the machine, so that a crash between the
+    /// two leaves nothing pinned rather than a pin the store disagrees with.
+    public func forgetPinnedKey() {
+        keys.forget(socket: socketPath)
+        machine.forgetPinnedKey()
+        dispatch(.userAskedToRetry)
+    }
+
     /// The detail window is showing this tunnel. Replaces whatever it showed
     /// before, and survives the link dropping: the subscription is sent again
     /// when the next connection greets us.

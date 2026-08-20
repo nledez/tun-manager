@@ -2,18 +2,30 @@ import Foundation
 
 /// Turns what is known into what the menu shows.
 public enum MenuModelBuilder {
+    /// - Parameter socketPath: what this client dialled, so a refusal can name
+    ///   the socket it is about. Empty in the tests that do not care.
     public static func build(
         state: LinkState,
         snapshot: Snapshot?,
         now: Date,
+        socketPath: String = "",
         locale: Locale = .autoupdatingCurrent
     ) -> MenuModel {
-        MenuModel(
+        let warning = PublisherWarning.of(state: state, socketPath: socketPath)
+        // A refused publisher takes the whole view down with it, including one
+        // left over from a session that was proved. Whatever is on that socket
+        // now would otherwise be sitting under a list of tunnel names it did
+        // not send, borrowing them, and the difference between "kept from
+        // before" and "sent by this" is not a difference a menu can carry.
+        let view = warning == nil ? snapshot : nil
+
+        return MenuModel(
             headline: headline(state: state, snapshot: snapshot),
-            sections: sections(snapshot: snapshot, now: now, locale: locale),
-            footnote: footnote(state: state, snapshot: snapshot, now: now),
+            sections: sections(snapshot: view, now: now, locale: locale),
+            footnote: footnote(state: state, snapshot: view, now: now),
             canRefresh: state.isLive,
-            showsOverview: snapshot != nil)
+            showsOverview: view != nil,
+            warning: warning)
     }
 
     private static func headline(state: LinkState, snapshot: Snapshot?) -> String {
@@ -35,28 +47,26 @@ public enum MenuModelBuilder {
         }
     }
 
-    /// What to say about a publisher that did not prove itself.
+    /// Which of the three refusals happened, in one line.
     ///
-    /// Three different things, and they are not interchangeable. A publisher
-    /// that announced no key is one this application cannot tell from anything
-    /// else on that socket. One whose key is not the pinned one is either a new
-    /// key or somebody else, and only the person reading can say which — so
-    /// both fingerprints are named, because that is the comparison they have to
-    /// make. And nothing pinned with a signature that does not hold is
-    /// something that answered wrongly, which is nobody's honest mistake.
+    /// One line, because this is a menu: the fingerprints, the comparison to
+    /// make and what each remedy costs live in PublisherWarning, shown in a
+    /// panel that has room for them. The three cases stay distinct here because
+    /// they are not the same news — a publisher that announced no key cannot be
+    /// told from anything else on that socket, a key that is not the pinned one
+    /// is either a rotation or somebody else, and a signature that does not hold
+    /// with nothing pinned is nobody's honest mistake.
     private static func unproven(pinned: String?, offered: String?) -> String {
-        guard let pinned else {
+        guard pinned != nil else {
             guard offered != nil else {
-                return "Whatever is on that socket announced no key — it cannot be tun-manager"
+                return "Whatever is on that socket announced no key"
             }
-            return "Whatever is on that socket could not prove it holds the key it announced"
+            return "Whatever is on that socket could not prove who it is"
         }
-        guard let offered, let theirs = Fingerprint.of(base64: offered) else {
-            return "The publisher on that socket did not prove it holds the key pinned here "
-                + "(\(Fingerprint.of(base64: pinned) ?? "unreadable"))"
+        guard offered != nil else {
+            return "The publisher on that socket announced no key"
         }
-        return "That socket now answers with a different key: pinned "
-            + "\(Fingerprint.of(base64: pinned) ?? "unreadable"), offered \(theirs)"
+        return "This is not the tun-manager you pinned"
     }
 
     /// Each reason gets its own sentence, because each has its own remedy.

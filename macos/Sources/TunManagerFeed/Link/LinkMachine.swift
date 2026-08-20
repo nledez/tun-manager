@@ -141,6 +141,12 @@ public struct LinkMachine {
         return actions
     }
 
+    /// Drop what this socket's publisher was known by, so the next connection
+    /// pins afresh. Whoever owns the store has already forgotten it there.
+    public mutating func forgetPinnedKey() {
+        pinnedKey = nil
+    }
+
     public mutating func handle(_ event: LinkEvent) -> [LinkAction] {
         switch (state, event) {
         case (_, .stop):
