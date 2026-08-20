@@ -253,8 +253,8 @@ that changed that would produce an error rather than a panic.
 
 ### filesystem races in the permission code
 
-Nine branches handle a filesystem that changed underneath the process. Three
-are in `internal/cli/permissions.go` and `internal/cli/import.go`:
+Thirteen branches handle a filesystem that changed underneath the process.
+Three are in `internal/cli/permissions.go` and `internal/cli/import.go`:
 
 - `permissions.go` stats the directory holding `config_dir` immediately after
   statting `config_dir` itself. The first stat walked through the second path,

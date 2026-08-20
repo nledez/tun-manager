@@ -13,6 +13,7 @@ import (
 	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
+	"ledez.net/tun-manager/internal/wg"
 )
 
 // Status is the outcome of one environment check.
@@ -189,15 +190,73 @@ func checkRoot(euid int, needed bool) Check {
 	}
 }
 
+// checkWgQuick reports on the binary root runs to bring a tunnel up.
+//
+// The refusals come from wg.CheckExecutable, which is what the controller
+// itself calls: one implementation, so the diagnostic cannot disagree with the
+// program about what is acceptable.
+//
+// What this adds is the part that cannot be refused. Homebrew installs under
+// the user who ran it, so on an ordinary Mac /opt/homebrew/bin/wg-quick and the
+// directory holding it belong to uid 501 rather than to root. Any process
+// running as that user can replace what root executes at the next `sudo
+// tun-manager up`, and no mode check closes that - the owner is the attacker in
+// the model this program is written against. Refusing it would refuse the
+// installation the README documents, so it is reported instead, in the one
+// place with room to say what it means.
 func checkWgQuick(path string) Check {
-	info, err := os.Stat(path)
+	const name = "wg-quick"
+
+	if err := wg.CheckExecutable(path); err != nil {
+		return Check{Name: name, Status: Fail, Detail: err.Error()}
+	}
+	if reach, ok := reachableByAnybodyButRoot(path); ok {
+		return Check{
+			Name: name, Status: Warn,
+			Detail: fmt.Sprintf(
+				"%s: any process running as that user can replace what root executes at the next "+
+					"`sudo tun-manager up`. Homebrew installs under the user who ran it, so this is "+
+					"the ordinary state of a brew install; copying wg-quick somewhere root owns and "+
+					"pointing wg_quick at it is what closes it", reach),
+		}
+	}
+	return Check{Name: name, Status: Pass, Detail: path + ", root all the way up"}
+}
+
+// reachableByAnybodyButRoot names the first thing on the way to a binary that
+// somebody other than root can change, or reports that there is none.
+//
+// Both the name given and what it resolves to are walked: a link in a directory
+// root owns, pointing into one it does not, reads as safe and is not.
+func reachableByAnybodyButRoot(path string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return Check{Name: "wg-quick", Status: Fail, Detail: fmt.Sprintf("%s: %v", path, err)}
+		// NOT TESTED: wg.CheckExecutable resolved this path a moment ago, and
+		// is called first by the only caller.
+		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		resolved = path
 	}
-	if info.Mode()&0o111 == 0 {
-		return Check{Name: "wg-quick", Status: Fail, Detail: path + " is not executable"}
+
+	for _, start := range []string{path, resolved} {
+		for name := start; ; name = filepath.Dir(name) {
+			info, statErr := os.Lstat(name)
+			if statErr != nil {
+				// NOT TESTED: same window as above.
+				// See docs/coverage-gaps.md, "filesystem races in the permission code".
+				break
+			}
+			if uid, _ := ownerOf(name, info); uid != ownerRoot {
+				return fmt.Sprintf("%s is owned by uid %d rather than root", name, uid), true
+			}
+			if info.Mode().Perm()&0o020 != 0 {
+				return fmt.Sprintf("%s is %04o, so its group can write it", name, info.Mode().Perm()), true
+			}
+			if name == filepath.Dir(name) {
+				break
+			}
+		}
 	}
-	return Check{Name: "wg-quick", Status: Pass, Detail: path}
+	return "", false
 }
 
 // checkConfigDir counts the tunnels, and says why when it cannot.

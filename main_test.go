@@ -127,7 +127,7 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 				Lister: func() ([]netctx.Iface, error) {
 					return []netctx.Iface{{Name: "en0", Addrs: []netip.Prefix{netip.MustParsePrefix("203.0.113.9/24")}}}, nil
 				},
-				Control: &wg.Controller{WgQuick: "/bin/true", Runner: runner},
+				Control: &wg.Controller{WgQuick: "/bin/true", Runner: runner, Check: installedWgQuick},
 			}, nil
 		},
 	}
@@ -856,7 +856,7 @@ func brokenEnv(t *testing.T) *env {
 			Config:  cfg,
 			Reader:  fakeReader{},
 			Locator: blindLocator{},
-			Control: &wg.Controller{WgQuick: "/bin/true", Runner: &fakeRunner{}},
+			Control: &wg.Controller{WgQuick: "/bin/true", Runner: &fakeRunner{}, Check: installedWgQuick},
 		}, nil
 	}
 	return e
@@ -1726,3 +1726,9 @@ func TestARealEnvironmentChecksTheModesForReal(t *testing.T) {
 		t.Fatal("newEnv left the permission check unwired, so nothing enforces it")
 	}
 }
+
+// installedWgQuick stands in for the check wg.Controller makes on the binary
+// before running it. These tests name a wg-quick that is not installed, because
+// what they are about is everything around the call; the check has its own
+// tests in internal/wg.
+func installedWgQuick(string) error { return nil }

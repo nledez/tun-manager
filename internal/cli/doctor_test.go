@@ -612,3 +612,89 @@ func TestAPrivilegedFileWithAnUnusableFeedKeyIsAWarning(t *testing.T) {
 		t.Errorf("detail %q prints what was in the file", check.Detail)
 	}
 }
+
+func TestDoctorFailsOnAWgQuickAnybodyCanWrite(t *testing.T) {
+	// The same rule the controller enforces, from the same code: root runs that
+	// file, so whoever can write it chooses what root does.
+	cfg, priv, u := healthyEnv(t)
+	if err := os.Chmod(priv.WgQuick, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Fail {
+		t.Errorf("status = %v, want %v: %s", c.Status, Fail, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "0777") {
+		t.Errorf("detail %q does not say what is wrong", c.Detail)
+	}
+}
+
+func TestDoctorWarnsAboutAWgQuickRootDoesNotOwn(t *testing.T) {
+	// Homebrew installs under the user who ran it, so this is the ordinary
+	// state of a `brew install wireguard-tools` — and a real hole all the same:
+	// a process running as that user can replace what root executes. It cannot
+	// be refused without refusing the installation this program documents, so
+	// it is said out loud, here, where there is room to say what it means.
+	cfg, priv, u := healthyEnv(t)
+	ownedPerPath(t, map[string]int{"wg-quick": 501}, 0)
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Warn {
+		t.Errorf("status = %v, want %v: %s", c.Status, Warn, c.Detail)
+	}
+	for _, want := range []string{"uid 501", "root"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Errorf("detail %q does not contain %q", c.Detail, want)
+		}
+	}
+}
+
+func TestDoctorWarnsAboutADirectoryOnTheWayThatRootDoesNotOwn(t *testing.T) {
+	// /opt/homebrew/bin is the usual one, and what it grants is the right to
+	// replace the binary inside it whatever that binary's own mode says.
+	cfg, priv, u := healthyEnv(t)
+	ownedPerPath(t, map[string]int{filepath.Dir(priv.WgQuick): 501}, 0)
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Warn {
+		t.Errorf("status = %v, want %v: %s", c.Status, Warn, c.Detail)
+	}
+	if !strings.Contains(c.Detail, filepath.Dir(priv.WgQuick)) {
+		t.Errorf("detail %q does not name the directory", c.Detail)
+	}
+}
+
+func TestDoctorPassesAWgQuickRootOwnsAllTheWay(t *testing.T) {
+	cfg, priv, u := healthyEnv(t)
+	ownedBy(t, 0)
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Pass {
+		t.Errorf("status = %v, want %v: %s", c.Status, Pass, c.Detail)
+	}
+}
+
+func TestDoctorWarnsAboutAWgQuickAGroupCanWrite(t *testing.T) {
+	// /opt/homebrew/bin is 0775 and group staff, which on a Mac with a second
+	// account means that account can replace what root runs. Root owns it in
+	// this fixture, so only the group bit is left to catch it.
+	cfg, priv, u := healthyEnv(t)
+	ownedBy(t, 0)
+	if err := os.Chmod(priv.WgQuick, 0o775); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Warn {
+		t.Errorf("status = %v, want %v: %s", c.Status, Warn, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "group") {
+		t.Errorf("detail %q does not say what is wrong", c.Detail)
+	}
+}

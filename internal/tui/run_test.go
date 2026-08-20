@@ -105,7 +105,7 @@ func testApp(t *testing.T, runner wg.Runner, live ...string) *app.App {
 			return []netctx.Iface{{Name: "en0", Addrs: []netip.Prefix{netip.MustParsePrefix("203.0.113.9/24")}}}, nil
 		},
 		Locator: blindLocator{},
-		Control: &wg.Controller{WgQuick: "/bin/true", Runner: runner},
+		Control: &wg.Controller{WgQuick: "/bin/true", Runner: runner, Check: installedWgQuick},
 	}
 }
 
@@ -371,3 +371,9 @@ func TestABatchReportsEachTunnelWhileTheNextIsStillRunning(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }
+
+// installedWgQuick stands in for the check wg.Controller makes on the binary
+// before running it. These tests name a wg-quick that is not installed, because
+// what they are about is everything around the call; the check has its own
+// tests in internal/wg.
+func installedWgQuick(string) error { return nil }

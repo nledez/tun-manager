@@ -43,6 +43,23 @@ type Controller struct {
 	// Pinger is optional. When set, Up skips tunnels whose check address
 	// already answers.
 	Pinger Pinger
+
+	// Check verifies the binary before it is run. Zero means CheckExecutable,
+	// so a Controller assembled without thinking about it is the safe one - a
+	// field that has to be filled in to be secure is a field somebody forgets.
+	//
+	// It is a field at all because a test needs a Controller whose wg-quick is
+	// a name rather than an installation: what those tests are about is the
+	// argv, and a real binary in a real directory would make them depend on the
+	// machine running them.
+	Check func(path string) error
+}
+
+func (c *Controller) check() func(string) error {
+	if c.Check != nil {
+		return c.Check
+	}
+	return CheckExecutable
 }
 
 // Up brings a tunnel up, unless its check address already answers.
@@ -62,6 +79,13 @@ func (c *Controller) Down(ctx context.Context, tun wgconf.Tunnel) Result {
 }
 
 func (c *Controller) run(ctx context.Context, tun wgconf.Tunnel, action string) Result {
+	// Before every run rather than once for the process. A stat costs
+	// microseconds against a wg-quick run that takes seconds; checking again is
+	// what notices a binary replaced while the interface was open, and what
+	// stops refusing once somebody has put it right without restarting.
+	if err := c.check()(c.WgQuick); err != nil {
+		return Result{Tunnel: tun.Name, Action: action, Err: err}
+	}
 	out, err := c.Runner.Run(ctx, c.WgQuick, action, tun.Path)
 	return Result{Tunnel: tun.Name, Action: action, Output: out, Err: err}
 }

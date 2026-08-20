@@ -150,6 +150,7 @@ func newApp(t *testing.T, reader wg.Reader, runner wg.Runner, lister netctx.List
 		// is exercised on its own.
 		Locator: blindLocator{},
 		Control: &wg.Controller{
+			Check:   installedWgQuick,
 			WgQuick: "/usr/bin/wg-quick",
 			Runner:  runner,
 		},
@@ -410,7 +411,7 @@ func TestViewDistinguishesTwoTunnelsSharingAPeerKey(t *testing.T) {
 		Reader:  upState(deltaKey),
 		Lister:  away(),
 		Locator: fakeLocator{"delta": "utun0"},
-		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}},
+		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}, Check: installedWgQuick},
 	}
 
 	view, err := a.View()
@@ -590,7 +591,7 @@ func TestViewFallsBackToTheSystemListerAndLocator(t *testing.T) {
 	a := &App{
 		Config:  cfg,
 		Reader:  upState(),
-		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}},
+		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}, Check: installedWgQuick},
 	}
 
 	view, err := a.View()
@@ -613,7 +614,7 @@ func brokenApp(t *testing.T) *App {
 		Reader:  upState(),
 		Lister:  away(),
 		Locator: blindLocator{},
-		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}},
+		Control: &wg.Controller{WgQuick: "wg-quick", Runner: &fakeRunner{}, Check: installedWgQuick},
 	}
 }
 
@@ -637,7 +638,7 @@ func TestViewFailsOnAnUnusableNetworkRule(t *testing.T) {
 func TestUpGroupFailsWhenTheViewDoes(t *testing.T) {
 	runner := &fakeRunner{}
 	a := brokenApp(t)
-	a.Control = &wg.Controller{WgQuick: "wg-quick", Runner: runner}
+	a.Control = &wg.Controller{WgQuick: "wg-quick", Runner: runner, Check: installedWgQuick}
 
 	if _, err := a.UpGroup(context.Background(), profile.GroupNeeded); err == nil {
 		t.Fatal("UpGroup succeeded on an unreadable configuration, want an error")
@@ -929,3 +930,9 @@ func TestSampleSurvivesAnUnreadableState(t *testing.T) {
 		t.Error("Sample reported a reading it could not take")
 	}
 }
+
+// installedWgQuick stands in for the check wg.Controller makes on the binary
+// before running it. These tests name a wg-quick that is not installed, because
+// what they are about is everything around the call; the check has its own
+// tests in internal/wg.
+func installedWgQuick(string) error { return nil }

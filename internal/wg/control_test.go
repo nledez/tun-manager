@@ -3,6 +3,7 @@ package wg
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,13 @@ import (
 
 	"ledez.net/tun-manager/internal/wgconf"
 )
+
+// installed stands in for the check that the binary root is about to run is one
+// it should. The tests below are about the argv and the pre-check, and their
+// wg-quick is a name rather than an installation: pointing them at a real
+// binary in a real directory would make them depend on the machine running
+// them. The check itself is exercised in executable_test.go.
+func installed(string) error { return nil }
 
 type call struct {
 	name string
@@ -59,7 +67,7 @@ var alpha = wgconf.Tunnel{
 
 func TestUpRunsWgQuickWithTheConfigPath(t *testing.T) {
 	runner := &recordRunner{}
-	c := &Controller{WgQuick: "/usr/bin/wg-quick", Runner: runner}
+	c := &Controller{WgQuick: "/usr/bin/wg-quick", Runner: runner, Check: installed}
 
 	res := c.Up(context.Background(), alpha)
 
@@ -74,7 +82,7 @@ func TestUpRunsWgQuickWithTheConfigPath(t *testing.T) {
 
 func TestDownRunsWgQuickDown(t *testing.T) {
 	runner := &recordRunner{}
-	c := &Controller{WgQuick: "/usr/bin/wg-quick", Runner: runner}
+	c := &Controller{WgQuick: "/usr/bin/wg-quick", Runner: runner, Check: installed}
 
 	res := c.Down(context.Background(), alpha)
 
@@ -91,7 +99,7 @@ func TestUpSkipsWhenCheckIPAlreadyAnswers(t *testing.T) {
 	// A reachable check address means the tunnel (or a plain LAN route to it)
 	// already works, so there is nothing to bring up.
 	runner := &recordRunner{}
-	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: &stubPinger{rtt: 3 * time.Millisecond}}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: &stubPinger{rtt: 3 * time.Millisecond}, Check: installed}
 
 	res := c.Up(context.Background(), alpha)
 
@@ -105,7 +113,7 @@ func TestUpSkipsWhenCheckIPAlreadyAnswers(t *testing.T) {
 
 func TestUpProceedsWhenCheckIPIsUnreachable(t *testing.T) {
 	runner := &recordRunner{}
-	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: &stubPinger{err: errors.New("timeout")}}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: &stubPinger{err: errors.New("timeout")}, Check: installed}
 
 	res := c.Up(context.Background(), alpha)
 
@@ -120,7 +128,7 @@ func TestUpProceedsWhenCheckIPIsUnreachable(t *testing.T) {
 func TestUpDoesNotPreCheckWithoutACheckIP(t *testing.T) {
 	runner := &recordRunner{}
 	pinger := &stubPinger{rtt: time.Millisecond}
-	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: pinger}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: pinger, Check: installed}
 
 	c.Up(context.Background(), wgconf.Tunnel{Name: "x", Path: "/tmp/x.conf"})
 
@@ -136,7 +144,7 @@ func TestDownNeverPreChecks(t *testing.T) {
 	// A reachable check address must not stop a shutdown.
 	runner := &recordRunner{}
 	pinger := &stubPinger{rtt: time.Millisecond}
-	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: pinger}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Pinger: pinger, Check: installed}
 
 	res := c.Down(context.Background(), alpha)
 
@@ -150,7 +158,7 @@ func TestDownNeverPreChecks(t *testing.T) {
 
 func TestResultCarriesTheCommandOutputOnFailure(t *testing.T) {
 	runner := &recordRunner{output: "wg-quick: `utun7' is not a WireGuard interface", err: errors.New("exit status 1")}
-	c := &Controller{WgQuick: "wg-quick", Runner: runner}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Check: installed}
 
 	res := c.Down(context.Background(), alpha)
 
@@ -182,7 +190,7 @@ func TestOperationsMayOverlap(t *testing.T) {
 		live.Add(-1)
 		return "", nil
 	})
-	c := &Controller{WgQuick: "wg-quick", Runner: runner}
+	c := &Controller{WgQuick: "wg-quick", Runner: runner, Check: installed}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
@@ -241,5 +249,83 @@ func TestExecRunnerHonoursContextCancellation(t *testing.T) {
 
 	if _, err := (ExecRunner{}).Run(ctx, "/bin/sleep", "5"); err == nil {
 		t.Fatal("Run succeeded with a cancelled context, want an error")
+	}
+}
+
+// MARK: the binary root is about to run
+
+func TestUpRefusesABinaryThatCannotBeTrusted(t *testing.T) {
+	// The check lives here rather than in doctor because this is the code that
+	// executes: a caller that assembled a Controller and forgot to ask would
+	// run whatever the configuration named.
+	runner := &recordRunner{}
+	c := &Controller{WgQuick: "/opt/homebrew/bin/wg-quick", Runner: runner}
+	c.Check = func(string) error { return errors.New("is 0777, which anybody on this machine can write") }
+
+	res := c.Up(context.Background(), wgconf.Tunnel{Name: "alpha", Path: "/etc/wireguard/alpha.conf"})
+
+	if res.Err == nil {
+		t.Fatal("Up ran a binary the check refused")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("the runner was called anyway: %v", runner.calls)
+	}
+	if res.Tunnel != "alpha" || res.Action != "up" {
+		t.Errorf("result = %+v, want it to name the tunnel and the action", res)
+	}
+}
+
+func TestDownRefusesABinaryThatCannotBeTrusted(t *testing.T) {
+	// Tearing a tunnel down is not a reason to run something unsafe either:
+	// wg-quick down rewrites the routing table just as up does.
+	runner := &recordRunner{}
+	c := &Controller{WgQuick: "/opt/homebrew/bin/wg-quick", Runner: runner}
+	c.Check = func(string) error { return errors.New("is not executable") }
+
+	res := c.Down(context.Background(), wgconf.Tunnel{Name: "alpha", Path: "/etc/wireguard/alpha.conf"})
+
+	if res.Err == nil {
+		t.Fatal("Down ran a binary the check refused")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("the runner was called anyway: %v", runner.calls)
+	}
+}
+
+func TestTheBinaryIsCheckedOnEveryRun(t *testing.T) {
+	// Not once per process. The stat costs microseconds against a wg-quick run
+	// that takes seconds, and checking again is what notices a binary replaced
+	// while the interface was open - and what stops saying no once somebody has
+	// put it right.
+	runner := &recordRunner{}
+	c := &Controller{WgQuick: "/opt/homebrew/bin/wg-quick", Runner: runner}
+	asked := 0
+	c.Check = func(string) error {
+		asked++
+		return nil
+	}
+	tun := wgconf.Tunnel{Name: "alpha", Path: "/etc/wireguard/alpha.conf"}
+
+	c.Up(context.Background(), tun)   //nolint:errcheck // the Result is not the point here
+	c.Down(context.Background(), tun) //nolint:errcheck // likewise
+
+	if asked != 2 {
+		t.Errorf("the binary was checked %d times for 2 runs", asked)
+	}
+}
+
+func TestAControllerWithNoCheckOfItsOwnUsesTheRealOne(t *testing.T) {
+	// The zero value has to be the safe one: a Controller assembled without
+	// thinking about it must not be the one that runs anything.
+	runner := &recordRunner{}
+	c := &Controller{WgQuick: filepath.Join(t.TempDir(), "not-installed"), Runner: runner}
+
+	res := c.Up(context.Background(), wgconf.Tunnel{Name: "alpha"})
+
+	if res.Err == nil {
+		t.Fatal("a Controller with no check ran a binary that is not there")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("the runner was called anyway: %v", runner.calls)
 	}
 }
