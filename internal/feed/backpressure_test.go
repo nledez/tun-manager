@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // fatView makes a state message big enough that the kernel's socket buffer
@@ -202,20 +203,16 @@ func TestListenFailsWhenRemoveFailsBeforeBind(t *testing.T) {
 	// If removing a stale socket fails for a reason other than "not exists",
 	// Listen fails and does not leave a half-built socket behind.
 	testErr := errors.New("permission denied")
-	s := &Server{
-		Path: socketPath(t),
-		remove: func(string) error {
-			return testErr
-		},
-	}
+	s := &Server{Path: socketPath(t)}
+	staleSocket(t, s.Path)
+	previous := fsx.Remove
+	fsx.Remove = func(string) error { return testErr }
+	t.Cleanup(func() { fsx.Remove = previous })
 
 	err := s.Listen()
 
 	if err == nil || !errors.Is(err, testErr) {
 		t.Errorf("Listen = %v, want the remove error", err)
-	}
-	if _, err := os.Stat(s.Path); err == nil {
-		t.Error("socket exists after Listen failed, want no leftover")
 	}
 }
 
@@ -223,12 +220,10 @@ func TestListenFailsWhenChmodFails(t *testing.T) {
 	// If chmod fails after the socket is bound, Listen fails and removes the
 	// socket before returning, leaving no half-built socket behind.
 	testErr := errors.New("permission denied")
-	s := &Server{
-		Path: socketPath(t),
-		chmod: func(string, os.FileMode) error {
-			return testErr
-		},
-	}
+	s := &Server{Path: socketPath(t)}
+	previous := fsx.Chmod
+	fsx.Chmod = func(string, os.FileMode) error { return testErr }
+	t.Cleanup(func() { fsx.Chmod = previous })
 
 	err := s.Listen()
 
@@ -250,9 +245,9 @@ func TestCloseReturnsRemoveError(t *testing.T) {
 	}
 
 	testErr := errors.New("I/O error")
-	s.remove = func(string) error {
-		return testErr
-	}
+	previous := fsx.Remove
+	fsx.Remove = func(string) error { return testErr }
+	t.Cleanup(func() { fsx.Remove = previous })
 
 	err := s.Close()
 

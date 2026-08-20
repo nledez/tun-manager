@@ -740,10 +740,14 @@ func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privilege
 	}
 
 	f := &feed.Server{
-		Path:    priv.FeedSocket,
-		Owner:   owner,
-		Sampler: a,
-		Version: version,
+		Path: priv.FeedSocket,
+		// A simulated run binds where the flags said, under a directory
+		// belonging to whoever started the demo. Under sudo those flags are
+		// refused, so what is left is the real path and the strict rule.
+		Simulated: e.flags.simulating(),
+		Owner:     owner,
+		Sampler:   a,
+		Version:   version,
 	}
 	if err := f.Listen(); err != nil { //nolint:contextcheck // Listen takes no context; Serve below does
 		fmt.Fprintf(e.out, "%s: status feed unavailable: %v\n", appName, err) //nolint:errcheck

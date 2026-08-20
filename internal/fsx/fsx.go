@@ -24,6 +24,7 @@ var (
 	Stat         = os.Stat
 	Lstat        = os.Lstat
 	Chmod        = os.Chmod
+	Chown        = os.Chown
 	Remove       = os.Remove
 	Rename       = os.Rename
 	MkdirAll     = os.MkdirAll

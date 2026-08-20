@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/wgconf"
 	"ledez.net/tun-manager/internal/wire"
@@ -80,6 +84,11 @@ const RequestPing = "ping"
 type Server struct {
 	// Path is where the socket is bound.
 	Path string
+	// Simulated says this feed belongs to a run pointed at the simulator rather
+	// than at this machine. It is what turns off the demand that the directory
+	// be root's: a demo binds where the flags said, under a directory belonging
+	// to whoever started it. The zero value is the strict one.
+	Simulated bool
 	// Owner is who the socket is handed to. When it is not demotable the
 	// socket stays root-owned: there is no user session to serve.
 	Owner privdrop.User
@@ -111,19 +120,6 @@ type Server struct {
 	requests    chan Request
 	lastRefresh time.Time
 	lastPing    time.Time
-
-	// chown hands the socket to the pre-sudo user. Injected for the same
-	// reason as the two below, and one more: the real call is decided by who
-	// is running the suite. Asking for another identity fails as an ordinary
-	// user and succeeds under sudo, so the test would be measuring the tester.
-	chown func(path string, uid, gid int) error
-
-	// chmod and remove are the filesystem calls Listen and Close depend on.
-	// They are fields so a test can make them fail: the paths where the
-	// filesystem misbehaves between two operations are the ones a real
-	// failure would take, and there is no other way to reach them.
-	chmod  func(string, os.FileMode) error
-	remove func(string) error
 }
 
 func (s *Server) interval() time.Duration {
@@ -138,27 +134,6 @@ func (s *Server) clock() time.Time {
 		return s.Now()
 	}
 	return time.Now()
-}
-
-func (s *Server) chownFn() func(string, int, int) error {
-	if s.chown != nil {
-		return s.chown
-	}
-	return os.Chown
-}
-
-func (s *Server) chmodFn() func(string, os.FileMode) error {
-	if s.chmod != nil {
-		return s.chmod
-	}
-	return os.Chmod
-}
-
-func (s *Server) removeFn() func(string) error {
-	if s.remove != nil {
-		return s.remove
-	}
-	return os.Remove
 }
 
 // Requests yields what clients asked for that the feed cannot do itself. It is
@@ -194,11 +169,11 @@ func (s *Server) clientCount() int {
 // Any failure after the bind removes the socket again: a path left behind
 // would look like a feed that works and serve nobody.
 func (s *Server) Listen() error {
-	// A socket left by a killed process makes bind fail with EADDRINUSE. Two
-	// tun-manager processes cannot usefully coexist - they would both be
-	// driving the same tunnels - so the path is ours to take.
-	if err := s.removeFn()(s.Path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale socket %s: %w", s.Path, err)
+	if err := s.checkDirectory(); err != nil {
+		return err
+	}
+	if err := s.clearStaleSocket(); err != nil {
+		return err
 	}
 
 	lc := net.ListenConfig{}
@@ -213,11 +188,11 @@ func (s *Server) Listen() error {
 		ul.SetUnlinkOnClose(false)
 	}
 
-	if err := s.chmodFn()(s.Path, SocketMode); err != nil {
+	if err := fsx.Chmod(s.Path, SocketMode); err != nil {
 		return s.abandon(ln, fmt.Errorf("chmod %s: %w", s.Path, err))
 	}
 	if s.Owner.Demotable {
-		if err := s.chownFn()(s.Path, s.Owner.UID, s.Owner.GID); err != nil {
+		if err := fsx.Chown(s.Path, s.Owner.UID, s.Owner.GID); err != nil {
 			return s.abandon(ln, fmt.Errorf("hand %s to %s: %w", s.Path, s.Owner.Username, err))
 		}
 	}
@@ -225,12 +200,76 @@ func (s *Server) Listen() error {
 	// Recorded so Close can tell this socket apart from whatever might be at
 	// the path by the time it runs: a stat failure here is not fatal to
 	// Listen, it just means Close falls back to removing by path alone.
-	info, _ := os.Stat(s.Path)
+	info, _ := fsx.Lstat(s.Path)
 
 	s.mu.Lock()
 	s.ln = ln
 	s.socket = info
 	s.mu.Unlock()
+	return nil
+}
+
+// checkDirectory refuses to bind under a directory somebody else could write.
+//
+// The mode of the socket is not the whole story. Anybody who can write the
+// directory holding it can unlink it and bind their own in its place, and the
+// menu bar would then be listening to whatever they chose to say — while
+// tun-manager, root, went on running with nobody reading its feed.
+//
+// Off for a simulated run, whose socket goes wherever the flags said and whose
+// directory belongs to whoever is running the demo. Those flags are refused
+// under sudo, so the two never meet.
+func (s *Server) checkDirectory() error {
+	if s.Simulated {
+		return nil
+	}
+
+	dir := filepath.Dir(s.Path)
+	info, err := fsx.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("the status feed cannot bind in %s: %w", dir, err)
+	}
+	if uid, _ := fsx.Owner(dir, info); uid != fsx.Root {
+		return fmt.Errorf(
+			"the status feed will not bind in %s: it is owned by uid %d rather than root, "+
+				"so that user can unlink the socket and bind their own in its place. "+
+				"`sudo chown 0:0 %s`, or point feed_socket somewhere root owns", dir, uid, dir)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf(
+			"the status feed will not bind in %s: it is %04o, so somebody else can replace "+
+				"the socket with one of their own: `sudo chmod go-w %s`",
+			dir, info.Mode().Perm(), dir)
+	}
+	return nil
+}
+
+// clearStaleSocket unlinks what a killed tun-manager left behind, and nothing
+// else.
+//
+// A socket left by a crash makes bind fail with EADDRINUSE, and two
+// tun-manager processes cannot usefully coexist - they would both be driving
+// the same tunnels - so that path is ours to take. Anything that is not a
+// socket is not ours: feed_socket is read from the root-only configuration and
+// unlinked by root, and a typo there was a way to have root delete a file for
+// somebody. Lstat rather than Stat, so a symbolic link is judged as a link
+// rather than as whatever it points at.
+func (s *Server) clearStaleSocket() error {
+	info, err := fsx.Lstat(s.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("look at %s: %w", s.Path, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf(
+			"%s exists and is not a socket, so tun-manager will not remove it: "+
+				"point feed_socket somewhere else, or move that file out of the way", s.Path)
+	}
+	if err := fsx.Remove(s.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove stale socket %s: %w", s.Path, err)
+	}
 	return nil
 }
 
@@ -257,7 +296,7 @@ func (s *Server) Close() error {
 
 	err := ln.Close()
 	if s.ours(socket) {
-		if rmErr := s.removeFn()(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
+		if rmErr := fsx.Remove(s.Path); rmErr != nil && !os.IsNotExist(rmErr) && err == nil {
 			err = rmErr
 		}
 	}
@@ -272,7 +311,7 @@ func (s *Server) ours(bound os.FileInfo) bool {
 	if bound == nil {
 		return true
 	}
-	now, err := os.Stat(s.Path)
+	now, err := fsx.Lstat(s.Path)
 	if err != nil {
 		return true
 	}

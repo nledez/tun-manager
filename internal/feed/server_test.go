@@ -2,11 +2,14 @@ package feed
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 )
 
@@ -24,8 +27,26 @@ func socketPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// Listen refuses a directory somebody other than root could write, and a
+	// directory made by a test belongs to whoever is running it. The mode is
+	// real; the owner is the one thing a suite cannot arrange without sudo.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	ownedByRoot(t)
 	return filepath.Join(dir, "f.sock")
+}
+
+// ownedByRoot makes every path look root-owned for the length of a test. A
+// fixture belongs to whoever runs the suite, and a suite that only proves
+// itself under sudo proves nothing on anybody else's machine.
+func ownedByRoot(t *testing.T) {
+	t.Helper()
+
+	previous := fsx.Owner
+	fsx.Owner = func(string, os.FileInfo) (int, int) { return fsx.Root, fsx.Root }
+	t.Cleanup(func() { fsx.Owner = previous })
 }
 
 func TestListenCreatesTheSocketReadableByNobodyElse(t *testing.T) {
@@ -63,11 +84,13 @@ func TestTheSocketIsHandedToThePreSudoUser(t *testing.T) {
 	s := &Server{
 		Path:  socketPath(t),
 		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
-		chown: func(path string, uid, gid int) error {
-			got.path, got.uid, got.gid, got.calls = path, uid, gid, got.calls+1
-			return nil
-		},
 	}
+	previous := fsx.Chown
+	fsx.Chown = func(path string, uid, gid int) error {
+		got.path, got.uid, got.gid, got.calls = path, uid, gid, got.calls+1
+		return nil
+	}
+	t.Cleanup(func() { fsx.Chown = previous })
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -89,8 +112,10 @@ func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
 	s := &Server{
 		Path:  socketPath(t),
 		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
-		chown: func(string, int, int) error { return boom },
 	}
+	previous := fsx.Chown
+	fsx.Chown = func(string, int, int) error { return boom }
+	t.Cleanup(func() { fsx.Chown = previous })
 
 	err := s.Listen()
 
@@ -103,12 +128,12 @@ func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
 	}
 }
 
-func TestWithoutAnInjectedChownTheRealOneIsUsed(t *testing.T) {
-	// All this proves is that the default resolves to the system call rather
-	// than to nothing: the identity is the one the test process already has,
-	// so it says nothing about which identity would be chosen. That part is
-	// pinned by TestTheSocketIsHandedToThePreSudoUser, which is why this test
-	// asserts so little.
+func TestTheRealChownIsWhatRunsWhenNoTestStandsInForIt(t *testing.T) {
+	// All this proves is that fsx.Chown resolves to the system call rather than
+	// to nothing: the identity is the one the test process already has, so it
+	// says nothing about which identity would be chosen. That part is pinned by
+	// TestTheSocketIsHandedToThePreSudoUser, which is why this test asserts so
+	// little.
 	s := &Server{
 		Path: socketPath(t),
 		Owner: privdrop.User{
@@ -130,8 +155,10 @@ func TestASocketWithNoOneToHandItToStaysWhereItIs(t *testing.T) {
 	s := &Server{
 		Path:  socketPath(t),
 		Owner: privdrop.User{Demotable: false, UID: 0},
-		chown: func(string, int, int) error { handed++; return nil },
 	}
+	previous := fsx.Chown
+	fsx.Chown = func(string, int, int) error { handed++; return nil }
+	t.Cleanup(func() { fsx.Chown = previous })
 	defer func() {
 		if handed != 0 {
 			t.Errorf("chown called %d time(s), want none", handed)
@@ -148,9 +175,7 @@ func TestAStaleSocketIsReplacedRatherThanRefused(t *testing.T) {
 	// A killed process leaves the file behind and bind fails with EADDRINUSE.
 	// Two tun-managers cannot usefully coexist anyway, so the path is ours.
 	path := socketPath(t)
-	if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	staleSocket(t, path)
 
 	s := &Server{Path: path}
 	if err := s.Listen(); err != nil {
@@ -160,6 +185,7 @@ func TestAStaleSocketIsReplacedRatherThanRefused(t *testing.T) {
 }
 
 func TestListenReportsAPathItCannotBind(t *testing.T) {
+	ownedByRoot(t)
 	s := &Server{Path: filepath.Join(t.TempDir(), "no-such-dir", "f.sock")}
 
 	if err := s.Listen(); err == nil {
@@ -297,5 +323,174 @@ func TestClockReturnsTheConfiguredClock(t *testing.T) {
 	s.Now = func() time.Time { return fixedTime }
 	if got := s.clock(); got != fixedTime {
 		t.Errorf("clock = %v, want %v", got, fixedTime)
+	}
+}
+
+// staleSocket leaves at path what a killed tun-manager leaves behind: a socket
+// file with nothing listening on it.
+func staleSocket(t *testing.T, path string) {
+	t.Helper()
+
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("bind a stale socket: %v", err)
+	}
+	if unix, ok := ln.(*net.UnixListener); ok {
+		unix.SetUnlinkOnClose(false)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// MARK: what the publisher will and will not unlink
+
+func TestListenRefusesToRemoveWhatIsNotASocket(t *testing.T) {
+	// feed_socket is read from the root-only configuration and unlinked by
+	// root. A typo in it was a way to have root delete somebody's file.
+	path := socketPath(t)
+	if err := os.WriteFile(path, []byte("not a socket"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := (&Server{Path: path}).Listen()
+
+	if err == nil {
+		t.Fatal("Listen unlinked a file that is not a socket")
+	}
+	if !strings.Contains(err.Error(), "not a socket") {
+		t.Errorf("error %q does not say what is in the way", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the file was removed anyway: %v", statErr)
+	}
+}
+
+func TestListenRefusesToFollowASymbolicLinkAtItsPath(t *testing.T) {
+	// Judged as a link rather than as whatever it points at. The target here is
+	// itself a stale socket, which is the case that tells the two apart:
+	// following the link would find something removable and unlink the link,
+	// leaving root to have deleted a name somebody else put there.
+	dir := filepath.Dir(socketPath(t))
+	target := filepath.Join(dir, "elsewhere.sock")
+	staleSocket(t, target)
+	path := filepath.Join(dir, "f.sock")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	err := (&Server{Path: path}).Listen()
+
+	if err == nil {
+		t.Fatal("Listen followed a symbolic link")
+	}
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Errorf("the link was removed anyway: %v", statErr)
+	}
+	if _, statErr := os.Lstat(target); statErr != nil {
+		t.Errorf("what it pointed at was removed: %v", statErr)
+	}
+}
+
+func TestListenReportsAPathItCannotLookAt(t *testing.T) {
+	ownedByRoot(t)
+	path := socketPath(t)
+	boom := errors.New("input/output error")
+	previous := fsx.Lstat
+	fsx.Lstat = func(string) (os.FileInfo, error) { return nil, boom }
+	t.Cleanup(func() { fsx.Lstat = previous })
+
+	if err := (&Server{Path: path}).Listen(); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the failure to look at the path", err)
+	}
+}
+
+func TestListenRefusesADirectoryRootDoesNotOwn(t *testing.T) {
+	// Anybody who can write that directory can unlink the socket and bind
+	// their own in its place, and the menu bar would then be listening to
+	// whatever they chose to say.
+	path := socketPath(t)
+	previous := fsx.Owner
+	fsx.Owner = func(string, os.FileInfo) (int, int) { return 501, 501 }
+	t.Cleanup(func() { fsx.Owner = previous })
+
+	err := (&Server{Path: path}).Listen()
+
+	if err == nil {
+		t.Fatal("Listen bound under a directory root does not own")
+	}
+	for _, want := range []string{"uid 501", "sudo chown 0:0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestListenRefusesADirectoryOthersCanWrite(t *testing.T) {
+	path := socketPath(t)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	err := (&Server{Path: path}).Listen()
+
+	if err == nil {
+		t.Fatal("Listen bound under a directory anybody can write")
+	}
+	if !strings.Contains(err.Error(), "sudo chmod go-w") {
+		t.Errorf("error %q does not say how to fix it", err)
+	}
+}
+
+func TestListenReportsADirectoryItCannotLookAt(t *testing.T) {
+	s := &Server{Path: filepath.Join(t.TempDir(), "absent", "f.sock")}
+
+	err := s.Listen()
+
+	if err == nil {
+		t.Fatal("Listen bound under a directory that is not there")
+	}
+	if !strings.Contains(err.Error(), "cannot bind in") {
+		t.Errorf("error %q does not say what it could not read", err)
+	}
+}
+
+func TestASimulatedFeedBindsWhereItWasTold(t *testing.T) {
+	// A demo binds where the flags said, under a directory belonging to
+	// whoever started it. Those flags are refused under sudo, so the strict
+	// rule above and this one never meet.
+	previous := fsx.Owner
+	fsx.Owner = func(string, os.FileInfo) (int, int) { return 501, 501 }
+	t.Cleanup(func() { fsx.Owner = previous })
+	s := &Server{Path: socketPath(t), Simulated: true}
+
+	if err := s.Listen(); err != nil {
+		t.Fatalf("a simulated feed was held to the directory rule: %v", err)
+	}
+	s.Close() //nolint:errcheck
+}
+
+func TestCloseLeavesBehindWhatIsNoLongerItsOwnSocket(t *testing.T) {
+	// Something took the name while the program was running. Removing it on
+	// the way out would be root deleting a file it never made — which is what
+	// the identity check is for; a name is not an identity.
+	s := &Server{Path: socketPath(t)}
+	if err := s.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := os.Remove(s.Path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := os.WriteFile(s.Path, []byte("somebody else's"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := os.Stat(s.Path); err != nil {
+		t.Errorf("Close removed a file that was not its socket: %v", err)
 	}
 }

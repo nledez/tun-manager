@@ -15,6 +15,7 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/netctx"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
@@ -158,7 +159,16 @@ func shortSocketDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// The feed refuses to bind under a directory somebody other than root could
+	// write. The mode here is real; the owner is the one thing a suite cannot
+	// arrange without sudo, so it is stood in for.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	previous := fsx.Owner
+	fsx.Owner = func(string, os.FileInfo) (int, int) { return fsx.Root, fsx.Root }
+	t.Cleanup(func() { fsx.Owner = previous })
 	return dir
 }
 
@@ -1974,4 +1984,37 @@ func TestTheInterfaceRefusesToStartWithoutThePrivilegedFile(t *testing.T) {
 	if err := e.run(nil); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the interface to have refused", err)
 	}
+}
+
+func TestASimulatedRunSaysSoToTheFeed(t *testing.T) {
+	// The feed refuses to bind under a directory root does not own. A demo's
+	// socket goes wherever --feed-socket said, under a directory belonging to
+	// whoever started it, and that flag cannot be passed under sudo.
+	e := demoEnv(t, &fakeRunner{})
+	if _, err := e.parseFlags([]string{"--feed-socket", filepath.Join(shortSocketDir(t), "f.sock")}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f, served := e.startFeed(ctx, a, priv, privdrop.User{})
+
+	if f == nil {
+		t.Fatal("the feed did not start for a simulated run")
+	}
+	if !f.Simulated {
+		t.Error("the feed was not told the run is simulated, so it will refuse the demo's directory")
+	}
+	cancel()
+	<-served
 }

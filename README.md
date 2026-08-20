@@ -180,6 +180,12 @@ feed: true                              # default
 feed_socket: /var/run/tun-manager.sock  # default
 ```
 
+It binds only under a directory root owns and nobody else can write, and it
+unlinks only a socket: a stale one left by a killed `tun-manager` is taken back,
+anything else — a file, a symbolic link, a directory — stops the feed with a
+message rather than being deleted. `feed_socket` is read as root and unlinked as
+root, so a typo in it was a way to have root remove somebody's file.
+
 The socket is created by root and handed to whoever ran `sudo tun-manager`,
 mode `0600`. It carries the same JSON as `tun-manager status --json`, one
 object per line, plus a `hello` on connect, a `sample` once a second for each

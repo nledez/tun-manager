@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"ledez.net/tun-manager/internal/app"
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/wg"
 	"ledez.net/tun-manager/internal/wgconf"
 )
@@ -505,19 +505,21 @@ func TestServeDoesNotReturnUntilShutdownHasFinished(t *testing.T) {
 	var calls int32
 	unblock := make(chan struct{})
 	blocked := make(chan struct{})
+	previousRemove := fsx.Remove
+	fsx.Remove = func(path string) error {
+		// Listen removes nothing on a fresh path, so the first call here is the
+		// one shutdown makes through Close - which is the window Serve must not
+		// return inside.
+		if atomic.AddInt32(&calls, 1) > 1 {
+			return previousRemove(path)
+		}
+		close(blocked)
+		<-unblock
+		return previousRemove(path)
+	}
+	t.Cleanup(func() { fsx.Remove = previousRemove })
 	s := &Server{
 		Path: socketPath(t),
-		remove: func(path string) error {
-			// The first call is Listen's stale-socket removal, before there is
-			// anything to block: only the one shutdown makes, through Close,
-			// should hold Serve up.
-			if atomic.AddInt32(&calls, 1) == 1 {
-				return os.Remove(path)
-			}
-			close(blocked)
-			<-unblock
-			return os.Remove(path)
-		},
 	}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
