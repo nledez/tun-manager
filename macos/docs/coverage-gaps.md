@@ -5,6 +5,22 @@ places, a `NOT TESTED:` comment on the code and a section here.
 
 ## Deliberately untested
 
+### the keychain
+
+`Sources/TunManagerFeed/Storage/PinnedKeys.swift` — the three calls into
+Security.framework that write, read and delete a generic password item.
+
+A test that exercised them would write into the keychain of whoever ran the
+suite and read back what a previous run had left there, which is a test that
+changes the machine it runs on; one running in CI would find no keychain to
+talk to at all. What is worth testing is not the storage but the decisions
+around it — when a key is pinned, what it is compared against, and what happens
+when the two differ — and those are in `LinkMachine`, exercised against a store
+that lives in memory.
+
+`NoPinnedKeys` is the same shape with nothing behind it, for a run that should
+pin nothing.
+
 ### the menu bar target
 
 `Sources/TunManagerMenuBar/` — four files: `main.swift`, `AppDelegate.swift`,

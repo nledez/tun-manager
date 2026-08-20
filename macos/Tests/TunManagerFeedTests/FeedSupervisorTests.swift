@@ -3,6 +3,17 @@ import Testing
 
 @testable import TunManagerFeed
 
+/// A supervisor that draws the nonce the fixture's auth line answers, dialling
+/// the socket that answer names. Everything a publisher has to prove is in
+/// those two, so a test that skipped them would be testing a link that cannot
+/// happen.
+@MainActor
+private func proving(_ transport: FakeTransport) -> FeedSupervisor {
+    FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: NoPinnedKeys(),
+        nonces: FixedNonce(Proven.nonce))
+}
+
 /// Waits for a condition rather than for a duration: the supervisor's work
 /// happens in tasks, and sleeping a fixed amount is how a suite becomes flaky.
 @MainActor
@@ -19,24 +30,24 @@ private func eventually(
 
 @MainActor
 @Test func aHelloAndAStateBringTheLinkUpAndFillTheSnapshot() async {
-    let transport = FakeTransport([.deliver([Fixtures.hello + "\n", Fixtures.state + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliver([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])])
+    let supervisor = proving(transport)
 
     supervisor.start()
 
     await eventually("the snapshot") { supervisor.snapshot != nil }
     #expect(supervisor.snapshot?.tunnels.map(\.name) == ["alpha", "bravo"])
-    #expect(supervisor.publisherVersion == "v0.2.0")
+    #expect(supervisor.publisherVersion == Proven.version)
 }
 
 @MainActor
 @Test func aLineSplitAcrossChunksIsUnderstoodAllTheSame() async {
     // The framer is exercised through the supervisor here, because the seam
     // between reading and decoding is where a half-line would be lost.
-    let whole = Fixtures.hello + "\n" + Fixtures.state + "\n"
+    let whole = Fixtures.hello + "\n" + Fixtures.auth + "\n" + Fixtures.state + "\n"
     let cut = whole.index(whole.startIndex, offsetBy: 30)
     let transport = FakeTransport([.deliver([String(whole[..<cut]), String(whole[cut...])])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
 
     supervisor.start()
 
@@ -46,8 +57,8 @@ private func eventually(
 
 @MainActor
 @Test func aConnectionThatCannotBeOpenedIsRetriedRatherThanGivenUpOn() async {
-    let transport = FakeTransport([.refuse(ENOENT), .deliverAndStayOpen([Fixtures.hello + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.refuse(ENOENT), .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"])])
+    let supervisor = proving(transport)
 
     supervisor.start()
 
@@ -57,14 +68,16 @@ private func eventually(
 
 @MainActor
 @Test func openingTheMenuOnALiveLinkAsksForAFreshView() async {
-    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])])
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the link to come up") { supervisor.state.isLive }
 
     supervisor.menuWillOpen()
 
-    #expect(transport.sent == ["{\"type\":\"refresh\"}\n"])
+    // The challenge comes first on every connection: it is what the link is
+    // waiting on before it shows anything.
+    #expect(transport.sent.last == "{\"type\":\"refresh\"}\n")
 }
 
 @MainActor
@@ -76,8 +89,8 @@ private func eventually(
         }
     }
     let recorder = Recorder()
-    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])])
+    let supervisor = proving(transport)
     supervisor.observer = recorder
 
     supervisor.start()
@@ -89,7 +102,7 @@ private func eventually(
 @MainActor
 @Test func stoppingEndsTheLinkAndStopsReconnecting() async {
     let transport = FakeTransport([.refuse(ENOENT)])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the first attempt") { transport.attempts >= 1 }
 
@@ -103,8 +116,8 @@ private func eventually(
 
 @MainActor
 @Test func aStreamThatFailsIsTreatedAsALostConnectionRatherThanAnOrderlyOne() async {
-    let transport = FakeTransport([.deliverThenFail([Fixtures.hello + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliverThenFail([Fixtures.hello + "\n" + Fixtures.auth + "\n"])])
+    let supervisor = proving(transport)
 
     supervisor.start()
 
@@ -126,9 +139,9 @@ private func eventually(
     }
     let recorder = Recorder()
     let transport = FakeTransport([
-        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])
     ])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
     supervisor.observer = recorder
 
     supervisor.start()
@@ -144,9 +157,9 @@ private func eventually(
 @MainActor
 @Test func watchingATunnelPutsTheVerbOnTheWire() async {
     let transport = FakeTransport([
-        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])
     ])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the link to come up") { supervisor.state.isLive }
 
@@ -158,9 +171,9 @@ private func eventually(
 @MainActor
 @Test func closingTheWindowReleasesTheTunnelOnTheWire() async {
     let transport = FakeTransport([
-        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])
     ])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the link to come up") { supervisor.state.isLive }
     supervisor.watch("alpha")
@@ -180,9 +193,9 @@ private func eventually(
     }
     let recorder = Recorder()
     let transport = FakeTransport([
-        .deliverAndStayOpen([Fixtures.hello + "\n", Fixtures.state + "\n"])
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n", Fixtures.state + "\n"])
     ])
-    let supervisor = FeedSupervisor(transport: transport)
+    let supervisor = proving(transport)
     supervisor.observer = recorder
     supervisor.start()
     await eventually("the link to come up") { supervisor.state.isLive }
@@ -200,8 +213,8 @@ private func eventually(
 
 @MainActor
 @Test func askingForAPingPutsTheVerbOnTheWire() async {
-    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"])])
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the link to go live") { supervisor.state == .live(sawState: false) }
 
@@ -218,8 +231,8 @@ private func eventually(
 
 @MainActor
 @Test func aRoundOfProbesReachesWhoeverDraws() async {
-    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n"])])
-    let supervisor = FeedSupervisor(transport: transport)
+    let transport = FakeTransport([.deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"])])
+    let supervisor = proving(transport)
     supervisor.start()
     await eventually("the link to go live") { supervisor.state == .live(sawState: false) }
 
@@ -228,4 +241,54 @@ private func eventually(
 
     #expect(supervisor.pings["alpha"]?.rtt == .milliseconds(18.4))
     #expect(supervisor.pings["bravo"]?.error == "timeout")
+}
+
+@MainActor
+@Test func thePublisherIsRememberedOnceItHasProvedItself() async {
+    // Trust on first use: written where it survives a restart, so the next
+    // connection is compared against it rather than believed afresh.
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"])
+    ])
+    let keys = RecordingKeys()
+    let supervisor = FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: keys,
+        nonces: FixedNonce(Proven.nonce))
+
+    supervisor.start()
+
+    await eventually("the link to come up") { supervisor.state.isLive }
+    #expect(keys.pinned(forSocket: Proven.socket) == Proven.key)
+}
+
+@MainActor
+@Test func aPublisherThatCannotProveItselfIsNotRemembered() async {
+    // The key on that socket is not the pinned one. Writing it down would be
+    // this application agreeing with whoever is there.
+    let transport = FakeTransport([
+        .deliverAndStayOpen([Fixtures.hello + "\n" + Fixtures.auth + "\n"])
+    ])
+    let keys = RecordingKeys()
+    let other = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+    keys.pin(other, forSocket: Proven.socket)
+    let supervisor = FeedSupervisor(
+        transport: transport, socketPath: Proven.socket, keys: keys,
+        nonces: FixedNonce(Proven.nonce))
+
+    supervisor.start()
+
+    await eventually("the refusal") {
+        if case .unproven = supervisor.state { return true } else { return false }
+    }
+    #expect(keys.pinned(forSocket: Proven.socket) == other)
+    #expect(supervisor.snapshot == nil)
+}
+
+/// A store in memory, so a test never touches the keychain of whoever runs it.
+private final class RecordingKeys: PinnedKeys, @unchecked Sendable {
+    private var keys: [String: String] = [:]
+
+    func pinned(forSocket path: String) -> String? { keys[path] }
+    func pin(_ key: String, forSocket path: String) { keys[path] = key }
+    func forget(socket path: String) { keys[path] = nil }
 }

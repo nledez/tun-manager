@@ -270,6 +270,15 @@ key the publisher announced, which is the line to compare against
 `sudo tun-manager feed-key` when you want to know that the thing you are
 connected to is the thing on your machine.
 
+The application checks that proof. On the first connection to a socket it
+remembers the key it was shown — trust on first use, the way `ssh` treats a host
+key — in the keychain rather than in defaults, because any process running as
+you can write a defaults key and a pin somebody else can rewrite is a pin that
+agrees with them. Every connection after that is verified against what was
+remembered, and a publisher that cannot prove it holds that key is not shown:
+the menu says so, names both fingerprints, and waits for you rather than
+reconnecting in a loop.
+
 In the window, `⌘W` and `⌘Q` both close it and leave the application in the
 menu bar, where it lives. Quitting is the `Quit` item and nothing else: a menu
 bar application that exits because somebody pressed `⌘Q` in a window takes away

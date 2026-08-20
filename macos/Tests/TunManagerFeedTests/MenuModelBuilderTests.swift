@@ -137,3 +137,53 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
 
     #expect(model.showsOverview == false)
 }
+
+@Test func theMenuSaysWhenItIsStillCheckingWhoIsThere() {
+    // A moment, usually. Saying "connected" during it would be saying it about
+    // something that has not yet said who it is.
+    let model = build(.proving, nil)
+
+    #expect(model.headline.contains("Checking"))
+    #expect(model.canRefresh == false)
+}
+
+@Test func theMenuNamesBothFingerprintsWhenTheKeyHasChanged() {
+    // The comparison somebody has to make, and the only one that answers the
+    // question: is this a key I rotated, or somebody else on that socket?
+    let pinned = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+    let offered = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+    let model = build(.unproven(pinned: pinned, offered: offered), nil)
+
+    #expect(model.headline.contains(Fingerprint.of(base64: pinned)!))
+    #expect(model.headline.contains(Fingerprint.of(base64: offered)!))
+}
+
+@Test func theMenuSaysWhenWhateverIsThereAnnouncedNoKey() {
+    // It cannot be told from any other program listening on that socket, which
+    // is a different thing from a key that does not match.
+    let model = build(.unproven(pinned: nil, offered: nil), nil)
+
+    #expect(model.headline.contains("announced no key"))
+}
+
+@Test func theMenuSaysWhenTheKeyItAnnouncedWasNotProved() {
+    let model = build(.unproven(pinned: nil, offered: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="), nil)
+
+    #expect(model.headline.contains("could not prove"))
+}
+
+@Test func aLinkThatCannotBeProvedIsRetriedByHandAndNeverOnATimer() {
+    // Reconnecting in a loop against something standing in for tun-manager is
+    // how somebody stops reading the reason.
+    var machine = Proven.machine(pinned: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+    _ = machine.handle(.start)
+    _ = Proven.greet(&machine)
+    guard case .unproven = machine.state else {
+        Issue.record("state = \(machine.state), want it unproven")
+        return
+    }
+
+    #expect(machine.handle(.retryTimerFired).isEmpty)
+    #expect(machine.handle(.userAskedToRetry).contains(.connect))
+}

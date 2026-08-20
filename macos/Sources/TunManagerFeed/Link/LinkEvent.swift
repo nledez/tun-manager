@@ -21,6 +21,9 @@ public enum LinkEvent: Sendable, Equatable {
     /// name is nil. Dropped while there is no connection: unlike a watch there
     /// is nothing to restore, because a measurement is wanted now or not at all.
     case askForPing(String?)
+    /// The publisher was asked to prove which one it is and has not, within the
+    /// time the machine asked to be woken after.
+    case authTimedOut
 }
 
 /// Everything the machine can ask the world to do. The machine performs no I/O
@@ -34,4 +37,11 @@ public enum LinkAction: Sendable, Equatable {
     case send(ClientCommand)
     case publish(Snapshot, SnapshotDiff)
     case publishSample(Sample)
+    /// Wake the machine if the publisher has not answered by then.
+    case scheduleAuthTimeout(Duration)
+    case cancelAuthTimeout
+    /// Remember this key as the one this socket's publisher is known by, from
+    /// now on. Trust on first use: there is nothing to configure, and every
+    /// connection after this one is compared against it.
+    case pin(String)
 }

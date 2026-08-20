@@ -22,6 +22,10 @@ public enum Disconnection: Sendable, Equatable {
 public enum LinkState: Sendable, Equatable {
     case idle
     case connecting
+    /// Connected, and asked to prove which publisher it is. Nothing it says is
+    /// shown from here: what arrives before the answer arrived from something
+    /// that has not said who it is.
+    case proving
     /// `sawState` is false between the publisher's hello and its first view,
     /// which is a real interval: a freshly started publisher has nothing to
     /// send until its first refresh.
@@ -30,4 +34,12 @@ public enum LinkState: Sendable, Equatable {
     /// The publisher speaks a schema this build does not. No automatic retry:
     /// it ends when a human upgrades one side.
     case blocked(theirSchema: Int)
+    /// The publisher did not prove it holds the key this application pinned:
+    /// it announced none, it answered with a signature that does not hold, or
+    /// it did not answer at all. `offered` is the key it announced, when it
+    /// announced one.
+    ///
+    /// No automatic retry either. Reconnecting in a loop against something
+    /// standing in for tun-manager is how somebody stops reading the reason.
+    case unproven(pinned: String?, offered: String?)
 }

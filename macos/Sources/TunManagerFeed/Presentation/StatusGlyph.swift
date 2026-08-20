@@ -16,10 +16,18 @@ public struct StatusGlyph: Sendable, Equatable {
 
     public static func of(state: LinkState, snapshot: Snapshot?) -> StatusGlyph {
         switch state {
-        case .idle, .connecting, .retrying:
+        case .idle, .connecting, .proving, .retrying:
             return StatusGlyph(
                 symbol: "shield.slash", dimmed: true,
                 description: "Tun Manager: not connected to tun-manager")
+
+        case .unproven:
+            // The same alarming glyph a protocol mismatch gets, because it is
+            // the same kind of thing: something is at the end of that socket
+            // and this application will not repeat what it says.
+            return StatusGlyph(
+                symbol: "exclamationmark.shield.fill", dimmed: false,
+                description: "Tun Manager: the publisher on that socket did not prove who it is")
 
         case .blocked:
             return StatusGlyph(

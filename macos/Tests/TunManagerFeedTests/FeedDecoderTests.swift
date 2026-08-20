@@ -12,7 +12,7 @@ import Testing
     #expect(
         got
             == .hello(
-                schema: 2, version: "v0.2.0",
+                schema: 2, version: "v0.6.0",
                 publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="))
 }
 

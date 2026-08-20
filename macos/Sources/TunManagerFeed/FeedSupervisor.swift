@@ -14,15 +14,32 @@ import Foundation
 @MainActor
 public final class FeedSupervisor {
     private let transport: any FeedTransport
-    private var machine = LinkMachine()
+    private let keys: any PinnedKeys
+    private let socketPath: String
+    private var machine: LinkMachine
     private var connection: (any FeedConnection)?
     private var reader: Task<Void, Never>?
     private var retry: Task<Void, Never>?
+    /// Wakes the machine if the publisher never answers its challenge.
+    private var proof: Task<Void, Never>?
 
     public weak var observer: (any FeedObserver)?
 
-    public init(transport: any FeedTransport) {
+    /// - Parameters:
+    ///   - socketPath: what this client dialled. It goes into the message the
+    ///     publisher signs, which is what a relay listening elsewhere cannot
+    ///     produce an answer for.
+    ///   - keys: where the key each socket's publisher is known by is kept.
+    public init(
+        transport: any FeedTransport, socketPath: String = "",
+        keys: any PinnedKeys = KeychainPinnedKeys(),
+        nonces: any NonceSource = SystemNonces()
+    ) {
         self.transport = transport
+        self.keys = keys
+        self.socketPath = socketPath
+        self.machine = LinkMachine(
+            socketPath: socketPath, nonces: nonces, pinnedKey: keys.pinned(forSocket: socketPath))
     }
 
     public var state: LinkState { machine.state }
@@ -88,6 +105,22 @@ public final class FeedSupervisor {
 
         case .publishSample(let sample):
             observer?.linkDidSample(sample)
+
+        case .scheduleAuthTimeout(let delay):
+            proof?.cancel()
+            proof = Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+                self?.dispatch(.authTimedOut)
+            }
+        case .cancelAuthTimeout:
+            proof?.cancel()
+            proof = nil
+
+        case .pin(let key):
+            // Trust on first use: written where it survives a restart, so that
+            // every connection after this one is compared against it.
+            keys.pin(key, forSocket: socketPath)
         }
     }
 

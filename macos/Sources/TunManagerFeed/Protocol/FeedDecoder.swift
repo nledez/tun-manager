@@ -50,6 +50,9 @@ public enum FeedDecoder {
             case "hello":
                 let wire = try decoder.decode(WireHello.self, from: line)
                 return .hello(schema: wire.schema, version: wire.version, publicKey: wire.pubkey)
+            case "auth":
+                let wire = try decoder.decode(WireAuth.self, from: line)
+                return .auth(nonce: wire.nonce, signature: wire.signature)
             case "state":
                 return .state(try decoder.decode(WireState.self, from: line).snapshot)
             case "sample":
@@ -85,6 +88,11 @@ private struct WireHello: Decodable {
     /// a publisher that has no key, and from every publisher older than the
     /// version that started sending one.
     let pubkey: String?
+}
+
+private struct WireAuth: Decodable {
+    let nonce: String
+    let signature: String
 }
 
 private struct WireState: Decodable {

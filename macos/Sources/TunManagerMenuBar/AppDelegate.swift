@@ -11,7 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let path = SocketPath.resolved()
-        let supervisor = FeedSupervisor(transport: UnixSocketTransport(path: path))
+        let supervisor = FeedSupervisor(
+            transport: UnixSocketTransport(path: path), socketPath: path)
         let statusItem = StatusItemController(
             supervisor: supervisor, socketPath: path, notifications: notifications)
 

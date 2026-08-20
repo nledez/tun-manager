@@ -2,7 +2,7 @@ import Foundation
 
 /// The verbs this client may send.
 ///
-/// The publisher accepts these four and no others, and none of them can start
+/// The publisher accepts these five and no others, and none of them can start
 /// or stop a tunnel — which is the whole reason the socket needs no
 /// authorisation.
 public enum ClientCommand: Sendable, Equatable {
@@ -25,6 +25,10 @@ public enum ClientCommand: Sendable, Equatable {
     /// publisher was not already told about. Accepted at most once every two
     /// seconds, and answered by a `ping` line or not at all.
     case ping(String?)
+    /// Asks the publisher to sign these thirty-two bytes, together with what it
+    /// is. Drawn fresh for every connection: an answer to somebody else's
+    /// question is an answer somebody kept.
+    case challenge(Data)
 
     public var line: Data {
         // Encoded rather than interpolated. Tunnel names come from file names
@@ -45,9 +49,13 @@ public enum ClientCommand: Sendable, Equatable {
 private struct Wire: Encodable {
     let type: String
     let tunnel: String?
+    let nonce: String?
 
     init(_ command: ClientCommand) {
+        nonce = if case .challenge(let bytes) = command { bytes.base64EncodedString() } else { nil }
         switch command {
+        case .challenge:
+            (type, tunnel) = ("challenge", nil)
         case .refresh:
             (type, tunnel) = ("refresh", nil)
         case .watch(let name):
@@ -60,12 +68,13 @@ private struct Wire: Encodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, tunnel
+        case type, tunnel, nonce
     }
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
         try container.encodeIfPresent(tunnel, forKey: .tunnel)
+        try container.encodeIfPresent(nonce, forKey: .nonce)
     }
 }

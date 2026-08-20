@@ -2,6 +2,9 @@
 public enum FeedMessage: Sendable, Equatable {
     /// The first line on every connection. `schema` is the contract's version.
     case hello(schema: Int, version: String, publicKey: String?)
+    /// The publisher's answer to a challenge: the nonce it was asked and a
+    /// signature over what it is, together with that nonce.
+    case auth(nonce: String, signature: String)
     case state(Snapshot)
     case sample(Sample)
     /// A round of probes, as one message. Never replayed on connect: a view

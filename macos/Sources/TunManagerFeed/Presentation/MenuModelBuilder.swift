@@ -20,6 +20,10 @@ public enum MenuModelBuilder {
         switch state {
         case .idle, .connecting:
             return "Connecting to tun-manager…"
+        case .proving:
+            return "Checking that this is your tun-manager…"
+        case .unproven(let pinned, let offered):
+            return unproven(pinned: pinned, offered: offered)
         case .retrying(let because):
             return sentence(for: because)
         case .blocked(let theirSchema):
@@ -29,6 +33,30 @@ public enum MenuModelBuilder {
             guard let snapshot else { return "Connected — waiting for the first refresh" }
             return Formatting.context(snapshot.context)
         }
+    }
+
+    /// What to say about a publisher that did not prove itself.
+    ///
+    /// Three different things, and they are not interchangeable. A publisher
+    /// that announced no key is one this application cannot tell from anything
+    /// else on that socket. One whose key is not the pinned one is either a new
+    /// key or somebody else, and only the person reading can say which — so
+    /// both fingerprints are named, because that is the comparison they have to
+    /// make. And nothing pinned with a signature that does not hold is
+    /// something that answered wrongly, which is nobody's honest mistake.
+    private static func unproven(pinned: String?, offered: String?) -> String {
+        guard let pinned else {
+            guard offered != nil else {
+                return "Whatever is on that socket announced no key — it cannot be tun-manager"
+            }
+            return "Whatever is on that socket could not prove it holds the key it announced"
+        }
+        guard let offered, let theirs = Fingerprint.of(base64: offered) else {
+            return "The publisher on that socket did not prove it holds the key pinned here "
+                + "(\(Fingerprint.of(base64: pinned) ?? "unreadable"))"
+        }
+        return "That socket now answers with a different key: pinned "
+            + "\(Fingerprint.of(base64: pinned) ?? "unreadable"), offered \(theirs)"
     }
 
     /// Each reason gets its own sentence, because each has its own remedy.

@@ -1,5 +1,7 @@
 import Foundation
 
+@testable import TunManagerFeed
+
 /// Wire lines as the publisher writes them. Invented throughout: the tunnel
 /// names are the repository's placeholders and the addresses come from the
 /// ranges reserved for documentation (RFC 5737), so no fixture can name a real
@@ -9,7 +11,12 @@ enum Fixtures {
     /// key it is known by. The pubkey is the public half of the seed the Go
     /// tests use, so both sides are talking about the same key.
     static let hello =
-        #"{"type":"hello","schema":2,"version":"v0.2.0","pubkey":"A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="}"#
+        #"{"type":"hello","schema":2,"version":"v0.6.0","pubkey":"A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="}"#
+
+    /// The answer to a challenge of Proven.nonce, made by the key that hello
+    /// announces. Taken from internal/feed, like the rest of it.
+    static let auth =
+        #"{"type":"auth","nonce":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","signature":"N0zb6kCOKreEzkejmsMp94YoDsz4nHcX40btcVOQFbma1sxBjNWWszuHJfz8dyAWTGDNxSi2uHjqComOT0HaDA=="}"#
 
     /// A full view: one tunnel up with everything filled in, one down with
     /// every optional key omitted.
@@ -37,4 +44,39 @@ enum Fixtures {
     static let bye = #"{"type":"bye"}"#
 
     static func line(_ text: String) -> Data { Data(text.utf8) }
+}
+
+/// One publisher, proved. The key, the nonce and the signature come from
+/// internal/feed on the Go side, so a machine taken through this exchange has
+/// been through the real one rather than a rehearsal of it.
+enum Proven {
+    static let socket = "/var/run/tun-manager.sock"
+    static let version = "v0.6.0"
+    static let key = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+    static let nonce = Data(0..<32)
+    static let signature =
+        "N0zb6kCOKreEzkejmsMp94YoDsz4nHcX40btcVOQFbma1sxBjNWWszuHJfz8dyAWTGDNxSi2uHjqComOT0HaDA=="
+
+    /// A machine that draws the nonce that signature answers.
+    static func machine(pinned: String? = nil) -> LinkMachine {
+        LinkMachine(socketPath: socket, nonces: FixedNonce(nonce), pinnedKey: pinned)
+    }
+
+    /// Everything the publisher says on the way to being believed, as one step:
+    /// the hello, and the answer to the challenge it provokes.
+    static func greet(_ machine: inout LinkMachine, version: String = version) -> [LinkAction] {
+        var actions = machine.handle(
+            .message(.hello(schema: LinkMachine.schema, version: version, publicKey: key)))
+        actions += machine.handle(
+            .message(.auth(nonce: nonce.base64EncodedString(), signature: signature)))
+        return actions
+    }
+}
+
+/// A nonce a test chooses, because the machine has to be deterministic to be
+/// tested and randomness is the one thing in it that cannot be.
+struct FixedNonce: NonceSource {
+    let value: Data
+    init(_ value: Data) { self.value = value }
+    func nonce() -> Data { value }
 }

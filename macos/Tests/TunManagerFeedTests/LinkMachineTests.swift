@@ -13,14 +13,14 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func theMachineAsksToConnectAsSoonAsItIsStarted() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
 
     #expect(machine.handle(.start) == [.connect])
     #expect(machine.state == .connecting)
 }
 
 @Test func aConnectThatFailsBecauseThereIsNoSocketReportsThatTunManagerIsNotRunning() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
     _ = machine.handle(.connectFailed(ENOENT))
@@ -29,7 +29,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func aConnectThatIsRefusedReportsASocketLeftBehindByACrash() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
     _ = machine.handle(.connectFailed(ECONNREFUSED))
@@ -41,7 +41,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // No SUDO_USER, so the publisher never handed the socket over and it is
     // still root's. Only a human restarting tun-manager differently fixes it.
     for code in [EACCES, EPERM] {
-        var machine = LinkMachine()
+        var machine = Proven.machine()
         _ = machine.handle(.start)
 
         _ = machine.handle(.connectFailed(code))
@@ -51,19 +51,19 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func aHelloWithTheSchemaThisAppKnowsMakesTheLinkLive() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     #expect(machine.isLive)
-    #expect(machine.publisherVersion == "v0.2.0")
+    #expect(machine.publisherVersion == Proven.version)
 }
 
 @Test func aHelloWithASchemaThisAppDoesNotKnowBlocksTheLinkAndSchedulesNoRetry() {
     // Retrying against a condition only a human can clear is how a program ends
     // up logging the same line every thirty seconds forever.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
     let actions = machine.handle(.message(.hello(schema: 4, version: "v9.0.0", publicKey: nil)))
@@ -73,7 +73,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func aBlockedLinkReconnectsOnlyWhenTheUserAsks() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
     _ = machine.handle(.message(.hello(schema: 4, version: "v9.0.0", publicKey: nil)))
 
@@ -87,7 +87,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // away it accepts a connection and closes it without a word. A client that
     // reset its backoff on a successful connect(2) would spin at full speed for
     // the whole shutdown.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
     // Two rejections in a row. Comparing them to each other rather than to a
@@ -106,23 +106,23 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func anAcceptedHelloIsTheOnlyThingThatResetsTheAttemptCounter() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
     for _ in 0..<4 {
         _ = machine.handle(.connectFailed(ENOENT))
         _ = machine.handle(.retryTimerFired)
     }
 
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.endOfStream)
 
     #expect(machine.retryDelay == ReconnectPolicy.delay(after: .lost, attempt: 0))
 }
 
 @Test func byeIsFollowedByATwoSecondRetryBecauseRestartingTunManagerIsWhyItWasSent() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     let actions = machine.handle(.message(.bye))
 
@@ -134,9 +134,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func aBareEndOfStreamAfterALiveConnectionRetriesFromTheTopOfTheLadder() {
     // Either the publisher crashed or we were dropped for falling behind, and
     // the client cannot tell. The second recovers instantly, so guess that way.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     _ = machine.handle(.endOfStream)
 
@@ -145,9 +145,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func theLastSnapshotSurvivesADisconnectionSoTheMenuDoesNotGoBlank() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.message(.state(aSnapshot("alpha", "bravo"))))
 
     _ = machine.handle(.endOfStream)
@@ -158,9 +158,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func aLiveLinkThatHasNotYetSeenAStateSaysSoInsteadOfShowingNothing() {
     // A freshly started publisher sends hello and then nothing until its first
     // refresh. "Connected, waiting" is a different sentence from an empty menu.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     #expect(machine.state == .live(sawState: false))
 
@@ -169,9 +169,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func openingTheMenuOnALiveLinkSendsARefresh() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     #expect(machine.handle(.menuWillOpen) == [.send(.refresh)])
 }
@@ -180,7 +180,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // The ceiling is thirty seconds, which is only defensible because looking
     // at the menu bar is itself a reason to try again.
     for event in [LinkEvent.menuWillOpen, .systemDidWake, .userAskedToRetry] {
-        var machine = LinkMachine()
+        var machine = Proven.machine()
         _ = machine.handle(.start)
         _ = machine.handle(.connectFailed(ENOENT))
 
@@ -192,18 +192,18 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func stoppingCancelsThePendingRetryAndClosesTheConnection() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     #expect(machine.handle(.stop) == [.cancelRetry, .closeConnection])
     #expect(machine.state == .idle)
 }
 
 @Test func aSampleLineOnALinkThatNeverWatchedAnythingIsIgnored() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     let sample = Sample(tunnel: "alpha", at: anInstant, rx: 1, tx: 1)
     #expect(machine.handle(.message(.sample(sample))).isEmpty)
@@ -211,9 +211,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func aStateArrivingIsPublishedWithWhatChangedSinceTheLastOne() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.message(.state(aSnapshot("alpha"))))
 
     let actions = machine.handle(.message(.state(aSnapshot("alpha", "bravo"))))
@@ -229,9 +229,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 // has to survive the link going away underneath it.
 
 @Test func askingToWatchATunnelSendsTheVerb() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
 
     #expect(machine.handle(.watch("alpha")) == [.send(.watch("alpha"))])
 }
@@ -240,9 +240,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // Switching tunnels in the window must not cost the first one's history:
     // going back to it should show a continuous graph, not a gap where nobody
     // happened to be looking.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("alpha"))
 
     #expect(machine.handle(.watch("bravo")) == [.send(.watch("bravo"))])
@@ -250,9 +250,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func watchingTheTunnelAlreadyWatchedSaysNothingTwice() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("alpha"))
 
     #expect(machine.handle(.watch("alpha")).isEmpty)
@@ -261,9 +261,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func closingTheWindowReleasesEveryTunnelItLookedAt() {
     // Nobody is looking any more, so tun-manager should stop reading counters
     // for any of them.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("bravo"))
     _ = machine.handle(.watch("alpha"))
 
@@ -273,62 +273,65 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 }
 
 @Test func everyWatchedTunnelIsRenewedTogetherAfterAReconnection() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("bravo"))
     _ = machine.handle(.watch("alpha"))
 
     _ = machine.handle(.endOfStream)
     _ = machine.handle(.retryTimerFired)
 
-    #expect(
-        machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
-            == [.send(.watch("alpha")), .send(.watch("bravo"))])
+    let onHello = Proven.greet(&machine)
+
+    #expect(onHello.contains(.send(.watch("alpha"))))
+    #expect(onHello.contains(.send(.watch("bravo"))))
 }
 
 @Test func aWatchAskedForWhileTheLinkIsDownIsSentOnceItComesBack() {
     // The window can be opened before tun-manager is running, and the
     // subscription has to be waiting rather than lost.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
     _ = machine.handle(.connectFailed(ENOENT))
 
     #expect(machine.handle(.watch("alpha")).isEmpty)
 
     _ = machine.handle(.retryTimerFired)
-    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    let onHello = Proven.greet(&machine)
 
-    #expect(onHello == [.send(.watch("alpha"))])
+    #expect(onHello.contains(.send(.watch("alpha"))))
 }
 
 @Test func aWatchIsRenewedAfterTheLinkDropsAndComesBack() {
     // The publisher forgets every watch when the connection ends, so a window
     // left open across a restart would show a graph frozen at the moment the
     // link died, with nothing saying why.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("alpha"))
 
     _ = machine.handle(.endOfStream)
     _ = machine.handle(.retryTimerFired)
-    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    let onHello = Proven.greet(&machine)
 
-    #expect(onHello == [.send(.watch("alpha"))])
+    #expect(onHello.contains(.send(.watch("alpha"))))
 }
 
 @Test func nothingIsRenewedWhenNoWindowIsOpen() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
 
-    #expect(machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil))).isEmpty)
+    let onHello = Proven.greet(&machine)
+
+    #expect(onHello.contains { if case .send(.watch) = $0 { return true } else { return false } } == false)
 }
 
 @Test func aSampleForTheWatchedTunnelIsHandedOn() {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("alpha"))
 
     let sample = Sample(tunnel: "alpha", at: anInstant, rx: 100, tx: 50)
@@ -338,9 +341,9 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func aSampleForATunnelNobodyIsWatchingIsDropped() {
     // An unwatch and a reading can cross on the wire. Charting one for a tunnel
     // the window has already left would draw it into the wrong graph.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
+    _ = Proven.greet(&machine)
     _ = machine.handle(.watch("alpha"))
 
     let stray = Sample(tunnel: "charlie", at: anInstant, rx: 100, tx: 50)
@@ -351,9 +354,11 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 
 /// A machine that has connected and been greeted.
 private func aLiveMachine() -> LinkMachine {
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.4.0", publicKey: nil)))
+    // Greeted and proved: a hello alone leaves the link waiting for the
+    // publisher to say which one it is.
+    _ = Proven.greet(&machine)
     return machine
 }
 
@@ -373,7 +378,7 @@ private func aLiveMachine() -> LinkMachine {
     // A watch is restored on the next hello because it is a standing
     // subscription. A probe is a question about right now, and answering it two
     // minutes later would answer a different question.
-    var machine = LinkMachine()
+    var machine = Proven.machine()
     _ = machine.handle(.start)
     _ = machine.handle(.connectFailed(ENOENT))
 
@@ -386,9 +391,9 @@ private func aLiveMachine() -> LinkMachine {
     _ = machine.handle(.endOfStream)
     _ = machine.handle(.retryTimerFired)
 
-    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.4.0", publicKey: nil)))
+    let onHello = Proven.greet(&machine)
 
-    #expect(onHello.isEmpty)
+    #expect(onHello.contains { if case .send(.ping) = $0 { return true } else { return false } } == false)
 }
 
 @Test func aRoundOfProbesIsKeptForWhoeverDraws() {
