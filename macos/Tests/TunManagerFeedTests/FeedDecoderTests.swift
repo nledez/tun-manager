@@ -9,7 +9,11 @@ import Testing
 @Test func aHelloLineYieldsTheSchemaAndVersionItCarries() throws {
     let got = FeedDecoder.decode(Fixtures.line(Fixtures.hello))
 
-    #expect(got == .hello(schema: 1, version: "v0.2.0", publicKey: nil))
+    #expect(
+        got
+            == .hello(
+                schema: 2, version: "v0.2.0",
+                publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="))
 }
 
 @Test func aStateLineYieldsEveryTunnelInTheOrderThePublisherSentThem() throws {

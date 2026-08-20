@@ -5,7 +5,11 @@ import Foundation
 /// ranges reserved for documentation (RFC 5737), so no fixture can name a real
 /// host.
 enum Fixtures {
-    static let hello = #"{"type":"hello","schema":1,"version":"v0.2.0"}"#
+    /// A hello from a publisher speaking what this build understands, with the
+    /// key it is known by. The pubkey is the public half of the seed the Go
+    /// tests use, so both sides are talking about the same key.
+    static let hello =
+        #"{"type":"hello","schema":2,"version":"v0.2.0","pubkey":"A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="}"#
 
     /// A full view: one tunnel up with everything filled in, one down with
     /// every optional key omitted.

@@ -1,6 +1,19 @@
 // Package feed publishes tunnel state over a unix socket, so that a program
 // with no privileges can show it.
 //
+// The exchange, in full:
+//
+//	S→C  {"type":"hello","schema":2,"version":"…","pubkey":"<base64, 32 bytes>"}
+//	C→S  {"type":"challenge","nonce":"<base64, 32 bytes the client invented>"}
+//	S→C  {"type":"auth","nonce":"<the same>","signature":"<base64, 64 bytes>"}
+//
+// and then state, sample, ping and bye as they happen, in whatever order they
+// happen. A client may ask its question at any point or never; the publisher
+// sends what it has either way, because there is nothing on this socket worth
+// hiding from somebody who is already allowed to read it. What the question is
+// for is the other direction: the client deciding whether the thing at the end
+// of the socket is the tun-manager it pinned.
+//
 // Everything here is read-only by construction: no message a client can send
 // starts or stops a tunnel. That is what keeps the socket cheap to reason
 // about — there is no authorisation to design, because there is nothing to
@@ -16,7 +29,14 @@ import (
 // Schema is the version of the wire contract. It changes only when an existing
 // field changes meaning or disappears; adding a field does not bump it, because
 // a client that has never heard of a field ignores it.
-const Schema = 1
+//
+// Two, because what a connection means changed. A client can now ask the
+// publisher to prove which one it is, and a client that pins a key needs to
+// know it is talking to something that can be asked. Left at one, a publisher
+// with no idea what a challenge is would look exactly like one refusing to
+// answer, and an application would have to choose between refusing every older
+// publisher and accepting anything that stayed quiet.
+const Schema = 2
 
 // helloMsg is the first line on every connection.
 type helloMsg struct {
@@ -67,9 +87,24 @@ type byeMsg struct {
 	Type string `json:"type"`
 }
 
-// clientMsg is anything a client sends. There is one shape for all of them:
-// the vocabulary is four verbs wide and will not grow a payload.
+// clientMsg is anything a client sends. One shape for all of them: the
+// vocabulary is five verbs wide and carries a name or a nonce, never both.
 type clientMsg struct {
 	Type   string `json:"type"`
 	Tunnel string `json:"tunnel,omitempty"`
+	// Nonce is the thirty-two bytes a client invents for a challenge, base64.
+	Nonce string `json:"nonce,omitempty"`
+}
+
+// authMsg answers a challenge: the nonce that was asked, and a signature over
+// what the publisher is - its schema, its version and the socket it is bound
+// to - together with that nonce.
+//
+// The nonce comes back so a client with two challenges in flight knows which
+// answer is which, and because checking a signature means knowing what was
+// signed.
+type authMsg struct {
+	Type      string `json:"type"`
+	Nonce     string `json:"nonce"`
+	Signature string `json:"signature"`
 }

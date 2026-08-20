@@ -42,16 +42,26 @@ func GenerateSeed(random io.Reader) (string, error) {
 	return base64.StdEncoding.EncodeToString(seed), nil
 }
 
-// PublicKeyOfSeed returns the public half of the key a seed stands for.
-func PublicKeyOfSeed(seed string) (ed25519.PublicKey, error) {
+// seedBytes decodes a seed, refusing anything that is not one.
+//
+// The seed itself is never in an error: a message is the one place a secret
+// reaches a log line without anybody deciding it should.
+func seedBytes(seed string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(seed))
 	if err != nil {
-		// The seed itself is never in the message: an error is the one place a
-		// secret reaches a log line without anybody deciding it should.
 		return nil, errors.New("the feed key is not base64")
 	}
 	if len(raw) != SeedLen {
 		return nil, fmt.Errorf("the feed key is %d bytes, want %d", len(raw), SeedLen)
+	}
+	return raw, nil
+}
+
+// PublicKeyOfSeed returns the public half of the key a seed stands for.
+func PublicKeyOfSeed(seed string) (ed25519.PublicKey, error) {
+	raw, err := seedBytes(seed)
+	if err != nil {
+		return nil, err
 	}
 	// The public half is the second half of the private key, which is what
 	// Public() hands back. Taken directly rather than through a type assertion

@@ -3,6 +3,8 @@ package feed
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"os"
@@ -26,7 +28,10 @@ func serving(t *testing.T, sampler Sampler, tweaks ...func(*Server)) *Server {
 	t.Helper()
 
 	s := &Server{
-		Path:     socketPath(t),
+		Path: socketPath(t),
+		// Every publisher has one: Listen refuses to start without a key to
+		// prove which publisher it is.
+		FeedKey:  knownSeed,
 		Sampler:  sampler,
 		Version:  "v0.0.0-test",
 		Interval: 5 * time.Millisecond,
@@ -187,7 +192,7 @@ func TestAClientArrivingBeforeAnyViewGetsOnlyHello(t *testing.T) {
 func TestShuttingDownSaysGoodbye(t *testing.T) {
 	// A client has to tell a publisher that quit from one that crashed: one is
 	// "tun-manager is not running", the other is worth retrying immediately.
-	s := &Server{Path: socketPath(t), Interval: 5 * time.Millisecond}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed, Interval: 5 * time.Millisecond}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -208,7 +213,7 @@ func TestShuttingDownSaysGoodbye(t *testing.T) {
 }
 
 func TestServeRemovesTheSocketOnItsWayOut(t *testing.T) {
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -271,7 +276,7 @@ func TestServeReportsAnAcceptFailureThatIsNotAShutdown(t *testing.T) {
 	// Accept can fail for a reason other than the context being cancelled -
 	// closing the raw listener out from under Serve, rather than through ctx, is
 	// what tells the two apart.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -304,7 +309,7 @@ func TestAnAcceptFailureAlsoSaysGoodbye(t *testing.T) {
 	// goroutine stays parked on the caller's context forever and shutdown
 	// never runs, leaving an already-connected client talking to a server
 	// that has quietly stopped rather than told to go away.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -340,7 +345,7 @@ func TestAddClosesAConnectionArrivingAfterShutdown(t *testing.T) {
 	// A connection can be accepted in the moment between shutdown marking the
 	// server closed and Accept noticing the listener is gone; add must not
 	// register it.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -449,7 +454,7 @@ func TestShutdownDoesNotBlockOnAClientThatFellBehind(t *testing.T) {
 	c := &client{conn: server, out: make(chan any, 1)}
 	c.out <- helloMsg{Type: "hello"} // fill the one slot
 
-	s := &Server{Path: socketPath(t), clients: map[*client]struct{}{c: {}}}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed, clients: map[*client]struct{}{c: {}}}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -526,7 +531,8 @@ func TestServeDoesNotReturnUntilShutdownHasFinished(t *testing.T) {
 	}
 	t.Cleanup(func() { fsx.Remove = previousRemove })
 	s := &Server{
-		Path: socketPath(t),
+		FeedKey: knownSeed,
+		Path:    socketPath(t),
 	}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -559,4 +565,142 @@ func TestServeDoesNotReturnUntilShutdownHasFinished(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve did not return after shutdown finished")
 	}
+}
+
+// MARK: proving which publisher this is
+
+func TestAChallengeIsAnsweredWithASignatureOfIt(t *testing.T) {
+	// What the application checks against the key it pinned. The nonce comes
+	// from the client, so the answer is good once and for it alone.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+	c := dial(t, s)
+	c.next(t) // hello
+
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(7))+`"}`)
+
+	auth := c.next(t)
+	if auth["type"] != "auth" {
+		t.Fatalf("answer = %v, want an auth line", auth)
+	}
+	pub, err := PublicKeyOfSeed(knownSeed)
+	if err != nil {
+		t.Fatalf("PublicKeyOfSeed: %v", err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(auth["signature"].(string))
+	if err != nil {
+		t.Fatalf("the signature is not base64: %v", err)
+	}
+	message := SignedMessage(Schema, s.Version, s.Path, aNonce(7))
+	if !ed25519.Verify(pub, message, signature) {
+		t.Error("the signature does not verify against the announced key")
+	}
+}
+
+func TestTheAnswerCarriesTheNonceItAnswers(t *testing.T) {
+	// A client with two challenges in flight has to know which is which, and
+	// checking a signature means knowing what was signed.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+	c := dial(t, s)
+	c.next(t)
+	nonce := base64.StdEncoding.EncodeToString(aNonce(9))
+
+	c.send(t, `{"type":"challenge","nonce":"`+nonce+`"}`)
+
+	if got := c.next(t)["nonce"]; got != nonce {
+		t.Errorf("nonce = %v, want the one that was asked", got)
+	}
+}
+
+func TestTwoNoncesGetTwoSignatures(t *testing.T) {
+	// A signature that did not depend on the nonce would be one anybody could
+	// keep and present later as their own.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed; s.ChallengeFloor = time.Nanosecond })
+	c := dial(t, s)
+	c.next(t)
+
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
+	first := c.next(t)["signature"]
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
+	second := c.next(t)["signature"]
+
+	if first == second {
+		t.Error("two nonces were answered with one signature")
+	}
+}
+
+func TestANonceOfTheWrongSizeIsNotSigned(t *testing.T) {
+	// Less randomness than it claims, and no reason to sign it: the vocabulary
+	// has one shape here.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+	c := dial(t, s)
+	c.next(t)
+
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString([]byte("short"))+`"}`)
+	// The connection stays; the publisher simply says nothing about it.
+	s.Publish(aView("alpha"))
+
+	if got := c.next(t)["type"]; got != "state" {
+		t.Errorf("next line = %v, want the view rather than an answer", got)
+	}
+}
+
+func TestANonceThatIsNotBase64IsNotSigned(t *testing.T) {
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+	c := dial(t, s)
+	c.next(t)
+
+	c.send(t, `{"type":"challenge","nonce":"not base64 at all!"}`)
+	s.Publish(aView("alpha"))
+
+	if got := c.next(t)["type"]; got != "state" {
+		t.Errorf("next line = %v, want the view rather than an answer", got)
+	}
+}
+
+func TestChallengesAreBoundedLikeEveryOtherVerb(t *testing.T) {
+	// Signing is cheap and not free, and a client that can ask for one whenever
+	// it likes is a signing oracle. The floor is the same idea as the one on
+	// refreshes and pings.
+	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
+	c := dial(t, s)
+	c.next(t)
+
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
+	c.next(t) // the first answer
+	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
+	s.Publish(aView("alpha"))
+
+	if got := c.next(t)["type"]; got != "state" {
+		t.Errorf("next line = %v, want the second challenge dropped", got)
+	}
+}
+
+func TestAPublisherWithNoKeyAnswersNoChallenge(t *testing.T) {
+	// Listen refuses to start one, so this is what would happen if a key went
+	// away underneath a publisher that is already running: silence, which is
+	// what a client reads as "this one cannot prove who it is".
+	for name, key := range map[string]string{
+		"with no key at all":     "",
+		"with something else in": "not a key",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &Server{FeedKey: key}
+			c := &client{out: make(chan any, 1), watch: map[string]bool{}}
+
+			s.answerChallenge(c, base64.StdEncoding.EncodeToString(aNonce(1)))
+
+			select {
+			case answer := <-c.out:
+				t.Errorf("the publisher answered %v with a key it does not have", answer)
+			default:
+			}
+		})
+	}
+}
+
+// aNonce is thirty-two bytes a test can tell apart from another thirty-two.
+func aNonce(mark byte) []byte {
+	nonce := make([]byte, NonceLen)
+	nonce[0] = mark
+	return nonce
 }

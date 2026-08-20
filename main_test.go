@@ -97,6 +97,9 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 	// name overflowing a unix socket path.
 	priv.Feed = false
 	priv.FeedSocket = filepath.Join(shortSocketDir(t), "f.sock")
+	// Every installation has one: init-privileged writes it, and the feed
+	// refuses to publish without a key to prove which publisher it is.
+	priv.FeedKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 	cfg.Groups = map[string][]string{
 		profile.GroupNeeded: {"alpha", "bravo"},
 		profile.GroupAll:    {"alpha", "bravo"},
@@ -2158,4 +2161,97 @@ func TestTheFeedIsGivenTheKeyItPublishesUnder(t *testing.T) {
 	}
 	cancel()
 	<-served
+}
+
+func TestASimulatedRunPublishesUnderAKeyOfItsOwn(t *testing.T) {
+	// It cannot read the privileged file, and the feed will not publish without
+	// a key. A fresh one per run rather than a flag: a seed on a command line
+	// is a seed in `ps`, and a demo's key is worth exactly one demo.
+	e := demoEnv(t, &fakeRunner{})
+	if _, err := e.parseFlags([]string{"--feed-socket", filepath.Join(shortSocketDir(t), "f.sock")}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+	priv.FeedKey = ""
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f, served, problems := e.startFeed(ctx, a, priv, privdrop.User{})
+
+	if f == nil {
+		t.Fatalf("the demo has no feed: %v", problems)
+	}
+	if f.FeedKey == "" {
+		t.Error("the demo's feed has no key, so nothing can verify it")
+	}
+	cancel()
+	<-served
+}
+
+func TestARealRunWithNoKeySaysSoRatherThanInventingOne(t *testing.T) {
+	// The other half of the rule above. A publisher that made itself a key on
+	// the spot would be pinned as itself and then be a different publisher
+	// after every restart, which reads exactly like somebody standing in for
+	// it.
+	e := testEnv(t, &fakeRunner{}) // euid 0, not simulating
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+	priv.FeedKey = ""
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f, _, problems := e.startFeed(ctx, a, priv, privdrop.User{})
+
+	if f != nil {
+		t.Fatal("the feed started with no key")
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "feed-key --rotate") {
+		t.Errorf("the interface was told %q, want the command that writes a key", problems)
+	}
+}
+
+func TestADemoWithNoKeyItCanDrawHasNoFeed(t *testing.T) {
+	// crypto/rand does not fail on darwin. What this branch decides is whether
+	// the demo publishes at all, which is not something to leave unread.
+	e := demoEnv(t, &fakeRunner{})
+	if _, err := e.parseFlags([]string{"--feed-socket", filepath.Join(shortSocketDir(t), "f.sock")}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	previous := newSeed
+	newSeed = func() (string, error) { return "", errors.New("no randomness today") }
+	t.Cleanup(func() { newSeed = previous })
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.Feed = true
+	priv.FeedKey = ""
+	a, err := e.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	f, _, problems := e.startFeed(context.Background(), a, priv, privdrop.User{})
+
+	if f != nil {
+		t.Fatal("the demo published without a key")
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "status feed unavailable") {
+		t.Errorf("the interface was told %q, want the reason", problems)
+	}
 }

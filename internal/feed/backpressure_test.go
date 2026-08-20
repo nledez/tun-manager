@@ -190,7 +190,7 @@ func TestPublishingWithNobodyConnectedIsHarmless(t *testing.T) {
 func TestAViewPublishedBeforeServeIsStillRemembered(t *testing.T) {
 	// Publish is safe on a server whose Serve has not started: the composition
 	// root starts them in the order it likes.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 
 	s.Publish(app.View{})
 
@@ -203,7 +203,7 @@ func TestListenFailsWhenRemoveFailsBeforeBind(t *testing.T) {
 	// If removing a stale socket fails for a reason other than "not exists",
 	// Listen fails and does not leave a half-built socket behind.
 	testErr := errors.New("permission denied")
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	staleSocket(t, s.Path)
 	previous := fsx.Remove
 	fsx.Remove = func(string) error { return testErr }
@@ -220,7 +220,7 @@ func TestListenFailsWhenChmodFails(t *testing.T) {
 	// If chmod fails after the socket is bound, Listen fails and removes the
 	// socket before returning, leaving no half-built socket behind.
 	testErr := errors.New("permission denied")
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	previous := fsx.Chmod
 	fsx.Chmod = func(string, os.FileMode) error { return testErr }
 	t.Cleanup(func() { fsx.Chmod = previous })
@@ -238,7 +238,7 @@ func TestListenFailsWhenChmodFails(t *testing.T) {
 func TestCloseReturnsRemoveError(t *testing.T) {
 	// If Close's remove fails, Close returns the remove error. The socket
 	// was successfully closed (listener closed), only the cleanup failed.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)

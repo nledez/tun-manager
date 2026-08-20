@@ -22,7 +22,7 @@ func TestHelloAnnouncesTheSchemaAndTheVersion(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	if got := string(out); got != `{"type":"hello","schema":1,"version":"v0.2.0"}` {
+	if got := string(out); got != `{"type":"hello","schema":2,"version":"v0.2.0"}` {
 		t.Errorf("hello = %s", got)
 	}
 }

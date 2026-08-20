@@ -57,7 +57,7 @@ func ownedByRoot(t *testing.T) {
 func TestListenCreatesTheSocketReadableByNobodyElse(t *testing.T) {
 	// The socket carries what tunnels exist and where they connect to. It is
 	// for one person: whoever started the program.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -87,8 +87,9 @@ func TestTheSocketIsHandedToThePreSudoUser(t *testing.T) {
 		calls    int
 	}
 	s := &Server{
-		Path:  socketPath(t),
-		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
+		Path:    socketPath(t),
+		FeedKey: knownSeed,
+		Owner:   privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
 	}
 	previous := fsx.Chown
 	fsx.Chown = func(path string, uid, gid int) error {
@@ -115,8 +116,9 @@ func TestHandingTheSocketOverIsFatalWhenItFails(t *testing.T) {
 	// serve nobody.
 	boom := errors.New("operation not permitted")
 	s := &Server{
-		Path:  socketPath(t),
-		Owner: privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
+		Path:    socketPath(t),
+		FeedKey: knownSeed,
+		Owner:   privdrop.User{Username: "operator", UID: 501, GID: 20, Demotable: true},
 	}
 	previous := fsx.Chown
 	fsx.Chown = func(string, int, int) error { return boom }
@@ -140,7 +142,8 @@ func TestTheRealChownIsWhatRunsWhenNoTestStandsInForIt(t *testing.T) {
 	// TestTheSocketIsHandedToThePreSudoUser, which is why this test asserts so
 	// little.
 	s := &Server{
-		Path: socketPath(t),
+		FeedKey: knownSeed,
+		Path:    socketPath(t),
 		Owner: privdrop.User{
 			Username: "operator", UID: os.Getuid(), GID: os.Getgid(), Demotable: true,
 		},
@@ -158,8 +161,9 @@ func TestASocketWithNoOneToHandItToStaysWhereItIs(t *testing.T) {
 	// recorder proves the handover was skipped, not merely survived.
 	handed := 0
 	s := &Server{
-		Path:  socketPath(t),
-		Owner: privdrop.User{Demotable: false, UID: 0},
+		Path:    socketPath(t),
+		FeedKey: knownSeed,
+		Owner:   privdrop.User{Demotable: false, UID: 0},
 	}
 	previous := fsx.Chown
 	fsx.Chown = func(string, int, int) error { handed++; return nil }
@@ -182,7 +186,7 @@ func TestAStaleSocketIsReplacedRatherThanRefused(t *testing.T) {
 	path := socketPath(t)
 	staleSocket(t, path)
 
-	s := &Server{Path: path}
+	s := &Server{Path: path, FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen over a stale socket: %v", err)
 	}
@@ -191,7 +195,7 @@ func TestAStaleSocketIsReplacedRatherThanRefused(t *testing.T) {
 
 func TestListenReportsAPathItCannotBind(t *testing.T) {
 	ownedByRoot(t)
-	s := &Server{Path: filepath.Join(t.TempDir(), "no-such-dir", "f.sock")}
+	s := &Server{Path: filepath.Join(t.TempDir(), "no-such-dir", "f.sock"), FeedKey: knownSeed}
 
 	if err := s.Listen(); err == nil {
 		s.Close()
@@ -200,7 +204,7 @@ func TestListenReportsAPathItCannotBind(t *testing.T) {
 }
 
 func TestCloseRemovesTheSocket(t *testing.T) {
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -227,7 +231,7 @@ func TestCloseFallsBackToRemovingByPathWhenListenNeverRecordedWhichOneItBound(t 
 	// Close with nothing to compare against. Falling back to removing
 	// unconditionally is what stops a working socket from being left behind
 	// forever for want of one Stat call.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -246,7 +250,7 @@ func TestCloseFallsBackToRemovingByPathWhenListenNeverRecordedWhichOneItBound(t 
 func TestCloseIsHarmlessWhenTheSocketIsAlreadyGone(t *testing.T) {
 	// Something else can remove the path between Listen and Close - the
 	// identity check must not turn that into a reported failure.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -264,7 +268,7 @@ func TestCloseRemovesOnlyTheSocketItBound(t *testing.T) {
 	// same path - Listen deliberately allows exactly that. Close must not take
 	// the replacement with it: that would leave the second process listening
 	// on an unlinked inode nobody can reach, while doctor reports Pass.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -292,7 +296,7 @@ func TestCloseRemovesOnlyTheSocketItBound(t *testing.T) {
 }
 
 func TestCloseIsIdempotent(t *testing.T) {
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -358,7 +362,7 @@ func TestListenRefusesToRemoveWhatIsNotASocket(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	err := (&Server{Path: path}).Listen()
+	err := (&Server{Path: path, FeedKey: knownSeed}).Listen()
 
 	if err == nil {
 		t.Fatal("Listen unlinked a file that is not a socket")
@@ -384,7 +388,7 @@ func TestListenRefusesToFollowASymbolicLinkAtItsPath(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	err := (&Server{Path: path}).Listen()
+	err := (&Server{Path: path, FeedKey: knownSeed}).Listen()
 
 	if err == nil {
 		t.Fatal("Listen followed a symbolic link")
@@ -405,7 +409,7 @@ func TestListenReportsAPathItCannotLookAt(t *testing.T) {
 	fsx.Lstat = func(string) (os.FileInfo, error) { return nil, boom }
 	t.Cleanup(func() { fsx.Lstat = previous })
 
-	if err := (&Server{Path: path}).Listen(); !errors.Is(err, boom) {
+	if err := (&Server{Path: path, FeedKey: knownSeed}).Listen(); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the failure to look at the path", err)
 	}
 }
@@ -419,7 +423,7 @@ func TestListenRefusesADirectoryRootDoesNotOwn(t *testing.T) {
 	fsx.Owner = func(string, os.FileInfo) (int, int) { return 501, 501 }
 	t.Cleanup(func() { fsx.Owner = previous })
 
-	err := (&Server{Path: path}).Listen()
+	err := (&Server{Path: path, FeedKey: knownSeed}).Listen()
 
 	if err == nil {
 		t.Fatal("Listen bound under a directory root does not own")
@@ -440,7 +444,7 @@ func TestListenRefusesADirectoryAnybodyCanWrite(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 
-	err := (&Server{Path: path}).Listen()
+	err := (&Server{Path: path, FeedKey: knownSeed}).Listen()
 
 	if err == nil {
 		t.Fatal("Listen bound under a directory anybody can write")
@@ -459,7 +463,7 @@ func TestListenBindsUnderADirectoryOnlyItsGroupCanWrite(t *testing.T) {
 	if err := os.Chmod(filepath.Dir(path), 0o775); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	s := &Server{Path: path}
+	s := &Server{Path: path, FeedKey: knownSeed}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen refused the mode /var/run has: %v", err)
@@ -469,7 +473,7 @@ func TestListenBindsUnderADirectoryOnlyItsGroupCanWrite(t *testing.T) {
 
 func TestListenReportsADirectoryItCannotLookAt(t *testing.T) {
 	ownedByRoot(t)
-	s := &Server{Path: filepath.Join(t.TempDir(), "absent", "f.sock")}
+	s := &Server{Path: filepath.Join(t.TempDir(), "absent", "f.sock"), FeedKey: knownSeed}
 
 	err := s.Listen()
 
@@ -488,7 +492,7 @@ func TestASimulatedFeedBindsWhereItWasTold(t *testing.T) {
 	previous := fsx.Owner
 	fsx.Owner = func(string, os.FileInfo) (int, int) { return 501, 501 }
 	t.Cleanup(func() { fsx.Owner = previous })
-	s := &Server{Path: socketPath(t), Simulated: true}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed, Simulated: true}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("a simulated feed was held to the directory rule: %v", err)
@@ -500,7 +504,7 @@ func TestCloseLeavesBehindWhatIsNoLongerItsOwnSocket(t *testing.T) {
 	// Something took the name while the program was running. Removing it on
 	// the way out would be root deleting a file it never made — which is what
 	// the identity check is for; a name is not an identity.
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -531,7 +535,7 @@ func TestListenReportsASocketItCannotUnlink(t *testing.T) {
 	fsx.Remove = func(string) error { return boom }
 	t.Cleanup(func() { fsx.Remove = previous })
 
-	if err := (&Server{Path: path}).Listen(); !errors.Is(err, boom) {
+	if err := (&Server{Path: path, FeedKey: knownSeed}).Listen(); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the failure to unlink", err)
 	}
 }
@@ -547,7 +551,7 @@ func TestTheSocketIsNeverReadableEvenBeforeTheChmod(t *testing.T) {
 	previous := fsx.Chmod
 	fsx.Chmod = func(string, os.FileMode) error { return nil }
 	t.Cleanup(func() { fsx.Chmod = previous })
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -574,7 +578,7 @@ func TestTheUmaskIsPutBackAfterTheBind(t *testing.T) {
 		return previous(mask)
 	}
 	t.Cleanup(func() { fsx.Umask = previous })
-	s := &Server{Path: socketPath(t)}
+	s := &Server{Path: socketPath(t), FeedKey: knownSeed}
 
 	if err := s.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
@@ -601,7 +605,7 @@ func TestTheUmaskIsPutBackEvenWhenTheBindFails(t *testing.T) {
 	}
 	t.Cleanup(func() { fsx.Umask = previous })
 	ownedByRoot(t)
-	s := &Server{Path: filepath.Join(t.TempDir(), "f.sock")}
+	s := &Server{Path: filepath.Join(t.TempDir(), "f.sock"), FeedKey: knownSeed}
 	if err := os.Chmod(filepath.Dir(s.Path), 0o500); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -934,29 +938,57 @@ func TestTheHelloCarriesThePublicKey(t *testing.T) {
 }
 
 func TestTheHelloSaysNothingAboutAKeyThereIsNot(t *testing.T) {
-	// A field carrying "" would have the application show an empty fingerprint
-	// rather than say there is none.
-	s := serving(t, nil)
-
-	hello := dial(t, s).next(t)
-
-	if _, carried := hello["pubkey"]; carried {
-		t.Errorf("hello = %v, want no pubkey when there is no key", hello)
+	// Listen refuses to start without one, so this is about the field rather
+	// than about a publisher somebody could meet: a pubkey carrying "" would
+	// have the application show the fingerprint of nothing rather than say
+	// there is none.
+	if got := (&Server{}).publicKey(); got != "" {
+		t.Errorf("publicKey = %q, want nothing at all", got)
 	}
 }
 
-func TestAKeyThatIsNotOneKeepsTheFeedQuietAboutIt(t *testing.T) {
-	// Truncated by a copy and paste. The publisher still publishes - the feed
-	// is what tells somebody their tunnels are down - and doctor is where the
-	// key is diagnosed.
-	s := serving(t, nil, func(s *Server) { s.FeedKey = "not a key" })
-
-	hello := dial(t, s).next(t)
-
-	if _, carried := hello["pubkey"]; carried {
-		t.Errorf("hello = %v, want no pubkey when it cannot be read", hello)
+func TestAKeyThatIsNotOneIsAnnouncedAsNoKey(t *testing.T) {
+	// Same shape, for a key that stopped being one while the publisher ran.
+	if got := (&Server{FeedKey: "not a key"}).publicKey(); got != "" {
+		t.Errorf("publicKey = %q, want nothing at all", got)
 	}
 }
 
 // knownSeed is a key of a known shape, so a test can name what it expects.
 const knownSeed = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+func TestTheFeedRefusesToStartWithNoKeyToProveItselfWith(t *testing.T) {
+	// The application pins a key and refuses a publisher that cannot prove it
+	// holds one. A feed that started anyway would be a feed nobody can use,
+	// failing silently at the other end — and an unsigned feed is what somebody
+	// standing in for this publisher would want it to fall back to.
+	ownedByRoot(t)
+	s := &Server{Path: socketPath(t)}
+
+	err := s.Listen()
+
+	if err == nil {
+		s.Close() //nolint:errcheck
+		t.Fatal("the feed started with no key")
+	}
+	if !strings.Contains(err.Error(), "feed-key --rotate") {
+		t.Errorf("error %q does not say how to get one", err)
+	}
+}
+
+func TestTheFeedRefusesToStartWithSomethingThatIsNotAKey(t *testing.T) {
+	// Truncated by a copy and paste. Starting would publish a hello with no
+	// key in it and answer no challenge, which reads exactly like an impostor.
+	ownedByRoot(t)
+	s := &Server{Path: socketPath(t), FeedKey: "not a key"}
+
+	err := s.Listen()
+
+	if err == nil {
+		s.Close() //nolint:errcheck
+		t.Fatal("the feed started with a key it cannot use")
+	}
+	if strings.Contains(err.Error(), "not a key") {
+		t.Errorf("error %q prints what was in the file", err)
+	}
+}

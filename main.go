@@ -499,6 +499,11 @@ func (e *env) buildApp() (*app.App, error) {
 	return e.assemble(cfg, priv, reader), nil
 }
 
+// newSeed draws the key a simulated run publishes under. A variable for the
+// reason newReader is one: crypto/rand does not fail on darwin, and what this
+// does when it fails is decide whether the demo has a feed at all.
+var newSeed = func() (string, error) { return feed.GenerateSeed(nil) }
+
 // newReader opens the WireGuard control client. A variable so a test can make
 // it fail: on darwin it does not, which would leave the branch above unwritten
 // or unread, and neither is a good way to treat the code that decides whether
@@ -771,6 +776,19 @@ func (e *env) runTUI() error {
 func (e *env) startFeed(ctx context.Context, a *app.App, priv *profile.Privileged, owner privdrop.User) (*feed.Server, <-chan struct{}, []string) {
 	if !priv.Feed {
 		return nil, nil, nil
+	}
+
+	// A simulated run cannot read the privileged file, so it has no key — and
+	// the feed will not publish without one. It gets a fresh one per run rather
+	// than a flag: a seed on a command line is a seed in `ps`, and a demo's key
+	// is worth exactly one demo. The application pins it against the demo's own
+	// socket path, so nothing it learns there touches the real publisher.
+	if priv.FeedKey == "" && e.flags.simulating() {
+		seed, err := newSeed()
+		if err != nil {
+			return nil, nil, []string{fmt.Sprintf("status feed unavailable: %v", err)}
+		}
+		priv.FeedKey = profile.Secret(seed)
 	}
 
 	f := &feed.Server{

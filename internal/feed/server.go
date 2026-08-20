@@ -68,6 +68,12 @@ const (
 	// the WireGuard control socket.
 	refreshFloor = 2 * time.Second
 
+	// challengeFloor is the shortest gap between two signatures a client can
+	// ask for. Signing is cheap and not free, and a client that can ask
+	// whenever it likes is a signing oracle. One a second is far more than any
+	// client needs: the application asks once per connection.
+	challengeFloor = time.Second
+
 	// pingFloor is the shortest gap between two rounds of probes a client can
 	// ask for. Its own, rather than shared with the refresh: the two verbs cost
 	// different things, and asking for a fresh view must not silence a ping.
@@ -135,6 +141,11 @@ type Server struct {
 	// sign, and a publisher that holds only what it publishes cannot.
 	FeedKey string
 
+	// ChallengeFloor overrides how often a client may ask to be proved to.
+	// Zero means challengeFloor; tests set it short so nothing waits on a real
+	// clock.
+	ChallengeFloor time.Duration
+
 	// Interval between readings while a tunnel is watched. Zero means
 	// sampleInterval; tests set it short so nothing waits on a real clock.
 	Interval time.Duration
@@ -148,16 +159,17 @@ type Server struct {
 	// socket nobody can reach.
 	socket os.FileInfo
 
-	mu          sync.Mutex
-	closed      bool
-	closing     bool
-	clients     map[*client]struct{}
-	view        app.View
-	haveView    bool
-	sampling    chan struct{}
-	requests    chan Request
-	lastRefresh time.Time
-	lastPing    time.Time
+	mu            sync.Mutex
+	closed        bool
+	closing       bool
+	clients       map[*client]struct{}
+	view          app.View
+	haveView      bool
+	sampling      chan struct{}
+	requests      chan Request
+	lastRefresh   time.Time
+	lastPing      time.Time
+	lastChallenge time.Time
 }
 
 func (s *Server) interval() time.Duration {
@@ -215,6 +227,9 @@ func (s *Server) clientCount() int {
 // Any failure after the bind removes the socket again: a path left behind
 // would look like a feed that works and serve nobody.
 func (s *Server) Listen() error {
+	if err := s.checkKey(); err != nil {
+		return err
+	}
 	if err := s.checkDirectory(); err != nil {
 		return err
 	}
@@ -255,6 +270,29 @@ func (s *Server) Listen() error {
 	s.ln = ln
 	s.socket = info
 	s.mu.Unlock()
+	return nil
+}
+
+// checkKey refuses to publish without a key to prove which publisher this is.
+//
+// There is no unsigned mode to fall back to, and that is the point: an
+// application that pins a key has to be able to tell "this publisher cannot
+// prove itself" from "this publisher has nothing to prove", and a fallback
+// available to the honest case is a fallback available to somebody standing in
+// for it. A feed that started anyway would fail silently at the other end.
+func (s *Server) checkKey() error {
+	if s.FeedKey == "" {
+		return errors.New(
+			"the status feed has no key to prove itself with: the menu bar application would " +
+				"have no way to tell this publisher from any other program listening on that " +
+				"socket. `sudo tun-manager feed-key --rotate` writes one")
+	}
+	if _, err := PublicKeyOfSeed(s.FeedKey); err != nil {
+		// The key is named, never printed.
+		return fmt.Errorf(
+			"the status feed cannot use the key it was given: %w. "+
+				"`sudo tun-manager feed-key --rotate` writes a new one", err)
+	}
 	return nil
 }
 
@@ -624,6 +662,8 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 		delete(c.watch, msg.Tunnel)
 		s.mu.Unlock()
 		s.retick()
+	case "challenge":
+		s.answerChallenge(c, msg.Nonce)
 	case "refresh":
 		s.request(Request{Kind: RequestRefresh}, &s.lastRefresh, refreshFloor)
 	case "ping":
@@ -640,6 +680,52 @@ func (s *Server) onMessage(c *client, msg clientMsg) {
 		s.mu.Unlock()
 		s.request(Request{Kind: RequestPing, Tunnel: msg.Tunnel}, &s.lastPing, pingFloor)
 	}
+}
+
+// answerChallenge signs what the client asked, or says nothing at all.
+//
+// Nothing at all covers a publisher with no key, a nonce that is not one, and a
+// client asking again too soon. None of them is worth a line on the wire: a
+// client that gets no answer learns exactly what it needs to - that this
+// publisher has not proved anything - and a publisher that explained itself
+// would be answering questions from something it has not identified.
+func (s *Server) answerChallenge(c *client, encoded string) {
+	if s.FeedKey == "" {
+		return
+	}
+	nonce, err := Nonce(encoded)
+	if err != nil {
+		return
+	}
+	if !s.allowChallenge() {
+		return
+	}
+
+	signature, err := Sign(s.FeedKey, Schema, s.Version, s.Path, nonce)
+	if err != nil {
+		// The key is in a file this program refused to start without. Reaching
+		// here means it stopped being a key while running.
+		return
+	}
+	s.sendTo(c, authMsg{Type: "auth", Nonce: encoded, Signature: signature})
+}
+
+// allowChallenge reports whether enough time has passed since the last
+// signature to make another.
+func (s *Server) allowChallenge() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	floor := challengeFloor
+	if s.ChallengeFloor > 0 {
+		floor = s.ChallengeFloor
+	}
+	now := s.clock()
+	if !s.lastChallenge.IsZero() && now.Sub(s.lastChallenge) < floor {
+		return false
+	}
+	s.lastChallenge = now
+	return true
 }
 
 // request passes something on unless it comes too soon after the last one of

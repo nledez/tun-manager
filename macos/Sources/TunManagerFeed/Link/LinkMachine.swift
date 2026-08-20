@@ -8,7 +8,12 @@ import Darwin
 public struct LinkMachine {
     /// The schema this build understands. A publisher announcing anything else
     /// is refused rather than guessed at.
-    public static let schema = 1
+    ///
+    /// Two, because a publisher speaking it can be asked to prove which one it
+    /// is. Accepting one as well would mean accepting a publisher that cannot
+    /// be asked, which is what anything standing in for tun-manager would
+    /// rather be taken for.
+    public static let schema = 2
 
     public private(set) var state: LinkState = .idle
     /// The last view received, kept across a disconnection so the menu shows

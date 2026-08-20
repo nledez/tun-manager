@@ -205,6 +205,17 @@ object per line, plus a `hello` on connect, a `sample` once a second for each
 tunnel a client asked to watch, a `ping` when a probe round finishes, and a
 `bye` on the way out.
 
+**The publisher proves which one it is.** Its hello carries the public half of
+the key from `/private/wireguard/config/tun-manager.yaml`; a client may then
+send thirty-two bytes of its own and get them back signed, together with the
+schema, the version and the socket path. The nonce is the client's, so an
+answer is good once and for it alone; the path is in there so that something
+listening elsewhere cannot forward the question to the real publisher and pass
+the answer off as its own. `tun-manager` refuses to publish at all without a
+key: an application that pins one has to be able to tell "cannot prove itself"
+from "has nothing to prove", and a fallback available to the honest case is a
+fallback available to whoever is standing in for it.
+
 What one client may cost is bounded: thirty-two connections at once — the
 thirty-third is told why and closed — sixty-four watched tunnels each, and eight
 kilobytes to a line. There is no idle timeout, deliberately: the menu bar says

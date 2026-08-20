@@ -54,7 +54,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     var machine = LinkMachine()
     _ = machine.handle(.start)
 
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(machine.isLive)
     #expect(machine.publisherVersion == "v0.2.0")
@@ -113,7 +113,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
         _ = machine.handle(.retryTimerFired)
     }
 
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.endOfStream)
 
     #expect(machine.retryDelay == ReconnectPolicy.delay(after: .lost, attempt: 0))
@@ -122,7 +122,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func byeIsFollowedByATwoSecondRetryBecauseRestartingTunManagerIsWhyItWasSent() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     let actions = machine.handle(.message(.bye))
 
@@ -136,7 +136,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // the client cannot tell. The second recovers instantly, so guess that way.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     _ = machine.handle(.endOfStream)
 
@@ -147,7 +147,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func theLastSnapshotSurvivesADisconnectionSoTheMenuDoesNotGoBlank() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.message(.state(aSnapshot("alpha", "bravo"))))
 
     _ = machine.handle(.endOfStream)
@@ -160,7 +160,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // refresh. "Connected, waiting" is a different sentence from an empty menu.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(machine.state == .live(sawState: false))
 
@@ -171,7 +171,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func openingTheMenuOnALiveLinkSendsARefresh() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(machine.handle(.menuWillOpen) == [.send(.refresh)])
 }
@@ -194,7 +194,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func stoppingCancelsThePendingRetryAndClosesTheConnection() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(machine.handle(.stop) == [.cancelRetry, .closeConnection])
     #expect(machine.state == .idle)
@@ -203,7 +203,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func aSampleLineOnALinkThatNeverWatchedAnythingIsIgnored() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     let sample = Sample(tunnel: "alpha", at: anInstant, rx: 1, tx: 1)
     #expect(machine.handle(.message(.sample(sample))).isEmpty)
@@ -213,7 +213,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func aStateArrivingIsPublishedWithWhatChangedSinceTheLastOne() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.message(.state(aSnapshot("alpha"))))
 
     let actions = machine.handle(.message(.state(aSnapshot("alpha", "bravo"))))
@@ -231,7 +231,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func askingToWatchATunnelSendsTheVerb() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(machine.handle(.watch("alpha")) == [.send(.watch("alpha"))])
 }
@@ -242,7 +242,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // happened to be looking.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("alpha"))
 
     #expect(machine.handle(.watch("bravo")) == [.send(.watch("bravo"))])
@@ -252,7 +252,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func watchingTheTunnelAlreadyWatchedSaysNothingTwice() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("alpha"))
 
     #expect(machine.handle(.watch("alpha")).isEmpty)
@@ -263,7 +263,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // for any of them.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("bravo"))
     _ = machine.handle(.watch("alpha"))
 
@@ -275,7 +275,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
 @Test func everyWatchedTunnelIsRenewedTogetherAfterAReconnection() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("bravo"))
     _ = machine.handle(.watch("alpha"))
 
@@ -283,7 +283,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     _ = machine.handle(.retryTimerFired)
 
     #expect(
-        machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+        machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
             == [.send(.watch("alpha")), .send(.watch("bravo"))])
 }
 
@@ -297,7 +297,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     #expect(machine.handle(.watch("alpha")).isEmpty)
 
     _ = machine.handle(.retryTimerFired)
-    let onHello = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(onHello == [.send(.watch("alpha"))])
 }
@@ -308,12 +308,12 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // link died, with nothing saying why.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("alpha"))
 
     _ = machine.handle(.endOfStream)
     _ = machine.handle(.retryTimerFired)
-    let onHello = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    let onHello = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
 
     #expect(onHello == [.send(.watch("alpha"))])
 }
@@ -322,13 +322,13 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     var machine = LinkMachine()
     _ = machine.handle(.start)
 
-    #expect(machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil))).isEmpty)
+    #expect(machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil))).isEmpty)
 }
 
 @Test func aSampleForTheWatchedTunnelIsHandedOn() {
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("alpha"))
 
     let sample = Sample(tunnel: "alpha", at: anInstant, rx: 100, tx: 50)
@@ -340,7 +340,7 @@ private func aSnapshot(_ names: String...) -> Snapshot {
     // the window has already left would draw it into the wrong graph.
     var machine = LinkMachine()
     _ = machine.handle(.start)
-    _ = machine.handle(.message(.hello(schema: 1, version: "v0.2.0", publicKey: nil)))
+    _ = machine.handle(.message(.hello(schema: LinkMachine.schema, version: "v0.2.0", publicKey: nil)))
     _ = machine.handle(.watch("alpha"))
 
     let stray = Sample(tunnel: "charlie", at: anInstant, rx: 100, tx: 50)
