@@ -326,12 +326,59 @@ first single-host `AllowedIPs` entry, then from the endpoint host.
 ## Adding a tunnel
 
 ```sh
-sudo tun-manager import <name> <file.conf>
+sudo tun-manager import <name> <file.conf>          # shows it, then asks
+sudo tun-manager import --yes <name> <file.conf>    # for scripts, and for the
+                                                    # eighth one in a row
 ```
 
 Copies the `.conf` into `/private/wireguard/config` as `<name>.conf`, mode `0600`
 and owned by root — it holds a private key, and `wg-quick` reads it as root — then lists
 `<name>` under `groups: all` in your configuration.
+
+**`wg-quick` itself is checked before it is run**, every time, by the code that
+runs it rather than only by `doctor`: root executes that file, so whoever can
+write it — or any directory on the way to it — chooses what root does. Anything
+world-writable, unreadable or not executable is refused outright.
+
+One thing cannot be refused, and `doctor` says so instead. `brew install
+wireguard-tools` leaves `/opt/homebrew/bin/wg-quick` and everything behind it
+owned by the user who ran `brew`, not by root — so a process running as you can
+replace what root executes at the next `sudo tun-manager up`, whatever the mode
+says. Refusing that would refuse the installation this README documents. If you
+want it closed, put `wg-quick` somewhere root owns and point `wg_quick` at it:
+
+```sh
+sudo install -o 0 -g 0 -m 0755 "$(readlink -f "$(command -v wg-quick)")" /usr/local/sbin/wg-quick
+# then, in /private/wireguard/config/tun-manager.yaml:
+#   wg_quick: /usr/local/sbin/wg-quick
+```
+
+Those modes are not advice. Every command that touches the tunnels — the
+interface, `status`, `up`, `down`, `import`, `backup` — refuses to start while a
+`.conf`, or the directory holding them, can be read by somebody who is not root,
+and says which `chmod` or `chown` would put it right. `doctor` reports the same
+two rules from the same code, because two implementations of one rule is how one
+command starts refusing what the other calls fine. A directory that does not
+exist yet is not a refusal: a machine before its first import has no key to
+leak.
+
+**Import shows you the file before it writes anything.** The whole file, with
+line numbers, not a summary of the fields this program happens to parse — what
+is being handed to root is the file. Private and preshared keys are replaced by
+`(hidden)`, because the output is scrolled through and pasted into issues. The
+address that will be pinged is named beside it.
+
+If the configuration carries `PreUp`, `PostUp`, `PreDown` or `PostDown`, those
+lines are printed in red, with the line numbers to find them by, and what they
+mean spelled out: `wg-quick` runs them **as root**, every time the tunnel goes
+up or down, with every privilege tun-manager has. A configuration downloaded
+from a provider can carry one. Read them, and be sure.
+
+Then it asks, while what you are agreeing to is still on the screen. The default
+is no: pressing return to get your prompt back must not have imported anything.
+`--yes` skips the question and reads nothing from standard input — what is on it
+belongs to whoever comes next in the pipeline. Without a terminal and without
+`--yes`, the import stops and says so, rather than quietly deciding for you.
 
 Everything is checked before anything is written, and the one check worth
 knowing about is that **the file must carry a `# TO_CHECK=<address>` comment**.

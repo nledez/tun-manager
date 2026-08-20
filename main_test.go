@@ -107,7 +107,12 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 		// A file only root can write is a file no test can create. The loader
 		// stands in for it, and one test asserts that a real env reads the
 		// fixed path instead.
-		privileged:     func() (*profile.Privileged, error) { return priv, nil },
+		privileged: func() (*profile.Privileged, error) { return priv, nil },
+		// The layout a test lays out is owned by whoever runs the suite, which
+		// the real check refuses on sight. The rules themselves are exercised
+		// in internal/cli, where the owner can be arranged; what the tests here
+		// are about is that every command asks.
+		enforce:        func(string) error { return nil },
 		privilegedPath: profile.PrivilegedPath,
 		config: func() (*profile.Config, privdrop.User, error) {
 			// A real directory: notify.New writes the icon into the user's
@@ -1631,5 +1636,93 @@ func TestTheRootRefusalForTheInterfaceStaysPlain(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "`sudo tun-manager` (see") {
 		t.Errorf("error %q, want it to name the bare command", err)
+	}
+}
+
+func TestEveryCommandThatTouchesTunnelsRefusesALeakyLayout(t *testing.T) {
+	// The checks existed and only doctor ran them, which nothing obliges
+	// anybody to do. A .conf readable by every process on the machine is not a
+	// thing to report and then carry on using.
+	boom := errors.New("alpha.conf is 0644, want 0600 or stricter")
+
+	for _, args := range [][]string{
+		nil, // the interface
+		{"status"},
+		{"up", "alpha"},
+		{"down", "--all"},
+		{"backup"},
+		{"import", "alpha", "/tmp/nowhere.conf"},
+	} {
+		name := "tui"
+		if len(args) > 0 {
+			name = args[0]
+		}
+		t.Run(name, func(t *testing.T) {
+			e := testEnv(t, &fakeRunner{})
+			// The real assembly, not the stand-in every other test injects:
+			// what is being checked is that the path from the command to the
+			// tunnels goes through the permission check.
+			e.build = e.buildApp
+			e.enforce = func(string) error { return boom }
+
+			err := e.run(args)
+
+			if !errors.Is(err, boom) {
+				t.Errorf("err = %v, want the layout to have stopped it", err)
+			}
+		})
+	}
+}
+
+func TestTheModesAreCheckedWhereTheTunnelsAre(t *testing.T) {
+	// Whatever config_dir resolves to for this run, not the constant: a test
+	// and the simulator both point it elsewhere, and checking the constant
+	// would be checking somebody else's machine.
+	e := testEnv(t, &fakeRunner{})
+	var checked string
+	e.enforce = func(dir string) error {
+		checked = dir
+		return nil
+	}
+
+	a, err := e.buildApp()
+	if err != nil {
+		t.Fatalf("buildApp: %v", err)
+	}
+	t.Cleanup(func() {
+		if r, ok := a.Reader.(*wg.CtrlReader); ok {
+			_ = r.Close()
+		}
+	})
+
+	cfg, _, err := e.config()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if checked != cfg.ConfigDir {
+		t.Errorf("checked %q, want %q", checked, cfg.ConfigDir)
+	}
+}
+
+func TestASimulatedRunIsNotHeldToTheModes(t *testing.T) {
+	// Its config_dir is a directory of fixtures in a checked-out repository,
+	// owned by whoever cloned it and holding no key. Demanding root of it would
+	// mean demanding that the demo be run as root, which is the one thing the
+	// simulator exists to avoid.
+	e := demoEnv(t, &fakeRunner{})
+	e.enforce = func(string) error { return errors.New("owned by uid 501 rather than root") }
+
+	if _, err := e.parseFlags([]string{"--wg-socket", t.TempDir()}); err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	if _, err := e.build(); err != nil {
+		t.Errorf("a simulated run was held to the modes: %v", err)
+	}
+}
+
+func TestARealEnvironmentChecksTheModesForReal(t *testing.T) {
+	if newEnv().enforce == nil {
+		t.Fatal("newEnv left the permission check unwired, so nothing enforces it")
 	}
 }

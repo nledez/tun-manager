@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +50,37 @@ func Permissions(cfg *profile.Config, u privdrop.User) []Check {
 		checkTunnelFiles(cfg.ConfigDir),
 		checkUserConfigDir(cfg, u),
 	}
+}
+
+// EnforcePermissions refuses to go on when the files holding the keys, or the
+// directory holding them, can be read by somebody who is not root.
+//
+// The same two rules doctor reports, in the shape a command can act on. Two
+// implementations of one rule is how one command starts refusing what the other
+// reports as fine, so this runs the checks and returns the first failure's own
+// sentence — which already names the file, its mode, and the chmod or chown
+// that would put it right.
+//
+// Reporting was never enough on its own. Nothing makes anybody run doctor, and
+// a .conf left at 0644 by a hand-written install goes on being readable by
+// every process on the machine until somebody happens to look.
+//
+// A directory that is not there yet is not a refusal: a machine before its
+// first import has no key to leak, and the commands that need tunnels fail on
+// their own with something more useful to read. A directory with no .conf in it
+// is not one either — doctor warns about it, which is the right weight for
+// "there is nothing here to manage".
+func EnforcePermissions(configDir string) error {
+	if _, err := os.Stat(configDir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	for _, c := range []Check{checkWireGuardDirs(configDir), checkTunnelFiles(configDir)} {
+		if c.Status == Fail {
+			return errors.New(c.Detail)
+		}
+	}
+	return nil
 }
 
 // checkWireGuardDirs checks the directory holding the .conf files, and the one

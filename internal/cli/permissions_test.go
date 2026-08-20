@@ -380,3 +380,121 @@ func TestTheRealOwnerIsWhoeverTheFilesystemSays(t *testing.T) {
 		t.Errorf("gid = %d, want the group off the filesystem", gid)
 	}
 }
+
+// MARK: the same rules, as a refusal rather than a report
+
+func TestEnforcePermissionsAcceptsTheDocumentedLayout(t *testing.T) {
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+
+	if err := EnforcePermissions(cfg.ConfigDir); err != nil {
+		t.Errorf("EnforcePermissions on a sound layout: %v", err)
+	}
+}
+
+func TestEnforcePermissionsRefusesADirectoryAnybodyCanRead(t *testing.T) {
+	// doctor has reported this since the day config_dir became 0700. Reporting
+	// it is not enough: nothing makes anybody run doctor, and the tunnel list
+	// goes on leaking until somebody does.
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+	chmod(t, cfg.ConfigDir, 0o755)
+
+	err := EnforcePermissions(cfg.ConfigDir)
+
+	if err == nil {
+		t.Fatal("EnforcePermissions accepted a directory anybody can read")
+	}
+	for _, want := range []string{cfg.ConfigDir, "0755", "sudo chmod 0700"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestEnforcePermissionsRefusesATunnelAnybodyCanRead(t *testing.T) {
+	// This one is the key itself, not the list.
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+	chmod(t, filepath.Join(cfg.ConfigDir, "alpha.conf"), 0o644)
+
+	err := EnforcePermissions(cfg.ConfigDir)
+
+	if err == nil {
+		t.Fatal("EnforcePermissions accepted a .conf anybody can read")
+	}
+	for _, want := range []string{"alpha.conf", "0644", "sudo chmod 0600"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestEnforcePermissionsRefusesADirectoryOwnedByAnybodyElse(t *testing.T) {
+	ownedBy(t, 501)
+	cfg := aLayout(t)
+
+	err := EnforcePermissions(cfg.ConfigDir)
+
+	if err == nil {
+		t.Fatal("EnforcePermissions accepted a directory root does not own")
+	}
+	if !strings.Contains(err.Error(), "sudo chown 0:0") {
+		t.Errorf("refusal %q does not say how to fix it", err)
+	}
+}
+
+func TestEnforcePermissionsRefusesAParentAnybodyCanWrite(t *testing.T) {
+	// The mode of the directory inside leaks nothing while it is 0700. What a
+	// writable parent grants is the right to rename it away and leave another
+	// in its place, which wg-quick would then read.
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+	chmod(t, filepath.Dir(cfg.ConfigDir), 0o777)
+
+	if err := EnforcePermissions(cfg.ConfigDir); err == nil {
+		t.Fatal("EnforcePermissions accepted a parent anybody can write")
+	}
+}
+
+func TestEnforcePermissionsSaysNothingAboutADirectoryThatIsNotThereYet(t *testing.T) {
+	// A machine before its first import. There are no keys to leak, and the
+	// commands that need tunnels fail on their own with something specific.
+	ownedBy(t, 0)
+
+	if err := EnforcePermissions(filepath.Join(t.TempDir(), "absent")); err != nil {
+		t.Errorf("EnforcePermissions on a directory that does not exist: %v", err)
+	}
+}
+
+func TestEnforcePermissionsAcceptsADirectoryWithNoTunnelsInIt(t *testing.T) {
+	// The report warns about it, because a run with nothing to manage is worth
+	// mentioning. It is not a reason to refuse to start.
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+	if err := os.Remove(filepath.Join(cfg.ConfigDir, "alpha.conf")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	if err := EnforcePermissions(cfg.ConfigDir); err != nil {
+		t.Errorf("EnforcePermissions on an empty directory: %v", err)
+	}
+}
+
+func TestEnforcePermissionsAndDoctorReadTheSameRules(t *testing.T) {
+	// Two implementations of one rule is how one command starts refusing what
+	// the other reports as fine.
+	ownedBy(t, 0)
+	cfg := aLayout(t)
+	chmod(t, filepath.Join(cfg.ConfigDir, "alpha.conf"), 0o640)
+
+	err := EnforcePermissions(cfg.ConfigDir)
+	reported := check(t, Permissions(cfg, operator), "tunnel files")
+
+	if err == nil {
+		t.Fatal("EnforcePermissions accepted what doctor calls a failure")
+	}
+	if err.Error() != reported.Detail {
+		t.Errorf("the refusal says %q, doctor says %q", err, reported.Detail)
+	}
+}

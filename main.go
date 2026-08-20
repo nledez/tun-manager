@@ -158,6 +158,11 @@ type env struct {
 	// refuses to start, and because a test needs to stand in for a file it
 	// cannot create.
 	privileged func() (*profile.Privileged, error)
+	// enforce refuses to go on when the .conf files, or the directory holding
+	// them, can be read by somebody who is not root. A field so a test can
+	// stand in for it: a fixture is owned by whoever runs the suite, and the
+	// real check wants root on that side.
+	enforce func(configDir string) error
 	// privilegedPath is the file that loader reads. A field, not the constant
 	// inlined, so a test can point at one it is allowed to write - and one
 	// test asserts that a real env points at the constant.
@@ -191,6 +196,7 @@ func newEnv() *env {
 		euid:           os.Geteuid(),
 		now:            time.Now,
 		interactive:    runTUI,
+		enforce:        cli.EnforcePermissions,
 		privilegedPath: profile.PrivilegedPath,
 	}
 	// Methods rather than package functions: both read the flags, and both
@@ -413,6 +419,35 @@ func (e *env) loadConfig() (*profile.Config, privdrop.User, error) {
 	return cfg, u, nil
 }
 
+// acting loads everything a command that touches the tunnels needs, and refuses
+// when the layout holding them is readable by somebody else.
+//
+// One place rather than a call per command: a check at each site is how one of
+// them ends up honoured by `status` and forgotten by `import`, and the one that
+// forgets is the one that writes a key. Anything reaching a tunnel goes through
+// here — the interface, status, up, down, import and backup — and doctor does
+// not, because reporting what is wrong is its whole job.
+//
+// A simulated run is exempt. Its config_dir is a directory of fixtures in a
+// checked-out repository, owned by whoever cloned it and holding no key;
+// demanding root of it would mean demanding that the demo be run as root.
+func (e *env) acting() (*profile.Config, *profile.Privileged, privdrop.User, error) {
+	cfg, u, err := e.config()
+	if err != nil {
+		return nil, nil, u, err
+	}
+	priv, err := e.privileged()
+	if err != nil {
+		return nil, nil, u, err
+	}
+	if !e.flags.simulating() {
+		if err := e.enforce(cfg.ConfigDir); err != nil {
+			return nil, nil, u, err
+		}
+	}
+	return cfg, priv, u, nil
+}
+
 // loadPrivileged reads the half of the configuration only root can write, or
 // builds it from the flags when the run is a simulation.
 //
@@ -430,11 +465,7 @@ func (e *env) loadPrivileged() (*profile.Privileged, error) {
 }
 
 func (e *env) buildApp() (*app.App, error) {
-	cfg, _, err := e.config()
-	if err != nil {
-		return nil, err
-	}
-	priv, err := e.privileged()
+	cfg, priv, _, err := e.acting()
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +557,7 @@ func (e *env) runImport(args []string) error {
 		return errors.New("usage: sudo tun-manager import <name> <file.conf>")
 	}
 
-	cfg, u, err := e.config()
+	cfg, _, u, err := e.acting()
 	if err != nil {
 		return err
 	}
@@ -543,11 +574,7 @@ func (e *env) runBackup(args []string) error {
 		return errors.New("usage: sudo tun-manager backup")
 	}
 
-	cfg, _, err := e.config()
-	if err != nil {
-		return err
-	}
-	priv, err := e.privileged()
+	cfg, priv, _, err := e.acting()
 	if err != nil {
 		return err
 	}
