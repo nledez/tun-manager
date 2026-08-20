@@ -15,6 +15,9 @@ public enum Disconnection: Sendable, Equatable {
     /// End of stream after a live connection. A crash, or this client was
     /// dropped for falling behind. Indistinguishable from here.
     case lost
+    /// Something that is not root is on that socket, or bound it. Nothing was
+    /// read from it: this is decided before the first line.
+    case notRoot(uid: UInt32?)
     case failed(Int32)
 }
 

@@ -19,6 +19,8 @@ final class LocalPublisher: @unchecked Sendable {
     private let identity = Curve25519.Signing.PrivateKey()
     private let state = NSLock()
     private var connections = 0
+    /// Set by stop(), which is the only reason to give up on the listener.
+    private var stopped = false
     private var live: [Int32] = []
 
     /// How many clients have been accepted, which is what a reconnect adds one
@@ -30,6 +32,13 @@ final class LocalPublisher: @unchecked Sendable {
     }
 
     init(version: String = "v0.6.0") throws {
+        // Once, for the process. SO_NOSIGPIPE covers the descriptors this
+        // publisher owns, but a suite running its tests in parallel has several
+        // of these opening and closing at once, and a SIGPIPE anywhere in it
+        // kills the whole run rather than one test. Production code sets the
+        // socket option instead; a test process can simply not die.
+        signal(SIGPIPE, SIG_IGN)
+
         // Short, because sun_path is 104 bytes and a temporary directory under
         // /var/folders eats most of them.
         path = "/tmp/tmf-\(UInt32.random(in: 0..<1_000_000)).sock"
@@ -60,13 +69,22 @@ final class LocalPublisher: @unchecked Sendable {
         Thread.detachNewThread { [self] in serve(version: version) }
     }
 
+    /// Shuts every descriptor down without closing any of them.
+    ///
+    /// Closing here would be closing a descriptor another thread is blocked
+    /// reading, and the number is handed straight back out by the next socket()
+    /// in the process - so a suite running in parallel ends up with libdispatch
+    /// watching a descriptor that now belongs to somebody else, which it
+    /// notices and traps on. shutdown(2) wakes the reader instead, and each
+    /// thread closes the one descriptor it owns.
     func stop() {
         state.lock()
+        stopped = true
         let open = live
         live = []
         state.unlock()
-        for descriptor in open { Darwin.close(descriptor) }
-        Darwin.close(listener)
+        for descriptor in open { shutdown(descriptor, SHUT_RDWR) }
+        shutdown(listener, SHUT_RDWR)
         unlink(path)
     }
 
@@ -74,12 +92,28 @@ final class LocalPublisher: @unchecked Sendable {
         while true {
             let accepted = Darwin.accept(listener, nil, nil)
             guard accepted >= 0 else {
-                // A signal interrupted the wait; the listener is still there.
-                // Giving up here would leave a socket nobody accepts on, which
-                // a client reads as a publisher that refuses it.
-                if errno == EINTR { continue }
+                // Only a stop is a reason to give up on the listener. Every
+                // other errno here - a client that hung up between its connect
+                // and this accept, a signal - leaves a listening socket that
+                // nobody accepts on, and a client reads that as a publisher
+                // refusing it: ECONNREFUSED, in a test that says nothing about
+                // why.
+                state.lock()
+                let finished = stopped
+                state.unlock()
+                guard finished else { continue }
+                // The thread that owns this descriptor is the one that closes
+                // it.
+                Darwin.close(listener)
                 return
             }
+            // Without this, writing to a client that has closed raises SIGPIPE,
+            // whose default disposition kills the process - and the process
+            // here is the test suite.
+            var on: Int32 = 1
+            setsockopt(
+                accepted, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+
             state.lock()
             connections += 1
             live.append(accepted)
@@ -89,6 +123,17 @@ final class LocalPublisher: @unchecked Sendable {
     }
 
     private func talk(on descriptor: Int32, version: String) {
+        // Closed here and nowhere else, by the one thread that reads it - and
+        // forgotten first. A number left on that list after it has been closed
+        // is a number the process hands to the next socket() call, and stop()
+        // would then shut down somebody else's listener: a publisher in another
+        // test refusing every connection, for no reason visible from there.
+        defer {
+            state.lock()
+            live.removeAll { $0 == descriptor }
+            state.unlock()
+            Darwin.close(descriptor)
+        }
         let hello = #"{"type":"hello","schema":2,"version":"\#(version)","pubkey":"\#(key)"}"# + "\n"
         write(descriptor, hello)
 

@@ -16,6 +16,14 @@ public struct StatusGlyph: Sendable, Equatable {
 
     public static func of(state: LinkState, snapshot: Snapshot?) -> StatusGlyph {
         switch state {
+        case .retrying(.notRoot):
+            // Not the dim "nothing is running" glyph: something *is* running
+            // there. This is the same news as a key that does not match, and it
+            // gets the same alarm.
+            return StatusGlyph(
+                symbol: "exclamationmark.shield.fill", dimmed: false,
+                description: "Tun Manager: what is on that socket is not running as root")
+
         case .idle, .connecting, .proving, .retrying:
             return StatusGlyph(
                 symbol: "shield.slash", dimmed: true,

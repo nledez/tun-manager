@@ -20,9 +20,24 @@ public struct UnixSocketTransport: FeedTransport {
     static let pathLimit = 103
 
     private let path: String
+    private let policy: PeerPolicy
+    /// The two lookups, injected so the rule can be exercised against uids a
+    /// test chooses rather than against whoever happens to run the suite.
+    private let peer: @Sendable (Int32) -> UInt32?
+    private let owner: @Sendable (String) -> UInt32?
 
-    public init(path: String) {
+    /// - Parameter policy: whether whoever is listening has to be root. It is
+    ///   not, and only is not, for a publisher named with `--socket`.
+    public init(
+        path: String,
+        policy: PeerPolicy = PeerPolicy(requiresRoot: true),
+        peer: @escaping @Sendable (Int32) -> UInt32? = peerUID,
+        owner: @escaping @Sendable (String) -> UInt32? = ownerOfFile
+    ) {
         self.path = path
+        self.policy = policy
+        self.peer = peer
+        self.owner = owner
     }
 
     public func connect() async throws -> any FeedConnection {
@@ -32,6 +47,11 @@ public struct UnixSocketTransport: FeedTransport {
             // would come back as a puzzling EINVAL from a truncated path.
             throw SocketPathTooLong(path: path, limit: Self.pathLimit)
         }
+
+        // Before the connect, because this one is about the name: whoever can
+        // write the directory can put their own socket where root's was, and
+        // the cheapest moment to find that out is before a byte is exchanged.
+        try policy.check(socketOwner: owner(path))
 
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ConnectFailure(code: errno) }
@@ -55,6 +75,17 @@ public struct UnixSocketTransport: FeedTransport {
             let code = errno
             close(descriptor)
             throw ConnectFailure(code: code)
+        }
+
+        // And after it, because this one is about the process: the file says
+        // who bound the socket, LOCAL_PEERCRED says who is answering on it now.
+        // A socket root left behind and somebody else took over passes the
+        // first check and fails this one.
+        do {
+            try policy.check(peer: peer(descriptor))
+        } catch {
+            close(descriptor)
+            throw error
         }
 
         return UnixSocketConnection(descriptor: descriptor)

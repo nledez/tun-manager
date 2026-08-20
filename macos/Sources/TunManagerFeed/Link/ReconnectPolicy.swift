@@ -22,6 +22,12 @@ public enum ReconnectPolicy {
             case .notRunning, .refused: .seconds(1)
             // Only a human restarting tun-manager under sudo fixes this.
             case .notPermitted: .seconds(5)
+            // Nothing to hurry for: either somebody is standing in for
+            // tun-manager, in which case asking faster gains nothing, or a demo
+            // publisher is still holding the path and will be told to stop by a
+            // person. Slow enough to leave the reason on screen long enough to
+            // be read.
+            case .notRoot: .seconds(5)
             // `^C`, edit a config, start it again — the common human sequence.
             // Faster than the ladder, slower than pointless.
             case .goodbye: .seconds(2)

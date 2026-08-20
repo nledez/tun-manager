@@ -17,8 +17,8 @@ import Testing
 /// connection at a time, created and closed by the supervisor on the main
 /// actor. Serialising here makes the suite deterministic without pretending the
 /// program has a problem it does not.
-@Suite(.serialized)
-struct UnixSocketTransportTests {
+extension RealSockets {
+@Suite struct Transport {
 
 /// A connection built directly on one end of a socketpair, so these tests prove
 /// what only the kernel can prove without needing a path, a listener or a
@@ -154,5 +154,6 @@ private func write(_ text: String, to fd: Int32) {
     await #expect(throws: SocketPathTooLong.self) {
         _ = try await transport.connect()
     }
+}
 }
 }

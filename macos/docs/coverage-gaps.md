@@ -21,6 +21,19 @@ that lives in memory.
 `NoPinnedKeys` is the same shape with nothing behind it, for a run that should
 pin nothing.
 
+### the peer's credentials
+
+`Sources/TunManagerFeed/Transport/PeerCredentials.swift` — `peerUID(of:)`, one
+`getsockopt(LOCAL_PEERCRED)`, and `ownerOfFile(at:)`, one `lstat`.
+
+What they return is decided by the kernel from the peer's process and from the
+filesystem. A test could only assert that this machine's own uid comes back,
+which is what those calls do by definition rather than anything this program
+decides. The decisions — root or not, what an unreadable credential means, when
+the rule is off — are in `PeerPolicy`, against uids a test chooses, and the two
+calls are injected into `UnixSocketTransport` so the refusals can be driven end
+to end over a real socket.
+
 ### the menu bar target
 
 `Sources/TunManagerMenuBar/` — four files: `main.swift`, `AppDelegate.swift`,

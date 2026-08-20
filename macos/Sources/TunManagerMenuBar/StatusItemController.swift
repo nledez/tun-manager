@@ -9,6 +9,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let supervisor: FeedSupervisor
     private let socketPath: String
+    /// Whether the publisher was named with `--socket`. Carried so every redraw
+    /// says so, rather than only the first.
+    private let demo: Bool
     private let notifications: NotificationPoster
     private let details: DetailWindowController
     private let flavour = Flavour(bundleIdentifier: Bundle.main.bundleIdentifier)
@@ -17,9 +20,13 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
     /// test can reach it rather than here.
     private var prompt = WarningPrompt()
 
-    init(supervisor: FeedSupervisor, socketPath: String, notifications: NotificationPoster) {
+    init(
+        supervisor: FeedSupervisor, socketPath: String, demo: Bool = false,
+        notifications: NotificationPoster
+    ) {
         self.supervisor = supervisor
         self.socketPath = socketPath
+        self.demo = demo
         self.notifications = notifications
         self.details = DetailWindowController(supervisor: supervisor)
         super.init()
@@ -81,7 +88,7 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         let glyph = StatusGlyph.of(state: supervisor.state, snapshot: supervisor.snapshot)
         model = MenuModelBuilder.build(
             state: supervisor.state, snapshot: supervisor.snapshot, now: Date(),
-            socketPath: socketPath)
+            socketPath: socketPath, demo: demo)
         announce(model?.warning)
 
         let image = NSImage(systemSymbolName: glyph.symbol, accessibilityDescription: glyph.description)
@@ -108,6 +115,11 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(disabled(model.headline, prominent: model.warning != nil))
+        if let notice = model.demoNotice {
+            // Under the headline and never removed: what is below it comes from
+            // a publisher this application did not check for being root.
+            menu.addItem(disabled(notice))
+        }
         if model.warning != nil {
             // Right under the line it explains, and worded as a question rather
             // than as a warning: the line above is the warning, and this is the

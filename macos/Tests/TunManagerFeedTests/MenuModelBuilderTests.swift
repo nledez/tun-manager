@@ -226,3 +226,30 @@ private func build(_ state: LinkState, _ view: Snapshot?) -> MenuModel {
     #expect(machine.handle(.retryTimerFired).isEmpty)
     #expect(machine.handle(.userAskedToRetry).contains(.connect))
 }
+
+@Test func somethingOnThatSocketThatIsNotRootIsNamedAsSuch() {
+    // Not "cannot reach tun-manager": it was reached. What answered is not a
+    // program running as root, so it is not tun-manager whatever else it is.
+    let model = build(.retrying(because: .notRoot(uid: 501)), nil)
+
+    #expect(model.headline.contains("uid 501"))
+    #expect(model.headline.contains("root"))
+}
+
+@Test func aPeerThatWouldNotSayWhoItIsGetsItsOwnSentence() {
+    let model = build(.retrying(because: .notRoot(uid: nil)), nil)
+
+    #expect(model.headline.contains("will not say"))
+}
+
+@Test func theDemoSaysSoForAsLongAsItIsConnected() {
+    // Not once, and not only while it is starting: an application showing
+    // tunnel health from an unprivileged publisher it never checked is saying
+    // something about somebody's machine it cannot stand behind.
+    let live = MenuModelBuilder.build(
+        state: .live(sawState: true), snapshot: snapshot(TunnelStatus(name: "alpha", group: "", health: .up)),
+        now: now, socketPath: "/tmp/d.sock", demo: true, locale: english)
+
+    #expect(live.demoNotice?.contains("not root") == true)
+    #expect(build(.live(sawState: true), snapshot()).demoNotice == nil)
+}

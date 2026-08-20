@@ -160,6 +160,9 @@ public struct LinkMachine {
         case (.connecting, .connectFailed(let code)):
             return retry(because: Self.reason(for: code))
 
+        case (.connecting, .publisherNotRoot(let uid)):
+            return retry(because: .notRoot(uid: uid))
+
         case (.connecting, .message(.hello(let schema, let version, let key))):
             publisherVersion = version
             publisherKey = key

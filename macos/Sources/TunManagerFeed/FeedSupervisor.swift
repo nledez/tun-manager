@@ -177,6 +177,10 @@ public final class FeedSupervisor {
                 guard self.serving(mine) else { return }
                 self.dispatch(.connectFailed(failure.code))
                 return
+            } catch let refusal as PublisherNotRoot {
+                guard self.serving(mine) else { return }
+                self.dispatch(.publisherNotRoot(uid: refusal.uid))
+                return
             } catch is CancellationError {
                 return
             } catch {

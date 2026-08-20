@@ -15,6 +15,35 @@ public enum SocketPath {
     /// The flag that beats every other source.
     public static let flag = "--socket"
 
+    /// A socket and where the choice of it came from.
+    ///
+    /// The provenance matters because it decides one rule: a path named on the
+    /// command line is a demo, and a demo publisher does not run as root. The
+    /// defaults key is not a demo — it exists for an installation that moved
+    /// `feed_socket`, which is still root's.
+    public struct Choice: Sendable, Equatable {
+        public let path: String
+        /// True only for `--socket`.
+        public let isDemo: Bool
+
+        public init(path: String, isDemo: Bool) {
+            self.path = path
+            self.isDemo = isDemo
+        }
+    }
+
+    /// Where to connect and where that came from, in order: the flag, the
+    /// defaults key, the default.
+    public static func chosen(
+        arguments: [String] = CommandLine.arguments,
+        defaults: UserDefaults = .standard
+    ) -> Choice {
+        if let fromFlag = value(in: arguments) {
+            return Choice(path: fromFlag, isDemo: true)
+        }
+        return Choice(path: defaults.string(forKey: defaultsKey) ?? fallback, isDemo: false)
+    }
+
     /// Where to connect, in order: the flag, the defaults key, the default.
     ///
     /// The flag wins because it leaves nothing behind. A `defaults write`
@@ -25,10 +54,7 @@ public enum SocketPath {
         arguments: [String] = CommandLine.arguments,
         defaults: UserDefaults = .standard
     ) -> String {
-        if let fromFlag = value(in: arguments) {
-            return fromFlag
-        }
-        return defaults.string(forKey: defaultsKey) ?? fallback
+        chosen(arguments: arguments, defaults: defaults).path
     }
 
     /// Reads `--socket PATH` or `--socket=PATH`, whichever was written.

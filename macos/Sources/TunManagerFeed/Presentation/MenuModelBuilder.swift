@@ -2,13 +2,18 @@ import Foundation
 
 /// Turns what is known into what the menu shows.
 public enum MenuModelBuilder {
-    /// - Parameter socketPath: what this client dialled, so a refusal can name
-    ///   the socket it is about. Empty in the tests that do not care.
+    /// - Parameters:
+    ///   - socketPath: what this client dialled, so a refusal can name the
+    ///     socket it is about. Empty in the tests that do not care.
+    ///   - demo: whether the publisher was named with `--socket`, in which case
+    ///     it is not checked for being root and the menu says so for as long as
+    ///     it is connected.
     public static func build(
         state: LinkState,
         snapshot: Snapshot?,
         now: Date,
         socketPath: String = "",
+        demo: Bool = false,
         locale: Locale = .autoupdatingCurrent
     ) -> MenuModel {
         let warning = PublisherWarning.of(state: state, socketPath: socketPath)
@@ -25,7 +30,13 @@ public enum MenuModelBuilder {
             footnote: footnote(state: state, snapshot: view, now: now),
             canRefresh: state.isLive,
             showsOverview: view != nil,
-            warning: warning)
+            warning: warning,
+            // Permanently, not once: an application showing tunnel health from
+            // an unprivileged publisher it never checked is telling somebody
+            // something about their machine that it has no way to stand behind,
+            // and the moment that line is not on screen is the moment the demo
+            // gets mistaken for the real one.
+            demoNotice: demo ? "Demo publisher — not root, not checked" : nil)
     }
 
     private static func headline(state: LinkState, snapshot: Snapshot?) -> String {
@@ -82,6 +93,14 @@ public enum MenuModelBuilder {
             return "tun-manager is shutting down"
         case .lost:
             return "Lost the connection to tun-manager"
+        case .notRoot(let uid):
+            // Named as what it is rather than as a connection problem: the
+            // socket answered, and what is behind it is not a program running
+            // as root, so it is not tun-manager whatever else it may be.
+            guard let uid else {
+                return "Something is on that socket and will not say who it is running as"
+            }
+            return "Something running as uid \(uid) is on that socket — tun-manager runs as root"
         case .failed(let code):
             return "Cannot reach tun-manager (error \(code))"
         }

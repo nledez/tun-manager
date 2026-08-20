@@ -272,6 +272,27 @@ key the publisher announced, which is the line to compare against
 `sudo tun-manager feed-key` when you want to know that the thing you are
 connected to is the thing on your machine.
 
+**And it checks who is answering.** After a connect that succeeded, the
+application asks the kernel for the peer's credentials — `LOCAL_PEERCRED` — and
+refuses anything that is not root, before a line is read. It also refuses a
+socket file root does not own, which is the same question asked of the name
+rather than of the process: a socket somebody else bound where root's used to be
+fails the first check, and a socket root bound that somebody else now answers on
+fails the second. A credential that cannot be read is a refusal too. The one
+exception is a publisher named with `--socket`, which is a demo and is not root
+— that is exactly why it is safe, and the menu says so for as long as it is
+connected.
+
+This and the signature below overlap on purpose, and neither replaces the other.
+The signature proves the publisher holds a key this application pinned; it works
+over any socket, including a demo's in `/tmp`, and it is the only thing that can
+tell one unprivileged process from another. The credentials say something a
+signature never can: that whoever is answering is root. A key can be copied out
+of a backup or a file somebody widened by accident and replayed by an ordinary
+process; being uid 0 cannot be copied. Remove the credentials check and a stolen
+key is enough; remove the signature and any root-owned process on the machine
+will do.
+
 The application checks that proof. On the first connection to a socket it
 remembers the key it was shown — trust on first use, the way `ssh` treats a host
 key — in the keychain rather than in defaults, because any process running as

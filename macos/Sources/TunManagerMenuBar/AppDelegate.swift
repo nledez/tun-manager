@@ -10,11 +10,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notifications = NotificationPoster()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let path = SocketPath.resolved()
+        // The choice, not just the path: a socket named with --socket is a demo
+        // publisher, which does not run as root - and that is the only reason
+        // it is safe to talk to. Everything else has to be root's.
+        let choice = SocketPath.chosen()
+        let path = choice.path
         let supervisor = FeedSupervisor(
-            transport: UnixSocketTransport(path: path), socketPath: path)
+            transport: UnixSocketTransport(path: path, policy: PeerPolicy.of(choice)),
+            socketPath: path)
         let statusItem = StatusItemController(
-            supervisor: supervisor, socketPath: path, notifications: notifications)
+            supervisor: supervisor, socketPath: path, demo: choice.isDemo,
+            notifications: notifications)
 
         supervisor.observer = statusItem
         self.supervisor = supervisor

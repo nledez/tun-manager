@@ -38,4 +38,7 @@ public struct MenuModel: Sendable, Equatable {
     /// headline says which of the three things happened, and this is offered
     /// beside it for the rest.
     public let warning: PublisherWarning?
+    /// Set for as long as the publisher is one the user named with `--socket`,
+    /// which is not required to be root and is therefore not checked for it.
+    public let demoNotice: String?
 }
