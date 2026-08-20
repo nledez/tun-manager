@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
 
 // Every value below is invented. Addresses come from the ranges reserved for
@@ -16,7 +18,8 @@ run_dir: /var/run/wireguard
 feed: true
 feed_socket: /var/run/tun-manager.sock
 feed_key: c2VjcmV0LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0=
-allow_hooks: false
+wg_quick_root_owned: true
+wg_quick_no_symlink: true
 `
 
 // ownedBy makes every path look owned by one uid for the length of a test.
@@ -35,8 +38,8 @@ func ownedBy(t *testing.T, uid int) {
 func ownedPerPath(t *testing.T, bySuffix map[string]int, fallback int) {
 	t.Helper()
 
-	previous := ownerOf
-	ownerOf = func(path string, _ os.FileInfo) (int, int) {
+	previous := fsx.Owner
+	fsx.Owner = func(path string, _ os.FileInfo) (int, int) {
 		for suffix, uid := range bySuffix {
 			if strings.HasSuffix(path, suffix) {
 				return uid, uid
@@ -44,7 +47,7 @@ func ownedPerPath(t *testing.T, bySuffix map[string]int, fallback int) {
 		}
 		return fallback, fallback
 	}
-	t.Cleanup(func() { ownerOf = previous })
+	t.Cleanup(func() { fsx.Owner = previous })
 }
 
 // writePrivileged lays out a privileged file the way a correct installation
@@ -119,8 +122,8 @@ func TestLoadPrivilegedReadsSettings(t *testing.T) {
 	if cfg.FeedKey.Reveal() != "c2VjcmV0LXNlZWQtdGhpcnR5LXR3by1ieXRlcy0=" {
 		t.Errorf("FeedKey = %q", cfg.FeedKey.Reveal())
 	}
-	if cfg.AllowHooks {
-		t.Error("AllowHooks = true, want false")
+	if !cfg.WgQuickRootOwned || !cfg.WgQuickNoSymlink {
+		t.Errorf("the strict rules were not read: %v", cfg)
 	}
 	if cfg.Path != path {
 		t.Errorf("Path = %q, want %q", cfg.Path, path)
@@ -129,7 +132,7 @@ func TestLoadPrivilegedReadsSettings(t *testing.T) {
 
 func TestLoadPrivilegedFillsDefaults(t *testing.T) {
 	ownedBy(t, 0)
-	path := writePrivileged(t, "allow_hooks: false\n")
+	path := writePrivileged(t, "wg_quick_no_symlink: false\n")
 
 	cfg, err := LoadPrivileged(path)
 	if err != nil {
@@ -346,12 +349,8 @@ func TestTheShippedPrivilegedExampleLoads(t *testing.T) {
 	if !cfg.Feed {
 		t.Error("the example turns the feed off, which is not the documented default")
 	}
-	// Two things the shipped file must never do: enable the hooks wg-quick runs
-	// as root, or carry a key somebody could end up sharing with everyone who
-	// reads the repository.
-	if cfg.AllowHooks {
-		t.Error("the example enables allow_hooks")
-	}
+	// The one thing the shipped file must never do: carry a key somebody could
+	// end up sharing with everyone who reads the repository.
 	if cfg.FeedKey.Reveal() != "" {
 		t.Error("the example ships a feed key")
 	}

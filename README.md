@@ -340,18 +340,31 @@ runs it rather than only by `doctor`: root executes that file, so whoever can
 write it — or any directory on the way to it — chooses what root does. Anything
 world-writable, unreadable or not executable is refused outright.
 
-One thing cannot be refused, and `doctor` says so instead. `brew install
-wireguard-tools` leaves `/opt/homebrew/bin/wg-quick` and everything behind it
-owned by the user who ran `brew`, not by root — so a process running as you can
-replace what root executes at the next `sudo tun-manager up`, whatever the mode
-says. Refusing that would refuse the installation this README documents. If you
-want it closed, put `wg-quick` somewhere root owns and point `wg_quick` at it:
+One thing cannot be refused **by default**, and `doctor` says so instead. `brew
+install wireguard-tools` leaves `/opt/homebrew/bin/wg-quick` as a symbolic link
+into `../Cellar`, and both the link and what it points at belong to the user who
+ran `brew`, not to root — so a process running as you can replace what root
+executes at the next `sudo tun-manager up`, whatever the mode says: a file
+belongs to whoever owns it. Refusing that out of the box would refuse the
+installation this README documents.
+
+Two rules in `/private/wireguard/config/tun-manager.yaml` turn that report into a
+refusal, for anybody who has put `wg-quick` somewhere root owns end to end:
 
 ```sh
 sudo install -o 0 -g 0 -m 0755 "$(readlink -f "$(command -v wg-quick)")" /usr/local/sbin/wg-quick
-# then, in /private/wireguard/config/tun-manager.yaml:
-#   wg_quick: /usr/local/sbin/wg-quick
 ```
+
+```yaml
+wg_quick: /usr/local/sbin/wg-quick
+wg_quick_root_owned: true   # refuse a wg-quick, or a directory on the way to it,
+                            # that root does not own or that a group can write
+wg_quick_no_symlink: true   # refuse one reached through a symbolic link
+```
+
+Both are off by default and both are refused before `wg-quick` runs, not only in
+`doctor`. Leave them off on a Homebrew install: turning them on there stops the
+program from bringing anything up.
 
 Those modes are not advice. Every command that touches the tunnels — the
 interface, `status`, `up`, `down`, `import`, `backup` — refuses to start while a

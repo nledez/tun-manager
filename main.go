@@ -486,11 +486,9 @@ func (e *env) buildApp() (*app.App, error) {
 	reader, err := wg.NewReader()
 	// NOT TESTED: this branch. Opening the client succeeds for any user on
 	// darwin - it only records where to look - so this guards against a
-	// platform, or a future wgctrl, where it can fail. Reaching it would mean
-	// threading an opener through here, a seam inside the seam env already
-	// provides, for one defensive line; wg.NewReader is covered on both paths
-	// in its own package. See docs/coverage-gaps.md, "build and the WireGuard
-	// client".
+	// platform, or a future wgctrl, where it can fail. wg.NewReader is covered
+	// on both paths in its own package.
+	// See docs/coverage-gaps.md, "build and the WireGuard client".
 	if err != nil {
 		return nil, err
 	}
@@ -517,8 +515,15 @@ func (e *env) assemble(cfg *profile.Config, priv *profile.Privileged, reader wg.
 		Locator: wg.RunDirLocator{Dir: priv.RunDir},
 		Control: &wg.Controller{
 			WgQuick: priv.WgQuick,
-			Runner:  wg.ExecRunner{},
-			Pinger:  pinger,
+			// The two rules the privileged configuration can ask for. Off, the
+			// documented Homebrew installation works; on, a wg-quick root does
+			// not own, or one reached through a link, is refused before it runs.
+			Strict: wg.Strict{
+				RootOwner: priv.WgQuickRootOwned,
+				NoSymlink: priv.WgQuickNoSymlink,
+			},
+			Runner: wg.ExecRunner{},
+			Pinger: pinger,
 		},
 	}
 }

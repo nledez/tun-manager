@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/wg"
 )
 
@@ -80,9 +81,15 @@ type Privileged struct {
 	// FeedKey is the seed of the Ed25519 key the feed signs with, so that the
 	// menu bar application can tell this publisher from any other.
 	FeedKey Secret `yaml:"feed_key"`
-	// AllowHooks permits .conf files carrying PreUp/PostUp/PreDown/PostDown,
-	// which wg-quick executes as root. Off unless somebody has read them.
-	AllowHooks bool `yaml:"allow_hooks"`
+	// WgQuickRootOwned refuses a wg-quick that root does not own, or that sits
+	// under a directory root does not own. Off by default: Homebrew installs
+	// under the user who ran it, and turning this on there would refuse the
+	// installation the README documents.
+	WgQuickRootOwned bool `yaml:"wg_quick_root_owned"`
+	// WgQuickNoSymlink refuses a wg-quick reached through a symbolic link
+	// rather than following it. Off for the same reason:
+	// /opt/homebrew/bin/wg-quick is a link into ../Cellar.
+	WgQuickNoSymlink bool `yaml:"wg_quick_no_symlink"`
 
 	// Path is the file this was read from, for `doctor`.
 	Path string `yaml:"-"`
@@ -92,8 +99,10 @@ type Privileged struct {
 // a Privileged safe, wherever somebody eventually writes one.
 func (p Privileged) String() string {
 	return fmt.Sprintf(
-		"Privileged{Path:%s WgQuick:%s RunDir:%s Feed:%t FeedSocket:%s FeedKey:%s AllowHooks:%t}",
-		p.Path, p.WgQuick, p.RunDir, p.Feed, p.FeedSocket, p.FeedKey, p.AllowHooks,
+		"Privileged{Path:%s WgQuick:%s RunDir:%s Feed:%t FeedSocket:%s FeedKey:%s "+
+			"WgQuickRootOwned:%t WgQuickNoSymlink:%t}",
+		p.Path, p.WgQuick, p.RunDir, p.Feed, p.FeedSocket, p.FeedKey,
+		p.WgQuickRootOwned, p.WgQuickNoSymlink,
 	)
 }
 
@@ -130,10 +139,7 @@ func LoadPrivileged(path string) (*Privileged, error) {
 
 	info, err := f.Stat()
 	if err != nil {
-		// NOT TESTED: fstat on a descriptor this process has just opened.
-		// Reaching it needs the descriptor to become invalid between the open
-		// and the call, which is not a window a test can open.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// The descriptor became invalid between the open and the call.
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 	if err := checkPrivilegedFile(path, info); err != nil {
@@ -183,7 +189,7 @@ func openRefusal(path string, err error) error {
 // checkPrivilegedFile refuses a file somebody other than root owns, or one
 // somebody other than root can read.
 func checkPrivilegedFile(path string, info os.FileInfo) error {
-	if uid, _ := ownerOf(path, info); uid != rootUID {
+	if uid, _ := fsx.Owner(path, info); uid != fsx.Root {
 		return fmt.Errorf(
 			"%s is owned by uid %d rather than root, so it does not say what root will do: `sudo chown 0:0 %s`",
 			path, uid, path)
@@ -208,12 +214,11 @@ func checkPrivilegedFile(path string, info os.FileInfo) error {
 func checkPrivilegedParent(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
-		// NOT TESTED: the open above walked through this directory, so it was
-		// there a moment ago.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// The open above walked through this directory, so something removed it
+		// in between.
 		return fmt.Errorf("stat %s: %w", dir, err)
 	}
-	if uid, _ := ownerOf(dir, info); uid != rootUID {
+	if uid, _ := fsx.Owner(dir, info); uid != fsx.Root {
 		return fmt.Errorf(
 			"%s is owned by uid %d rather than root, so %s could be replaced: `sudo chown 0:0 %s`",
 			dir, uid, PrivilegedName, dir)
@@ -240,30 +245,4 @@ func (p *Privileged) applyDefaults() {
 	if p.FeedSocket == "" {
 		p.FeedSocket = d.FeedSocket
 	}
-}
-
-// rootUID is the owner the privileged side is meant to have.
-const rootUID = 0
-
-// ownerOf reads the uid and gid behind a FileInfo.
-//
-// A variable for the reason the identical one in internal/cli has: a fixture is
-// owned by whoever runs the suite, and making it root-owned would mean running
-// the suite as root - a suite that only proves itself under sudo proves nothing
-// on anybody else's machine. Swapped by ownedBy in the tests, and never
-// assigned anywhere else.
-var ownerOf func(path string, info os.FileInfo) (uid, gid int) = realOwner
-
-// realOwner reads the uid and gid out of the stat behind a FileInfo. darwin
-// only, like the rest of this program.
-func realOwner(_ string, info os.FileInfo) (uid, gid int) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		// NOT TESTED: os.Stat on darwin always yields a *syscall.Stat_t. This
-		// guards a platform where it does not, on which the whole program does
-		// not build.
-		// See docs/coverage-gaps.md, "cli.ownerOf".
-		return -1, -1
-	}
-	return int(stat.Uid), int(stat.Gid)
 }

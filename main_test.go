@@ -1810,3 +1810,24 @@ func importable(t *testing.T) (*env, string) {
 	}
 	return e, source
 }
+
+func TestTheStrictRulesReachTheControllerThatRunsWgQuick(t *testing.T) {
+	// A rule in the privileged configuration that never reached the code
+	// running wg-quick would be a setting that reads as enforced and is not.
+	e := testEnv(t, &fakeRunner{})
+	priv, err := e.privileged()
+	if err != nil {
+		t.Fatalf("privileged: %v", err)
+	}
+	priv.WgQuickRootOwned = true
+	priv.WgQuickNoSymlink = true
+
+	a, err := e.buildApp()
+	if err != nil {
+		t.Fatalf("buildApp: %v", err)
+	}
+
+	if !a.Control.Strict.RootOwner || !a.Control.Strict.NoSymlink {
+		t.Errorf("the controller was given %+v, want both rules", a.Control.Strict)
+	}
+}

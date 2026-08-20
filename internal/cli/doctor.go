@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"ledez.net/tun-manager/internal/feed"
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/wg"
@@ -68,7 +69,7 @@ func Doctor(cfg *profile.Config, priv *profile.Privileged, u privdrop.User, euid
 	checks := []Check{
 		{Name: "version", Status: Pass, Detail: version},
 		checkRoot(euid, want.rootNeeded),
-		checkWgQuick(priv.WgQuick),
+		checkWgQuick(priv),
 		checkConfigDir(cfg.ConfigDir),
 		checkRunDir(priv.RunDir),
 		checkConfigFile(cfg),
@@ -204,20 +205,25 @@ func checkRoot(euid int, needed bool) Check {
 // the model this program is written against. Refusing it would refuse the
 // installation the README documents, so it is reported instead, in the one
 // place with room to say what it means.
-func checkWgQuick(path string) Check {
+func checkWgQuick(priv *profile.Privileged) Check {
 	const name = "wg-quick"
 
-	if err := wg.CheckExecutable(path); err != nil {
+	path := priv.WgQuick
+	strict := wg.Strict{RootOwner: priv.WgQuickRootOwned, NoSymlink: priv.WgQuickNoSymlink}
+	if err := wg.CheckExecutable(path, strict); err != nil {
 		return Check{Name: name, Status: Fail, Detail: err.Error()}
 	}
+	// Reached only while wg_quick_root_owned is unset: with it set, anything
+	// this would find has already been refused above, by the same two rules
+	// read from the same files.
 	if reach, ok := reachableByAnybodyButRoot(path); ok {
 		return Check{
 			Name: name, Status: Warn,
 			Detail: fmt.Sprintf(
 				"%s: any process running as that user can replace what root executes at the next "+
 					"`sudo tun-manager up`. Homebrew installs under the user who ran it, so this is "+
-					"the ordinary state of a brew install; copying wg-quick somewhere root owns and "+
-					"pointing wg_quick at it is what closes it", reach),
+					"the ordinary state of a brew install; copying wg-quick somewhere root owns, "+
+					"pointing wg_quick at it and setting wg_quick_root_owned is what closes it", reach),
 		}
 	}
 	return Check{Name: name, Status: Pass, Detail: path + ", root all the way up"}
@@ -231,9 +237,9 @@ func checkWgQuick(path string) Check {
 func reachableByAnybodyButRoot(path string) (string, bool) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		// NOT TESTED: wg.CheckExecutable resolved this path a moment ago, and
-		// is called first by the only caller.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// wg.CheckExecutable resolved this path a moment ago, so only something
+		// moving it in between arrives here. The name as given is then all
+		// there is to walk.
 		resolved = path
 	}
 
@@ -241,11 +247,11 @@ func reachableByAnybodyButRoot(path string) (string, bool) {
 		for name := start; ; name = filepath.Dir(name) {
 			info, statErr := os.Lstat(name)
 			if statErr != nil {
-				// NOT TESTED: same window as above.
-				// See docs/coverage-gaps.md, "filesystem races in the permission code".
+				// Same window: something moved while this was being read. What
+				// has been walked so far is what can be said about it.
 				break
 			}
-			if uid, _ := ownerOf(name, info); uid != ownerRoot {
+			if uid, _ := fsx.Owner(name, info); uid != fsx.Root {
 				return fmt.Sprintf("%s is owned by uid %d rather than root", name, uid), true
 			}
 			if info.Mode().Perm()&0o020 != 0 {

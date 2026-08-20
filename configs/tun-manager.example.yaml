@@ -75,11 +75,28 @@ feed_socket: /var/run/tun-manager.sock
 # the one the application shows.
 feed_key: ""
 
-# Whether a .conf carrying PreUp, PostUp, PreDown or PostDown may be used.
+# Two rules about the binary above that are off by default, because turning
+# either of them on refuses a Homebrew installation.
 #
-# wg-quick executes those lines as root. A configuration downloaded from a VPN
-# provider can contain one, and it will run with every privilege this program
-# has. Off means tun-manager refuses such a file rather than discovering it
-# later; `import` shows the offending lines and takes --allow-hooks for the
-# case where they have been read and are wanted.
-allow_hooks: false
+# `brew install wireguard-tools` leaves /opt/homebrew/bin/wg-quick as a symbolic
+# link into ../Cellar, and both the link and what it points at belong to the
+# user who ran brew rather than to root. That user - or anything running as them
+# - can replace what root executes at the next `sudo tun-manager up`, and no
+# permission bit says otherwise: a file belongs to whoever owns it.
+#
+# tun-manager refuses what it can refuse without refusing that installation
+# (anything world-writable, unreadable or not executable) and `doctor` reports
+# the rest. These two turn the report into a refusal, for anybody who has put
+# wg-quick somewhere root owns end to end:
+#
+#   sudo install -o 0 -g 0 -m 0755 \
+#       "$(readlink -f "$(command -v wg-quick)")" /usr/local/sbin/wg-quick
+#   # then: wg_quick: /usr/local/sbin/wg-quick, and both rules below on.
+#
+# wg_quick_root_owned refuses a wg-quick, or a directory on the way to it, that
+# root does not own or that a group can write.
+wg_quick_root_owned: false
+
+# wg_quick_no_symlink refuses a wg-quick reached through a symbolic link, rather
+# than following it and checking what it points at.
+wg_quick_no_symlink: false

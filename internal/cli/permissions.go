@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 )
@@ -33,9 +33,6 @@ const (
 	// checking is that a run under sudo has not left it owned by root.
 	UserConfigDirMode os.FileMode = 0o755
 )
-
-// ownerRoot is the uid and gid the WireGuard side is meant to have.
-const ownerRoot = 0
 
 // Permissions reports whether the files this program reads are readable by
 // people who should not read them.
@@ -107,13 +104,11 @@ func checkWireGuardDirs(configDir string) Check {
 	parent := filepath.Dir(configDir)
 	parentInfo, err := os.Stat(parent)
 	if err != nil {
-		// NOT TESTED: the stat above walked through this directory, so it was
-		// there a moment ago. Only something removing it in between reaches
-		// here, which is not a window a test can open.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// The stat above walked through this directory, so it was there a
+		// moment ago; something removed it in between.
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("%s: %v", parent, err)}
 	}
-	if uid, _ := ownerOf(parent, parentInfo); uid != ownerRoot {
+	if uid, _ := fsx.Owner(parent, parentInfo); uid != fsx.Root {
 		return Check{
 			Name:   name,
 			Status: Fail,
@@ -155,10 +150,8 @@ func checkTunnelFiles(configDir string) Check {
 		path := filepath.Join(configDir, entry.Name())
 		info, statErr := entry.Info()
 		if statErr != nil {
-			// NOT TESTED: ReadDir does not stat, so this lstat can fail for a
-			// file deleted between listing the directory and reading it. Same
-			// window as above, and just as closed to a test.
-			// See docs/coverage-gaps.md, "filesystem races in the permission code".
+			// ReadDir does not stat, so this lstat fails for a file deleted
+			// between listing the directory and reading it.
 			problems = append(problems, fmt.Sprintf("%s: %v", path, statErr))
 			continue
 		}
@@ -205,7 +198,7 @@ func checkUserConfigDir(cfg *profile.Config, u privdrop.User) Check {
 		}
 	}
 
-	uid, _ := ownerOf(dir, info)
+	uid, _ := fsx.Owner(dir, info)
 	// Without SUDO_USER there is no pre-sudo user to compare against, and root
 	// owning its own files is not news.
 	if u.Demotable && uid != u.UID {
@@ -226,7 +219,7 @@ func checkUserConfigDir(cfg *profile.Config, u privdrop.User) Check {
 // tooOpen reports what is wrong with a path meant to be root-owned and no more
 // permissive than want, or "" when nothing is.
 func tooOpen(path string, info os.FileInfo, want os.FileMode) string {
-	if uid, _ := ownerOf(path, info); uid != ownerRoot {
+	if uid, _ := fsx.Owner(path, info); uid != fsx.Root {
 		return fmt.Sprintf("%s is owned by uid %d rather than root: `sudo chown 0:0 %s`", path, uid, path)
 	}
 	// Only the bits that grant somebody else access. A mode stricter than want
@@ -237,28 +230,4 @@ func tooOpen(path string, info os.FileInfo, want os.FileMode) string {
 			path, info.Mode().Perm(), want.Perm(), want.Perm(), path)
 	}
 	return ""
-}
-
-// ownerOf reads the uid and gid behind a FileInfo.
-//
-// A variable, and the only one in this package, because it is the one thing
-// these checks depend on that a test cannot arrange. A fixture is owned by
-// whoever runs the suite; making it root-owned would mean running the suite as
-// root, and a suite that only proves itself under sudo proves nothing on
-// anybody else's machine. Swapped by ownedBy in the tests, and never assigned
-// anywhere else.
-var ownerOf func(path string, info os.FileInfo) (uid, gid int) = realOwner
-
-// realOwner reads the uid and gid out of the stat behind a FileInfo. darwin
-// only, like the rest of this program.
-func realOwner(_ string, info os.FileInfo) (uid, gid int) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		// NOT TESTED: os.Stat on darwin always yields a *syscall.Stat_t. This
-		// guards a platform where it does not, on which the whole program does
-		// not build.
-		// See docs/coverage-gaps.md, "cli.ownerOf".
-		return -1, -1
-	}
-	return int(stat.Uid), int(stat.Gid)
 }

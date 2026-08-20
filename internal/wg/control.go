@@ -44,6 +44,11 @@ type Controller struct {
 	// already answers.
 	Pinger Pinger
 
+	// Strict carries the two rules that are only applied when the privileged
+	// configuration asks for them. The zero value is the documented Homebrew
+	// installation: a link into ../Cellar, owned by the user who ran brew.
+	Strict Strict
+
 	// Check verifies the binary before it is run. Zero means CheckExecutable,
 	// so a Controller assembled without thinking about it is the safe one - a
 	// field that has to be filled in to be secure is a field somebody forgets.
@@ -59,7 +64,7 @@ func (c *Controller) check() func(string) error {
 	if c.Check != nil {
 		return c.Check
 	}
-	return CheckExecutable
+	return func(path string) error { return CheckExecutable(path, c.Strict) }
 }
 
 // Up brings a tunnel up, unless its check address already answers.

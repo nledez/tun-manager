@@ -698,3 +698,35 @@ func TestDoctorWarnsAboutAWgQuickAGroupCanWrite(t *testing.T) {
 		t.Errorf("detail %q does not say what is wrong", c.Detail)
 	}
 }
+
+func TestDoctorFailsOnAWgQuickRootDoesNotOwnWhenThatIsAskedFor(t *testing.T) {
+	// The warning becomes a refusal for anybody who has put wg-quick somewhere
+	// root owns and said so.
+	cfg, priv, u := healthyEnv(t)
+	priv.WgQuickRootOwned = true
+	ownedPerPath(t, map[string]int{"wg-quick": 501}, 0)
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Fail {
+		t.Errorf("status = %v, want %v: %s", c.Status, Fail, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "wg_quick_root_owned") {
+		t.Errorf("detail %q does not name the rule that refused it", c.Detail)
+	}
+}
+
+func TestDoctorDoesNotWarnAboutWhatItAlreadyRefuses(t *testing.T) {
+	// With the rule on and nothing wrong, there is nothing left to say about
+	// ownership: repeating the warning would say the opposite of what the check
+	// just found.
+	cfg, priv, u := healthyEnv(t)
+	priv.WgQuickRootOwned = true
+	ownedBy(t, 0)
+
+	c, _ := findCheck(Doctor(cfg, priv, u, 0, "test"), "wg-quick")
+
+	if c.Status != Pass {
+		t.Errorf("status = %v, want %v: %s", c.Status, Pass, c.Detail)
+	}
+}

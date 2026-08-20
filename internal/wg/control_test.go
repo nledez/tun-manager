@@ -3,6 +3,7 @@ package wg
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -327,5 +328,36 @@ func TestAControllerWithNoCheckOfItsOwnUsesTheRealOne(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Errorf("the runner was called anyway: %v", runner.calls)
+	}
+}
+
+func TestTheControllerAppliesTheRulesItWasGiven(t *testing.T) {
+	// Not just any check: the one the privileged configuration asked for. A
+	// Strict that never reached CheckExecutable would be a setting that reads
+	// as enforced and is not.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "wg-quick")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	link := filepath.Join(dir, "wg-quick-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	runner := &recordRunner{}
+	c := &Controller{WgQuick: link, Runner: runner, Strict: Strict{NoSymlink: true}}
+
+	res := c.Up(context.Background(), wgconf.Tunnel{Name: "alpha"})
+
+	if res.Err == nil {
+		t.Fatal("Up ran a linked binary although NoSymlink was set")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("the runner was called anyway: %v", runner.calls)
+	}
+	// And the same Controller without the rule runs it.
+	c.Strict = Strict{}
+	if res := c.Up(context.Background(), wgconf.Tunnel{Name: "alpha"}); res.Err != nil {
+		t.Errorf("Up refused a linked binary with no rule asking it to: %v", res.Err)
 	}
 }

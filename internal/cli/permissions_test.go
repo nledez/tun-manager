@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/profile"
 )
@@ -26,8 +27,8 @@ func ownedBy(t *testing.T, uid int) {
 func ownedPerPath(t *testing.T, bySuffix map[string]int, fallback int) {
 	t.Helper()
 
-	previous := ownerOf
-	ownerOf = func(path string, _ os.FileInfo) (int, int) {
+	previous := fsx.Owner
+	fsx.Owner = func(path string, _ os.FileInfo) (int, int) {
 		for suffix, uid := range bySuffix {
 			if strings.HasSuffix(path, suffix) {
 				return uid, uid
@@ -35,7 +36,7 @@ func ownedPerPath(t *testing.T, bySuffix map[string]int, fallback int) {
 		}
 		return fallback, fallback
 	}
-	t.Cleanup(func() { ownerOf = previous })
+	t.Cleanup(func() { fsx.Owner = previous })
 }
 
 // chmod sets a mode and puts it back afterwards, so a directory made
@@ -356,28 +357,6 @@ func TestAUserConfigDirectoryThatIsNotThereIsOnlyAWarning(t *testing.T) {
 
 	if c := check(t, Permissions(cfg, operator), "user config dir"); c.Status != Warn {
 		t.Errorf("status = %v, want a warning", c.Status)
-	}
-}
-
-func TestTheRealOwnerIsWhoeverTheFilesystemSays(t *testing.T) {
-	// Every other test here swaps this out, so without one exercising it the
-	// only untested thing left would be the one line that talks to the kernel.
-	path := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-
-	uid, gid := realOwner(path, info)
-
-	if uid != os.Getuid() {
-		t.Errorf("uid = %d, want %d: this test just wrote the file", uid, os.Getuid())
-	}
-	if gid < 0 {
-		t.Errorf("gid = %d, want the group off the filesystem", gid)
 	}
 }
 

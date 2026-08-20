@@ -4,7 +4,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"ledez.net/tun-manager/internal/fsx"
 )
+
+// Strict names the two rules that cannot be defaults.
+//
+// Both are off unless somebody asks for them, and what they are worth depends
+// on how wg-quick was installed. `brew install wireguard-tools` leaves
+// /opt/homebrew/bin/wg-quick as a link into ../Cellar, both owned by the user
+// who ran brew: turning either on would refuse the installation the README
+// documents. An installation put somewhere root owns end to end - copied into
+// /usr/local/sbin, chowned to root - can have both, and should.
+//
+// They live in the root-only half of the configuration, like everything else
+// that decides what root will run.
+type Strict struct {
+	// RootOwner refuses a wg-quick that root does not own, or that sits under
+	// a directory root does not own, or that a group can write. It is the only
+	// rule that closes the hole a package manager leaves: the owner of a file
+	// can replace it whatever its mode says.
+	RootOwner bool
+	// NoSymlink refuses a wg-quick reached through a symbolic link, rather
+	// than following it and checking what it points at.
+	NoSymlink bool
+}
 
 // CheckExecutable refuses a binary that root must not be asked to run.
 //
@@ -33,19 +57,23 @@ import (
 // Symbolic links are followed rather than refused, for the same reason, and
 // what they point at is checked as well: a link in a sound directory pointing
 // into one anybody can write is exactly the case worth catching.
-func CheckExecutable(path string) error {
+func CheckExecutable(path string, strict Strict) error {
 	// EvalSymlinks resolves every link on the way, so what is checked below is
 	// the file that will actually run rather than the name it was reached by.
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("wg_quick %s cannot be read: %w", path, err)
 	}
+	if strict.NoSymlink && resolved != path {
+		return fmt.Errorf(
+			"wg_quick %s is reached through a symbolic link, and wg_quick_no_symlink is set: "+
+				"point wg_quick at %s, or unset the rule", named(path, resolved), resolved)
+	}
 
 	info, err := os.Stat(resolved)
 	if err != nil {
-		// NOT TESTED: EvalSymlinks has just walked to this file, so it was
-		// there a moment ago.
-		// See docs/coverage-gaps.md, "filesystem races in the permission code".
+		// EvalSymlinks walked to this file a moment ago; something moved it in
+		// between, and what root would run is no longer what was checked.
 		return fmt.Errorf("wg_quick %s cannot be read: %w", resolved, err)
 	}
 	if !info.Mode().IsRegular() {
@@ -65,8 +93,45 @@ func CheckExecutable(path string) error {
 	// place pointing into one anybody can write is the case that reads as safe
 	// and is not.
 	for _, name := range []string{path, resolved} {
-		if err := checkPathToExecutable(name); err != nil {
+		if err := checkPathToExecutable(name, strict); err != nil {
 			return err
+		}
+	}
+	if strict.RootOwner {
+		return checkOwnedByRoot(path, resolved)
+	}
+	return nil
+}
+
+// checkOwnedByRoot refuses anything on the way to the binary that somebody
+// other than root could change.
+//
+// This is the rule the mode bits cannot express. A file belongs to whoever owns
+// it: they can chmod it, replace it, or rename another one over it, and no
+// permission on it says otherwise. Asking for it means asking that root be the
+// only one who can.
+func checkOwnedByRoot(path, resolved string) error {
+	for _, start := range []string{path, resolved} {
+		for name := start; ; name = filepath.Dir(name) {
+			info, err := os.Lstat(name)
+			if err != nil {
+				return fmt.Errorf("wg_quick: %s cannot be read: %w", name, err)
+			}
+			if uid, _ := fsx.Owner(name, info); uid != fsx.Root {
+				return fmt.Errorf(
+					"wg_quick: %s is owned by uid %d rather than root, and wg_quick_root_owned is "+
+						"set: that user can replace what root runs. `sudo chown 0:0 %s`, or move "+
+						"wg-quick somewhere root owns",
+					name, uid, name)
+			}
+			if info.Mode().Perm()&0o020 != 0 {
+				return fmt.Errorf(
+					"wg_quick: %s is %04o and its group can write it, and wg_quick_root_owned is "+
+						"set: `sudo chmod g-w %s`", name, info.Mode().Perm(), name)
+			}
+			if name == filepath.Dir(name) {
+				break
+			}
 		}
 	}
 	return nil
@@ -79,16 +144,13 @@ func CheckExecutable(path string) error {
 // is what stops one user renaming another's file out of the way, which is the
 // attack this is looking for. /tmp is 1777, and a stub kept there for a demo is
 // not a finding.
-func checkPathToExecutable(path string) error {
+func checkPathToExecutable(path string, strict Strict) error {
 	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
 		info, err := os.Stat(dir)
 		if err != nil {
-			// NOT TESTED: these are the directories the stat above walked
-			// through to reach the file.
-			// See docs/coverage-gaps.md, "filesystem races in the permission code".
 			return fmt.Errorf("wg_quick: %s cannot be read: %w", dir, err)
 		}
-		if info.Mode().Perm()&0o002 != 0 && info.Mode()&os.ModeSticky == 0 {
+		if info.Mode().Perm()&0o002 != 0 && (strict.RootOwner || info.Mode()&os.ModeSticky == 0) {
 			return fmt.Errorf(
 				"wg_quick: %s is %04o, which anybody on this machine can write, so what is in it "+
 					"can be replaced by anybody: `sudo chmod o-w %s`",
