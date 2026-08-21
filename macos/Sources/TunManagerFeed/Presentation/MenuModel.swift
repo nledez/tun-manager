@@ -8,6 +8,11 @@ import Foundation
 public struct MenuModel: Sendable, Equatable {
     /// One tunnel.
     public struct Row: Sendable, Equatable {
+        /// The tunnel as the publisher knows it. What goes back to it - the row
+        /// somebody clicked, a watch, a probe - uses this and never the title:
+        /// a name cleaned for display is a different name.
+        public let name: String
+        /// The same thing, made safe to draw.
         public let title: String
         /// SF Symbol, drawn beside the name.
         public let symbol: String

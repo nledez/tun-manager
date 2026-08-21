@@ -133,7 +133,7 @@ public enum MenuModelBuilder {
 
         return headers.map { group in
             MenuModel.Section(
-                header: group.isEmpty ? nil : group,
+                header: group.isEmpty ? nil : Displayable.of(group),
                 rows: (byGroup[group] ?? [])
                     .sorted { $0.name < $1.name }
                     .map { row($0, now: now, locale: locale) })
@@ -156,7 +156,9 @@ public enum MenuModelBuilder {
     /// menu but the traffic does not, and having both build the same list was
     /// two places to keep in step.
     private static func row(_ tunnel: TunnelStatus, now: Date, locale: Locale) -> MenuModel.Row {
-        MenuModel.Row(title: tunnel.name, symbol: symbol(for: tunnel.health))
+        MenuModel.Row(
+            name: tunnel.name, title: Displayable.of(tunnel.name),
+            symbol: symbol(for: tunnel.health))
     }
 
     private static func symbol(for health: Health) -> String {

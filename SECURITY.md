@@ -113,6 +113,14 @@ not already configured to reach. Keep it that way.
 These are not oversights. They are the places where the cost of closing the gap
 was judged higher than the gap.
 
+**Nothing read from a file is drawn as it is.** A terminal is an interpreter,
+and a menu draws what it is given: an escape sequence in a context name repaints
+the screen, and a bidirectional override draws one address as another. Every
+value that came from a configuration file or from the output of a command goes
+through one function before it is shown, on both sides. What is sent back to
+`tun-manager` — the tunnel to watch, the one to probe — is always the name it
+knows, never the cleaned one.
+
 **Groups and overrides stay on the user's side.** An attacker running as you can
 edit them, and so change which tunnels come up when you press `s`, or which
 group is "needed". That is a routing change, not a privilege escalation: the

@@ -30,16 +30,19 @@ public struct TunnelDetail: Sendable, Equatable {
         _ tunnel: TunnelStatus, latest: Sample? = nil, ping: Ping? = nil, now: Date,
         locale: Locale = .autoupdatingCurrent
     ) {
-        name = tunnel.name
+        // This whole value is for drawing - the window keeps its own idea of
+        // which tunnel is selected, under the name the publisher uses - so
+        // everything in it is cleaned.
+        name = Displayable.of(tunnel.name)
         health = tunnel.health
-        group = tunnel.group.isEmpty ? "no group" : tunnel.group
+        group = tunnel.group.isEmpty ? "no group" : Displayable.of(tunnel.group)
 
         var facts: [Fact] = []
         if let device = tunnel.device {
-            facts.append(Fact(label: "Interface", value: device))
+            facts.append(Fact(label: "Interface", value: Displayable.of(device)))
         }
         if let endpoint = tunnel.endpoint {
-            facts.append(Fact(label: "Endpoint", value: endpoint))
+            facts.append(Fact(label: "Endpoint", value: Displayable.of(endpoint)))
         }
         if let handshake = tunnel.lastHandshake {
             facts.append(
@@ -64,7 +67,7 @@ public struct TunnelDetail: Sendable, Equatable {
                     value: Formatting.bytes(reading?.tx ?? tunnel.txBytes, locale: locale)))
         }
         if let check = tunnel.checkIP {
-            facts.append(Fact(label: "Checks", value: check))
+            facts.append(Fact(label: "Checks", value: Displayable.of(check)))
         }
         // Only when somebody asked. A blank row would read as "no answer",
         // which is a different thing from "never probed".
@@ -77,7 +80,7 @@ public struct TunnelDetail: Sendable, Equatable {
     /// Whole milliseconds, as the terminal shows them: a tenth of a millisecond
     /// over a tunnel is noise dressed as precision.
     private static func latency(_ ping: Ping) -> String {
-        guard let rtt = ping.rtt else { return ping.error ?? "no answer" }
+        guard let rtt = ping.rtt else { return Displayable.of(ping.error ?? "no answer") }
         return "\(Int((rtt / .milliseconds(1)).rounded()))ms"
     }
 }

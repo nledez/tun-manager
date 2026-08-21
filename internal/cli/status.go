@@ -27,7 +27,7 @@ func writeJSON(w io.Writer, view app.View) error {
 }
 
 func writeTable(w io.Writer, view app.View) error {
-	if _, err := fmt.Fprintf(w, "context: %s\n\n", view.Context); err != nil {
+	if _, err := fmt.Fprintf(w, "context: %s\n\n", format.Display(view.Context.String())); err != nil {
 		return err
 	}
 
@@ -36,14 +36,14 @@ func writeTable(w io.Writer, view app.View) error {
 	fmt.Fprintln(tw, "NAME\tGROUP\tSTATE\tDEVICE\tHANDSHAKE\tRX/TX\tENDPOINT") //nolint:errcheck
 	for _, r := range view.Rows {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\n", //nolint:errcheck
-			r.Tunnel.Name,
-			format.OrNone(r.Group),
+			format.Display(r.Tunnel.Name),
+			format.OrNone(format.Display(r.Group)),
 			r.Health,
-			format.OrNone(r.Peer.Device),
+			format.OrNone(format.Display(r.Peer.Device)),
 			format.Age(r.Peer.LastHandshake, view.Taken),
 			format.Bytes(r.Peer.RxBytes),
 			format.Bytes(r.Peer.TxBytes),
-			format.OrNone(wire.Endpoint(r)),
+			format.OrNone(format.Display(wire.Endpoint(r))),
 		)
 	}
 	return tw.Flush()

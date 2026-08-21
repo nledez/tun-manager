@@ -187,7 +187,9 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         entry.image = NSImage(systemSymbolName: row.symbol, accessibilityDescription: nil)
         // Carried on the item so the handler knows which row was clicked
         // without the controller keeping a parallel list to index into.
-        entry.representedObject = row.title
+        // The name, not the title: what goes back to the publisher has to be
+        // the name it knows.
+        entry.representedObject = row.name
         return entry
     }
 

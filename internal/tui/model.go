@@ -15,6 +15,7 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
+	"ledez.net/tun-manager/internal/format"
 	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
@@ -365,7 +366,9 @@ func (m *Model) noteIgnored(notes []string) {
 }
 
 func (m *Model) log(text string, isFail bool) {
-	m.logs = append(m.logs, LogEntry{At: m.clock(), Text: redact(text), IsFail: isFail})
+	// Cleaned as well as redacted: a log line carries the output of wg-quick,
+	// which is a command run as root whose output nobody here wrote.
+	m.logs = append(m.logs, LogEntry{At: m.clock(), Text: format.Display(redact(text)), IsFail: isFail})
 	if len(m.logs) > maxLogs {
 		m.logs = m.logs[len(m.logs)-maxLogs:]
 	}

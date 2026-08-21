@@ -368,3 +368,49 @@ func TestGoldenBatchInProgress(t *testing.T) {
 
 	teatest.RequireEqualOutput(t, []byte(next.(Model).View()))
 }
+
+func TestNothingFromAFileCanDriveTheTerminal(t *testing.T) {
+	// The two ends of the same problem. The context name comes from
+	// ~/.config/tun-manager/config.yaml, which is the one file this program
+	// reads that a process running as the user can rewrite; the endpoint comes
+	// from a .conf. Both are printed to a terminal, which runs what it is
+	// handed.
+	m := New(nil, nil)
+	m.width, m.height = 120, 30
+	m.now = func() time.Time { return frameTaken }
+
+	row := frameRow("alpha", profile.GroupNeeded, wg.Down, 0, 0, 0)
+	row.Tunnel.Endpoint = "moc.elpmaxe‮:51820"
+	next, _ := m.Update(viewMsg{view: app.View{
+		Context: netctx.Context{Name: "office\x1b[2J\x1b[Hgone"},
+		Taken:   frameTaken,
+		Rows:    []app.Row{row},
+	}})
+	m = next.(Model)
+
+	screen := m.View()
+	for _, bad := range []string{"\x1b[2J", "‮"} {
+		if strings.Contains(screen, bad) {
+			t.Errorf("the screen carries %q", bad)
+		}
+	}
+	// What was in the value is still shown, as text.
+	if !strings.Contains(screen, "office") || !strings.Contains(screen, "moc.elpmaxe") {
+		t.Errorf("the values themselves were lost:\n%s", screen)
+	}
+}
+
+func TestALogLineCannotRepaintTheScreen(t *testing.T) {
+	// A log line carries the output of wg-quick, which runs as root and whose
+	// output nobody here wrote.
+	m := New(nil, nil)
+	m.width, m.height = 120, 30
+	m.now = func() time.Time { return frameTaken }
+	m.showLogs = true
+
+	m.log("up alpha: FAILED — \x1b[2Jnothing to see", true)
+
+	if strings.Contains(m.View(), "\x1b[2J") {
+		t.Error("a log line put an escape sequence on the screen")
+	}
+}

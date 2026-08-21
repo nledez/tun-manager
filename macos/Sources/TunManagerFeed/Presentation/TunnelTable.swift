@@ -22,6 +22,9 @@ public struct TunnelRow: Sendable, Equatable, Identifiable {
     /// program — it is what the publisher keys watches and probes by — so a
     /// separate one here would be a second identity to keep in step.
     public var id: String { name }
+    /// The same name, made safe to draw. Everything shown goes through this;
+    /// everything sent back uses `name`.
+    public let title: String
     public let health: Health
     /// Never blank: a tunnel in no group says so, because an empty cell under a
     /// heading reads as a missing value rather than as an absent one.
@@ -54,11 +57,15 @@ public enum TunnelTable {
         locale: Locale = .autoupdatingCurrent
     ) -> [TunnelRow] {
         tunnels.map { tunnel in
-            let endpoint = tunnel.endpoint ?? "—"
+            // Cleaned here, at the one place a row is built, rather than in the
+            // view: a view that decides anything is a view nothing can test.
+            let endpoint = Displayable.of(tunnel.endpoint ?? "—")
+            let title = Displayable.of(tunnel.name)
             guard tunnel.health != .down else {
                 return TunnelRow(
-                    name: tunnel.name, health: tunnel.health, group: group(tunnel),
-                    handshake: "", traffic: "", ping: .none, endpoint: endpoint)
+                    name: tunnel.name, title: title, health: tunnel.health,
+                    group: group(tunnel), handshake: "", traffic: "", ping: .none,
+                    endpoint: endpoint)
             }
 
             let reading = latest[tunnel.name]
@@ -67,6 +74,7 @@ public enum TunnelTable {
 
             return TunnelRow(
                 name: tunnel.name,
+                title: title,
                 health: tunnel.health,
                 group: group(tunnel),
                 handshake: tunnel.lastHandshake.map {
@@ -80,7 +88,7 @@ public enum TunnelTable {
     }
 
     private static func group(_ tunnel: TunnelStatus) -> String {
-        tunnel.group.isEmpty ? "no group" : tunnel.group
+        tunnel.group.isEmpty ? "no group" : Displayable.of(tunnel.group)
     }
 
     private static func cell(_ ping: Ping?) -> TunnelRow.PingCell {
@@ -89,7 +97,9 @@ public enum TunnelTable {
             // A probe with neither a time nor a reason is a publisher that
             // changed its mind mid-round; saying so beats an empty cell that
             // reads as "never asked".
-            return .failed(reason: ping.error ?? "no answer")
+            // The reason is text the publisher composed, most often from an
+            // error carrying an address.
+            return .failed(reason: Displayable.of(ping.error ?? "no answer"))
         }
         // Whole milliseconds, as the terminal shows them. A tenth of a
         // millisecond over a tunnel is noise dressed as precision.

@@ -668,6 +668,16 @@ cover` fails below 100%.
 Secrets never leave the parser: `PrivateKey` and `PresharedKey` are ignored, and
 the log pane redacts anything shaped like a WireGuard key.
 
+Nothing that came out of a file reaches a screen as it is. Endpoints, group and
+context names, device names, the reason a probe failed, the output of `wg-quick`
+— all of it goes through one function first (`format.Display`, and
+`Displayable.of` in the application), which drops control characters, drops the
+Unicode marks that reorder text, and cuts what is left to a line's worth. A
+terminal runs what it is handed, `U+202E` draws `moc.elpmaxe` as `example.com`,
+and most of what this shows is somewhere traffic goes. It is for display only:
+the name sent back to the publisher to watch or probe a tunnel is always the
+name it knows.
+
 ## Notification without `Tun Manager.app`
 
 Notifications go through `/usr/bin/osascript`, and through nothing else. There

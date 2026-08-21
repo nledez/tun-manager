@@ -1,6 +1,7 @@
 package format
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,5 +144,69 @@ func TestRateScalesLikeAByteCount(t *testing.T) {
 func TestRateRoundsToWholeBytes(t *testing.T) {
 	if got := Rate(1023.9); got != "1023B/s" {
 		t.Errorf("Rate(1023.9) = %q, want %q", got, "1023B/s")
+	}
+}
+
+func TestDisplayRemovesWhatWouldDriveTheTerminal(t *testing.T) {
+	// A terminal is an interpreter, and this program prints values it was
+	// given: endpoints out of .conf files, context names out of the user's
+	// configuration, the output of commands it ran. An escape sequence in one
+	// of those repaints the screen.
+	got := Display("alpha\x1b[2Jbravo\x07\r\n")
+
+	// The ESC itself is gone; what followed it is ordinary text and stays,
+	// because removing that would be guessing at where a sequence ended.
+	if got != "alpha[2Jbravo" {
+		t.Errorf("Display = %q, want the escape gone and the text kept", got)
+	}
+	for _, bad := range []string{"\x1b", "\x07", "\r", "\n"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("Display kept %q: %q", bad, got)
+		}
+	}
+}
+
+func TestDisplayRemovesWhatWouldReorderTheText(t *testing.T) {
+	// U+202E draws "moc.elpmaxe" as "example.com". Most of what this program
+	// shows is somewhere traffic goes, so a value that can be drawn as another
+	// address is the one worth caring about.
+	got := Display("evil.example‮/gro.tsurt")
+
+	if strings.ContainsRune(got, '‮') {
+		t.Errorf("Display kept the override: %q", got)
+	}
+	if !strings.HasPrefix(got, "evil.example") {
+		t.Errorf("Display = %q, want the text itself kept", got)
+	}
+}
+
+func TestDisplayKeepsWhatPeopleActuallyWrite(t *testing.T) {
+	// Accents, non-Latin scripts and emoji are not attacks, and a sanitiser
+	// that eats them is one somebody works around.
+	for _, s := range []string{"café-vpn", "берлин", "東京", "office 🏢", "a_b-c1"} {
+		if got := Display(s); got != s {
+			t.Errorf("Display(%q) = %q, want it untouched", s, got)
+		}
+	}
+	if got := Display("a\tb"); got != "a b" {
+		t.Errorf("Display of a tab = %q, want a space", got)
+	}
+}
+
+func TestDisplayCutsWhatWouldOwnTheScreen(t *testing.T) {
+	long := strings.Repeat("é", 10_000)
+
+	got := Display(long)
+
+	if runes := []rune(got); len(runes) != DisplayLimit {
+		t.Errorf("Display kept %d runes, want %d", len(runes), DisplayLimit)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("Display = %q, want it to say it was cut", got)
+	}
+	// Cut on a rune boundary: a half-written é is a replacement character on
+	// screen, which reads as corruption rather than as truncation.
+	if strings.ContainsRune(got, '�') {
+		t.Error("Display cut in the middle of a rune")
 	}
 }

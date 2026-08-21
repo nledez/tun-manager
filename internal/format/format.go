@@ -6,7 +6,9 @@ package format
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // None is what an absent value looks like. It reads as "nothing to see" where
@@ -63,6 +65,56 @@ func Rate(bytesPerSecond float64) string {
 		return "0B/s"
 	}
 	return Bytes(n) + "/s"
+}
+
+// DisplayLimit is how much of a string is worth putting on a line. Long enough
+// for a hostname and a port, short enough that one value cannot own the screen.
+const DisplayLimit = 96
+
+// Display makes a string safe to put on a terminal.
+//
+// Three different things, and each is a different kind of damage:
+//
+//   - Control characters are removed. An escape sequence in a value is a value
+//     that moves the cursor, clears the screen, or repaints a row that says
+//     something else - and this program prints values it was given, from
+//     configuration files and from the output of commands it runs. A terminal
+//     is an interpreter, and everything it is handed is a program until proved
+//     otherwise.
+//   - The characters that reorder text are removed: the bidirectional
+//     overrides and isolates, and the invisible marks that go with them. They
+//     are how "moc.elpmaxe" is drawn as "example.com", which matters here
+//     because most of what this shows is somewhere traffic goes.
+//   - What is left is cut to DisplayLimit runes, on a rune boundary, with an
+//     ellipsis. A ten thousand character name is not a lie, but it takes the
+//     table apart.
+//
+// It is not an escape and not a quote: what comes out is meant to be read, not
+// parsed back. Anything that needs the original value - a name sent on the
+// wire, a path opened - must use the original.
+func Display(s string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			// A tab is the one control character with a defensible meaning in a
+			// value, and it still cannot be allowed to shift a column.
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		case r >= 0x200E && r <= 0x200F, // left-to-right and right-to-left marks
+			r >= 0x202A && r <= 0x202E, // embeddings and overrides
+			r >= 0x2066 && r <= 0x2069: // isolates
+			return -1
+		}
+		return r
+	}, s)
+
+	runes := []rune(cleaned)
+	if len(runes) <= DisplayLimit {
+		return cleaned
+	}
+	// The ellipsis is part of the budget, so the result never exceeds it.
+	return string(runes[:DisplayLimit-1]) + "…"
 }
 
 // OrNone replaces an empty string with the absent-value marker.

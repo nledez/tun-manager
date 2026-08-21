@@ -143,3 +143,28 @@ func TestStatusJSONReportsAWriteFailure(t *testing.T) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
 	}
 }
+
+func TestTheStatusTableIsPrintedToATerminalToo(t *testing.T) {
+	// `status` writes to a terminal as surely as the TUI does, and it prints
+	// the same values out of the same files: a context name from the user's
+	// configuration, an endpoint from a .conf.
+	view := sampleView()
+	view.Context = netctx.Context{Name: "office\x1b[2Jgone"}
+	view.Rows[0].Tunnel.Endpoint = "moc.elpmaxe\u202e:51820"
+	view.Rows[0].Peer.Endpoint = view.Rows[0].Tunnel.Endpoint
+
+	var out strings.Builder
+	if err := WriteStatus(&out, view, false); err != nil {
+		t.Fatalf("WriteStatus: %v", err)
+	}
+
+	got := out.String()
+	for _, bad := range []string{"\x1b[2J", "\u202e"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("the table carries %q:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "office") || !strings.Contains(got, "moc.elpmaxe") {
+		t.Errorf("the values themselves were lost:\n%s", got)
+	}
+}

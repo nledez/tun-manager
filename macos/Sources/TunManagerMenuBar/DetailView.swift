@@ -209,7 +209,9 @@ private struct OverviewPane: View {
         Table(model.rows, selection: $picked) {
             TableColumn("TUNNEL") { row in
                 Label {
-                    Text(row.name)
+                    // The title, not the name: one is drawn, the other is
+                    // what the publisher is asked about.
+                    Text(row.title)
                 } icon: {
                     Image(systemName: symbol(row.health)).foregroundStyle(colour(row.health))
                 }

@@ -80,7 +80,11 @@ func (m Model) header() string {
 	// something to hide there.
 	left := fmt.Sprintf("%s  %s",
 		titleStyle.Render("tun-manager"),
-		dimStyle.Render("ctx: "+format.OrNone(m.view.Context.String())),
+		// Display, not the value itself: the context name comes from the
+		// configuration under the user's home, which is the one file this
+		// program reads that somebody else's process can rewrite - and this
+		// line is printed to a terminal.
+		dimStyle.Render("ctx: "+format.OrNone(format.Display(m.view.Context.String()))),
 	)
 	if activity := m.activity(); activity != "" {
 		left += "  " + activeStyle.Render(activity)
@@ -170,11 +174,14 @@ type rowCells struct {
 // like data. The group and the endpoint come from the configuration, so they
 // are shown whatever the state.
 func (m Model) cells(r app.Row) rowCells {
+	// Everything here came out of a file: the name from a file name, the group
+	// from the user's configuration, the endpoint from a .conf. None of it is
+	// this program's own text, so none of it goes to the terminal as it is.
 	c := rowCells{
-		Name:     r.Tunnel.Name,
-		Group:    format.OrNone(r.Group),
+		Name:     format.Display(r.Tunnel.Name),
+		Group:    format.OrNone(format.Display(r.Group)),
 		State:    healthLabel(r.Health),
-		Endpoint: format.OrNone(r.Tunnel.Endpoint),
+		Endpoint: format.OrNone(format.Display(r.Tunnel.Endpoint)),
 	}
 	// A tunnel being acted on right now says so where its state would be: that
 	// state is about to be wrong, and which one is being waited on is what the
@@ -189,7 +196,7 @@ func (m Model) cells(r app.Row) rowCells {
 	if r.Peer.Endpoint != "" {
 		// The live endpoint is the resolved one, which is more useful than a
 		// DNS name when something is wrong.
-		c.Endpoint = r.Peer.Endpoint
+		c.Endpoint = format.Display(r.Peer.Endpoint)
 	}
 	c.Handshake = format.Age(r.Peer.LastHandshake, m.view.Taken)
 	c.Transfer = format.Bytes(r.Peer.RxBytes) + " / " + format.Bytes(r.Peer.TxBytes)
@@ -294,8 +301,9 @@ func (m Model) graphPane() string {
 		return b.String()
 	}
 
-	name := row.Tunnel.Name
-	series := m.series[name]
+	// The series is keyed by the real name; only what is drawn is cleaned.
+	name := format.Display(row.Tunnel.Name)
+	series := m.series[row.Tunnel.Name]
 	if series == nil || len(series.Points()) == 0 {
 		// It takes two readings a second apart before there is a rate at all,
 		// and a blank pane in the meantime looks like a broken one.

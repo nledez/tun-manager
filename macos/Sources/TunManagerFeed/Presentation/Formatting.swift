@@ -42,8 +42,12 @@ public enum Formatting {
     /// publisher omits `interface` and `address` when no rule matched, and
     /// "office ( )" would be a worse answer than "office".
     public static func context(_ context: FeedContext) -> String {
-        let name = context.name.isEmpty ? "no network context" : context.name
-        let parts = [context.interface, context.address].compactMap { $0 }
+        // Every part of this came from the publisher, and the name in
+        // particular comes from the configuration under the user's home - the
+        // one file tun-manager reads that a process running as that user can
+        // rewrite.
+        let name = context.name.isEmpty ? "no network context" : Displayable.of(context.name)
+        let parts = [context.interface, context.address].compactMap { $0 }.map(Displayable.of)
         guard !parts.isEmpty else { return name }
         return "\(name) — \(parts.joined(separator: " · "))"
     }
