@@ -125,7 +125,6 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-  # A release must not be the first time a target build is attempted, nor the
   # The menu bar client. A separate job rather than a step in `test`, because
   # the two are separate contracts: a Swift failure should say "the application
   # broke", not fail a run that was about Go. Nothing new is installed — every
@@ -146,6 +145,7 @@ jobs:
       - name: Assemble the application
         run: make macos-app
 
+  # A release must not be the first time a target build is attempted, nor the
   # first time the release configuration runs.
   #
   # There is no architecture matrix: GoReleaser builds both darwin targets
@@ -195,7 +195,7 @@ jobs:
   # no way to know the suite was red.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, lint, vulnerabilities, build]
+    needs: [test, lint, vulnerabilities, macos-app, build]
     runs-on: macos-latest
     permissions:
       contents: write
