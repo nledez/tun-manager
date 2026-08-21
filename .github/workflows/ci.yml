@@ -100,9 +100,13 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          # Must be built with a Go at least as new as go.mod targets, or it
-          # refuses the module outright instead of linting it.
-          version: v2.12.2
+          # Must be built with a Go at least as new as the toolchain setup-go
+          # installs above, not merely as new as go.mod targets: the linter
+          # type-checks the standard library it is pointed at, and a stdlib
+          # newer than its own go/types fails as a typecheck error on
+          # math/rand/v2 rather than as a version complaint. Dependabot does
+          # not update this input, so a new Go release moves it here by hand.
+          version: v2.13.1
 
   vulnerabilities:
     runs-on: macos-latest
