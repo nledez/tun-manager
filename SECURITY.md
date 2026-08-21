@@ -121,6 +121,15 @@ through one function before it is shown, on both sides. What is sent back to
 `tun-manager` — the tunnel to watch, the one to probe — is always the name it
 knows, never the cleaned one.
 
+**The user's configuration is read as root, and reading it ends.** Symbolic
+links are followed there on purpose — a `~/.config` full of links into a
+dotfiles repository is ordinary — so what stops a link from being useful is that
+the thing at the end of it must be a regular file of a sane size, and that the
+parser's complaint is rewritten before anybody sees it. Without those, a FIFO
+holds the process open at startup, `/dev/zero` reads until the machine gives
+out, and "cannot unmarshal !!str `hunter2...`" hands over seven characters of a
+file the reader could not have opened themselves.
+
 **Groups and overrides stay on the user's side.** An attacker running as you can
 edit them, and so change which tunnels come up when you press `s`, or which
 group is "needed". That is a routing change, not a privilege escalation: the

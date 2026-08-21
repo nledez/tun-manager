@@ -2,14 +2,17 @@ package profile
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/netctx"
 )
 
@@ -533,5 +536,206 @@ func TestARefreshIntervalOfNothingIsTheDefaultAndNotTheFloor(t *testing.T) {
 		if cfg.RefreshRaisedFrom != 0 {
 			t.Errorf("%q reported a raise of %s, want none", body, cfg.RefreshRaisedFrom)
 		}
+	}
+}
+
+func TestAConfigurationThatIsAPipeIsRefusedRatherThanWaitedOn(t *testing.T) {
+	// os.ReadFile is happy to open a FIFO and block on it until somebody writes.
+	// This program runs as root and reads that path at startup, so a link left
+	// there by a process running as the user is a root process that never gets
+	// as far as its first screen. Nothing about it looks like a failure: it just
+	// never comes back.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Load(path)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a pipe was accepted as a configuration")
+		}
+		if !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("error = %v, want it to say what was at the path", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Load is still waiting on the pipe")
+	}
+}
+
+func TestAConfigurationTooBigToBeOneIsRefused(t *testing.T) {
+	// The other end of the same problem: a link to /dev/zero is not a file that
+	// blocks, it is a file that never ends, and reading it is a root process
+	// growing until the machine gives out.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := append([]byte("groups:\n"), bytes.Repeat([]byte("# padding\n"), maxConfigSize/9+16)...)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("a file too big to be a configuration was read")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("error = %v, want it to say the file is too big", err)
+	}
+}
+
+func TestAConfigurationExactlyAtTheLimitIsStillRead(t *testing.T) {
+	// The limit is a limit, not an approximation: a file at it loads.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := []byte("groups:\n")
+	body = append(body, []byte(strings.Repeat("#", maxConfigSize-len(body)-1))...)
+	body = append(body, '\n')
+	if len(body) != maxConfigSize {
+		t.Fatalf("fixture is %d bytes, want exactly %d", len(body), maxConfigSize)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load: %v", err)
+	}
+}
+
+func TestALinkedConfigurationIsStillRead(t *testing.T) {
+	// Deliberate, and worth a test so nobody "fixes" it: plenty of people keep
+	// ~/.config in a repository with every file linked into place, and refusing
+	// that would refuse an installation that is perfectly ordinary. The file is
+	// untrusted either way; what the checks above are for is making sure that
+	// reading it ends.
+	dir := t.TempDir()
+	real := filepath.Join(dir, "dotfiles.yaml")
+	if err := os.WriteFile(real, []byte("refresh_interval: 90s\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RefreshInterval != 90*time.Second {
+		t.Errorf("RefreshInterval = %s, want what the link points at", cfg.RefreshInterval)
+	}
+}
+
+func TestAParseFailureDoesNotReadTheFileOutLoud(t *testing.T) {
+	// The error yaml produces quotes what it choked on, which is a line of
+	// somebody's file. This program runs as root and the path is under the
+	// user's home, so a link put there points at whatever they cannot read
+	// themselves - and the error would fetch a line of it and hand it over.
+	// yaml quotes the first few characters of what it choked on:
+	// "cannot unmarshal !!str `hunter2...` into time.Duration". Seven
+	// characters of a line, per line it fails on, out of a file the person
+	// reading the error may not be allowed to open.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("refresh_interval: hunter2secret\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("a configuration that cannot be parsed was accepted")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the error repeated the file's contents: %v", err)
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("error = %v, want the line number kept: it is about shape, not contents", err)
+	}
+}
+
+func TestAMisspelledSettingStillNamesItself(t *testing.T) {
+	// The common case, and the reason the line number and the key survive: a
+	// key name is a token this program can vouch for, a value is a line of a
+	// file it may not be allowed to read.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("feeed: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("an unknown key was accepted")
+	}
+	if !strings.Contains(err.Error(), "feeed") {
+		t.Errorf("error = %v, want the misspelling named", err)
+	}
+}
+
+func TestAConfigurationThatCannotBeStattedIsRefused(t *testing.T) {
+	// Between the open and the question, the descriptor stopped answering.
+	// There is nothing sensible to do with a file this program cannot ask about.
+	path := writeConfig(t, "groups:\n")
+	previous := fsx.StatFile
+	fsx.StatFile = func(*os.File) (os.FileInfo, error) { return nil, errors.New("bad descriptor") }
+	t.Cleanup(func() { fsx.StatFile = previous })
+
+	if _, err := Load(path); err == nil {
+		t.Error("a file this program could not ask about was read anyway")
+	}
+}
+
+func TestAConfigurationThatCannotBeReadIsRefused(t *testing.T) {
+	// A descriptor that stops answering between the open and the read. The
+	// failure has to be reported rather than passed on as the bytes that were
+	// read, because no bytes at all is a document that parses: it would replace
+	// somebody's settings with the defaults and say nothing.
+	//
+	// Which is not hypothetical. A FIFO opened with O_NONBLOCK and nobody
+	// writing to it reads as end-of-stream, not as a failure - so without the
+	// regular-file check above, a pipe left at that path would have loaded as
+	// an empty configuration.
+	path := writeConfig(t, "groups:\n")
+	openFile, statFile := fsx.OpenFile, fsx.StatFile
+	fsx.OpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		f, err := openFile(name, flag, perm)
+		if err != nil {
+			return nil, err
+		}
+		return f, f.Close()
+	}
+	fsx.StatFile = func(*os.File) (os.FileInfo, error) { return regularFile{}, nil }
+	t.Cleanup(func() { fsx.OpenFile, fsx.StatFile = openFile, statFile })
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("a read that failed was taken for an empty configuration")
+	}
+	if !strings.Contains(err.Error(), "read ") {
+		t.Errorf("error = %v, want it to say the read failed", err)
+	}
+}
+
+// regularFile is a FileInfo that claims to be an ordinary file, so a test can
+// get past the check and reach the read.
+type regularFile struct{ os.FileInfo }
+
+func (regularFile) Mode() os.FileMode { return 0o600 }
+
+func TestAComplaintWithNothingInItStillSaysSomething(t *testing.T) {
+	// yaml's own header line and nothing else. Returning an empty string there
+	// would produce "parse /path/config.yaml: " and a full stop.
+	got := tellNoTales(errors.New("yaml: unmarshal errors:")) //nolint:revive // the string under test is a parser's own header line
+
+	if got == "" {
+		t.Error("the failure was reported as nothing at all")
 	}
 }

@@ -633,6 +633,15 @@ because it looks like a backup.
 often to refresh, which tunnel belongs to which group on which network. It says
 nothing about what runs as root.
 
+Reading it is bounded on purpose. Symbolic links are followed — plenty of people
+keep `~/.config` in a repository with every file linked into place — but what is
+at the end of one has to be a regular file no larger than 256 KiB, and the parser
+never quotes what it choked on. This program reads that path as root: a link to a
+FIFO would hold it open at startup forever, a link to `/dev/zero` would read
+until the machine gave out, and an error message repeating a line of the file
+would read a file to somebody who cannot open it. Line numbers and the names of
+settings survive; values do not.
+
 **Where the `.conf` files live is not a setting.** They are read from
 `/private/wireguard/config`, always. There is no key for it, and the flag that
 moves it is refused under `sudo`. A directory named in a file a plain user can

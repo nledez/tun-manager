@@ -12,11 +12,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/netctx"
 )
 
@@ -116,7 +120,7 @@ func (c *Config) HasGroups() bool {
 // Load reads a configuration file. A missing file is not an error: the built-in
 // defaults are returned instead.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := readConfigFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		cfg := Default()
 		cfg.Path = path
@@ -151,12 +155,107 @@ func Load(path string) (*Config, error) {
 		if moved := movedKey(err); moved != "" {
 			return nil, fmt.Errorf("%s: %s", path, movedKeys[moved])
 		}
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %s", path, tellNoTales(err))
 	}
 	cfg.Path = path
 	cfg.applyDefaults()
 	return cfg, nil
 }
+
+// maxConfigSize is the most this program will read from a configuration file.
+//
+// Generous for a document a person maintains by hand - thousands of tunnels'
+// worth - and small enough that reading one costs nothing whatever is at the
+// path. Without a limit, a symbolic link to /dev/zero is a root process growing
+// until the machine gives out.
+const maxConfigSize = 256 << 10
+
+// readConfigFile reads a configuration, refusing anything that is not a file.
+//
+// Symbolic links are followed, deliberately: plenty of people keep ~/.config in
+// a repository and link every file in it, and refusing that would refuse an
+// installation that is perfectly ordinary. The point here is not to distrust
+// the path - this file is untrusted whatever it is - but to make sure that
+// reading it ends. os.ReadFile is happy to open a FIFO and block a root process
+// on it forever, or to read a device file until there is no memory left, and
+// both are things a link can point at.
+func readConfigFile(path string) ([]byte, error) {
+	// O_NONBLOCK, and that part is the whole trick: opening a FIFO read-only
+	// blocks in open(2) itself until somebody writes to it, so a check made
+	// after the open is a check that is never reached. With it the open returns
+	// at once and fstat can say what this is. On a regular file it changes
+	// nothing - reads from one never block.
+	f, err := fsx.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = fsx.CloseFile(f) }()
+
+	info, err := fsx.StatFile(f)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+	// On the descriptor, not on the path: what was opened is what is judged.
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf(
+			"%s is not a regular file (%s): tun-manager will not read a configuration "+
+				"from something that never ends", path, info.Mode().Type())
+	}
+
+	// One byte past the limit, so a file exactly at it is read and a file over
+	// it is refused rather than quietly truncated to something that parses.
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(data) > maxConfigSize {
+		return nil, fmt.Errorf(
+			"%s is larger than %d bytes: that is not a configuration somebody wrote",
+			path, maxConfigSize)
+	}
+	return data, nil
+}
+
+// tellNoTales turns a parser's complaint into one that cannot read a file out
+// loud.
+//
+// yaml quotes what it choked on, which is a sentence containing a line of
+// somebody's file. Ordinarily that is the most useful thing it could say. Here
+// it is a way of reading a file: this program runs as root, the path is under
+// the user's home, and a link put there points at whatever they cannot read
+// themselves - so the error would fetch a line of it and print it to them.
+//
+// What survives is what this program can vouch for: the line number, which is
+// about the file's shape rather than its contents, and the name of a key when
+// that key is one of ours. A misspelled setting is the common case and still
+// names itself.
+func tellNoTales(err error) string {
+	var out []string
+	for _, line := range strings.Split(err.Error(), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "yaml: unmarshal errors:") {
+			continue
+		}
+		where := ""
+		if m := lineNumber.FindStringSubmatch(line); m != nil {
+			where = "line " + m[1] + ": "
+		}
+		if m := unknownField.FindStringSubmatch(line); m != nil {
+			out = append(out, where+"tun-manager has no setting called "+strconv.Quote(m[1]))
+			continue
+		}
+		out = append(out, where+"this is not something tun-manager understands")
+	}
+	if len(out) == 0 {
+		return "this is not something tun-manager understands"
+	}
+	return strings.Join(out, "; ")
+}
+
+var (
+	lineNumber   = regexp.MustCompile(`line (\d+)`)
+	unknownField = regexp.MustCompile(`field ([A-Za-z0-9_]+) not found`)
+)
 
 // movedKeys are the settings that used to live in the user's file and no longer
 // can. Each one decided something root would then do, from a file a plain user
