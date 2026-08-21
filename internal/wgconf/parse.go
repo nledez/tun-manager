@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -199,26 +200,55 @@ func Parse(body []byte, path string) (Tunnel, error) {
 	return tun, nil
 }
 
-// LoadDir parses every .conf file of a directory, sorted by tunnel name.
-func LoadDir(dir string) ([]Tunnel, error) {
+// shortName is what a tunnel may be called.
+//
+// It lives here rather than beside `import`, because it describes what a tunnel
+// name is and not what an import is. The name becomes a file name, the argument
+// wg-quick is run with, the `<name>.name` that matches a configuration to a
+// live interface, and the text of a notification - so anything that would
+// surprise a path, a command line or a shell is refused rather than escaped.
+var shortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// NameRule says what the rule is, in the one sentence every refusal uses.
+const NameRule = "letters, digits, - and _, starting with a letter or a digit"
+
+// ValidName reports whether a string may be a tunnel name.
+func ValidName(name string) bool { return shortName.MatchString(name) }
+
+// LoadDir parses every .conf file of a directory, sorted by tunnel name, and
+// says which files it left alone.
+//
+// A file whose name is not a usable tunnel name is skipped rather than parsed,
+// and skipped rather than refused. `import` applies the same rule, but a .conf
+// can be dropped into that directory by hand - by root, which is the only
+// person who can write there - and it would otherwise arrive with a name that
+// every other part of this program treats as safe. Refusing the whole directory
+// instead would mean one odd file taking away every tunnel somebody has, which
+// is a worse day than being told about it.
+func LoadDir(dir string) ([]Tunnel, []string, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.conf"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no *.conf file in %s", dir)
+		return nil, nil, fmt.Errorf("no *.conf file in %s", dir)
 	}
 
 	tuns := make([]Tunnel, 0, len(paths))
+	var ignored []string
 	for _, p := range paths {
+		if name := strings.TrimSuffix(filepath.Base(p), ".conf"); !ValidName(name) {
+			ignored = append(ignored, fmt.Sprintf("%s: ignored, %s", p, NameRule))
+			continue
+		}
 		tun, err := ParseFile(p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tuns = append(tuns, tun)
 	}
 	sort.Slice(tuns, func(i, j int) bool { return tuns[i].Name < tuns[j].Name })
-	return tuns, nil
+	return tuns, ignored, nil
 }
 
 // parseCheckComment recognises the "# TO_CHECK=<ip>" convention: the address to

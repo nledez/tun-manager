@@ -133,6 +133,8 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 		})
 	}
 
+	m.noteIgnored(msg.view.Ignored)
+
 	m.view = msg.view
 	m.lastHealth = msg.view.Health()
 	m.lastRefresh = msg.view.Taken

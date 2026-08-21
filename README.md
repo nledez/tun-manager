@@ -455,8 +455,19 @@ editing, the group it adds — is written without following a symbolic link at t
 path or on the way to it, and handed back to you with `lchown` rather than
 `chown`. All of it is done by root, into a directory whose owner can replace any
 name in it with a link at any moment, and root writing where it was pointed is
-the whole of a local privilege escalation. The same goes for the notification
-icon under `~/.cache/tun-manager`.
+the whole of a local privilege escalation. It goes through a temporary file
+under a name drawn at random and created with `O_EXCL`, then a rename: a
+symbolic link at the name is refused by `O_NOFOLLOW`, and a *hard* link is not —
+there is nothing to follow — so the name it writes to has to be one nobody could
+have got to first.
+
+A name is letters, digits, `-` and `_`, starting with a letter or a digit.
+Anything else is refused, rather than escaped: the name becomes a file name, the
+argument `wg-quick` is run with, the `<name>.name` that matches a configuration
+to a live interface, and the text of a notification. The same rule is applied
+when the directory is read, so a `.conf` dropped in by hand is skipped with a
+line in the log pane naming it — one odd file should not take away every other
+tunnel you have.
 
 Copies the `.conf` into `/private/wireguard/config` as `<name>.conf`, mode `0600`
 and owned by root — it holds a private key, and `wg-quick` reads it as root — then lists

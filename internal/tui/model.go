@@ -99,6 +99,9 @@ type Model struct {
 	pings    map[string]probe.Result
 	selected map[string]bool
 	logs     []LogEntry
+	// ignored remembers which skipped .conf files have already been logged, so
+	// each is said once rather than on every refresh.
+	ignored map[string]bool
 
 	cursor int
 	beat   int
@@ -341,6 +344,24 @@ func (m Model) current() (app.Row, bool) {
 		return app.Row{}, false
 	}
 	return m.view.Rows[m.cursor], true
+}
+
+// noteIgnored logs a skipped .conf once, however many refreshes go by.
+//
+// Once, because a refresh happens every few minutes and a warning repeated
+// forty times an hour is a warning somebody turns the log pane off to escape.
+func (m *Model) noteIgnored(notes []string) {
+	for _, note := range notes {
+		if m.ignored[note] {
+			continue
+		}
+		if m.ignored == nil {
+			m.ignored = map[string]bool{}
+		}
+		m.ignored[note] = true
+		m.log(note, true)
+		m.showLogs = true
+	}
 }
 
 func (m *Model) log(text string, isFail bool) {

@@ -149,7 +149,7 @@ func TestTwoConfigsMayShareAPeerPublicKey(t *testing.T) {
 }
 
 func TestLoadDirReturnsTunnelsSortedByName(t *testing.T) {
-	tuns, err := LoadDir("testdata")
+	tuns, _, err := LoadDir("testdata")
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestLoadDirReturnsTunnelsSortedByName(t *testing.T) {
 }
 
 func TestLoadDirSetsPathForWgQuick(t *testing.T) {
-	tuns, err := LoadDir("testdata")
+	tuns, _, err := LoadDir("testdata")
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestParseFileRejectsConfigWithoutPeer(t *testing.T) {
 }
 
 func TestLoadDirRejectsADirectoryWithNoConfig(t *testing.T) {
-	if _, err := LoadDir(t.TempDir()); err == nil {
+	if _, _, err := LoadDir(t.TempDir()); err == nil {
 		t.Fatal("LoadDir succeeded on an empty directory, want an error")
 	}
 }
@@ -198,7 +198,7 @@ func TestLoadDirFailsOnAnUnparsableConfig(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "broken.conf"), "[Interface]\n")
 
-	if _, err := LoadDir(dir); err == nil {
+	if _, _, err := LoadDir(dir); err == nil {
 		t.Fatal("LoadDir succeeded with a broken config, want an error")
 	}
 }
@@ -308,7 +308,7 @@ func TestMalformedAllowedIPsAreSkippedWhenInferring(t *testing.T) {
 func TestLoadDirRejectsADirectoryNameThatBreaksThePattern(t *testing.T) {
 	// config_dir comes from the user's YAML, so a bracket in it reaches
 	// filepath.Glob as a malformed pattern. This is user input, not dead code.
-	if _, err := LoadDir(filepath.Join(t.TempDir(), "wireguard[")); err == nil {
+	if _, _, err := LoadDir(filepath.Join(t.TempDir(), "wireguard[")); err == nil {
 		t.Fatal("LoadDir accepted a directory name that breaks the glob, want an error")
 	}
 }
@@ -499,4 +499,91 @@ func TestParseReportsALineItCannotRead(t *testing.T) {
 	if !strings.Contains(err.Error(), "alpha.conf") {
 		t.Errorf("error %q does not name the file", err)
 	}
+}
+
+func TestAFileWhoseNameIsNotATunnelNameIsSkipped(t *testing.T) {
+	// `import` refuses these, but root can drop a .conf into that directory by
+	// hand. The name becomes a file name, an argument to wg-quick, the
+	// `<name>.name` that matches a config to a live interface, and the text of
+	// a notification: everything downstream treats it as safe because it came
+	// from here.
+	dir := t.TempDir()
+	writeConf(t, dir, "alpha.conf")
+	for _, name := range []string{
+		"-flag.conf",      // reads as an option wherever it is passed as one
+		"two words.conf",  // a shell would see two arguments
+		"semi;colon.conf", // and a shell would see two commands
+		"quote\".conf",    // a quote in an AppleScript literal
+		"new\nline.conf",  // a newline in one, or in a log line
+		".conf",           // no name at all
+	} {
+		writeConf(t, dir, name)
+	}
+
+	tuns, ignored, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	if len(tuns) != 1 || tuns[0].Name != "alpha" {
+		t.Errorf("loaded %v, want alpha alone", names(tuns))
+	}
+	if len(ignored) != 6 {
+		t.Errorf("ignored %d files, want 6:\n%s", len(ignored), strings.Join(ignored, "\n"))
+	}
+}
+
+func TestOneOddFileDoesNotTakeAwayTheOthers(t *testing.T) {
+	// The reason it is skipped rather than refused: a directory that fails to
+	// load is a person with no tunnels at all, which is a worse day than being
+	// told which file is being left alone.
+	dir := t.TempDir()
+	writeConf(t, dir, "alpha.conf")
+	writeConf(t, dir, "bravo.conf")
+	writeConf(t, dir, "not a name.conf")
+
+	tuns, ignored, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	if len(tuns) != 2 {
+		t.Errorf("loaded %v, want alpha and bravo", names(tuns))
+	}
+	if len(ignored) != 1 || !strings.Contains(ignored[0], "not a name.conf") {
+		t.Errorf("ignored = %v, want the one file named", ignored)
+	}
+	if !strings.Contains(ignored[0], NameRule) {
+		t.Errorf("ignored = %v, want it to say what a name may be", ignored)
+	}
+}
+
+func TestWhatMayBeATunnelName(t *testing.T) {
+	for _, name := range []string{"a", "alpha", "alpha-1", "alpha_1", "0", "A1-_"} {
+		if !ValidName(name) {
+			t.Errorf("ValidName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"", "-alpha", "_alpha", "al pha", "al/pha", "al.pha", "..", "al;pha"} {
+		if ValidName(name) {
+			t.Errorf("ValidName(%q) = true, want false", name)
+		}
+	}
+}
+
+// writeConf puts a minimal, parseable configuration at a name.
+func writeConf(t *testing.T, dir, file string) {
+	t.Helper()
+	body := "[Interface]\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = " + deltaKey + "\n"
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", file, err)
+	}
+}
+
+func names(tuns []Tunnel) []string {
+	out := make([]string, 0, len(tuns))
+	for _, t := range tuns {
+		out = append(out, t.Name)
+	}
+	return out
 }

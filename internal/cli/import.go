@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/privdrop"
@@ -27,12 +26,6 @@ const backupSuffix = ".before-update"
 // writes the file and the command that judges it cannot drift apart.
 const confMode = TunnelFileMode
 
-// shortName is what a tunnel may be called. The name becomes a file name and,
-// through `<name>.name` in the WireGuard run directory, the identity that
-// matches a config to a live interface — so anything that would surprise a
-// path or a shell is refused rather than escaped.
-var shortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
-
 // Import copies a WireGuard configuration into the directory tun-manager reads
 // and lists the tunnel in the `all` group.
 //
@@ -45,8 +38,12 @@ var shortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // not to the fact that they typed a command - and the moment to make it is
 // while what they are agreeing to is still on the screen.
 func Import(w io.Writer, ask Confirm, cfg *profile.Config, u privdrop.User, name, source string) error {
-	if !shortName.MatchString(name) {
-		return fmt.Errorf("%q is not a usable tunnel name: letters, digits, - and _, starting with a letter or a digit", name)
+	// The same rule wgconf applies when it reads the directory, from the same
+	// place: a name this refuses is a name that would be skipped on the next
+	// load, and importing something that will not load is a way of saying yes
+	// and meaning no.
+	if !wgconf.ValidName(name) {
+		return fmt.Errorf("%q is not a usable tunnel name: %s", name, wgconf.NameRule)
 	}
 
 	// Read once, and parse what was read. Reading it twice - once for the body

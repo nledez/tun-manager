@@ -30,6 +30,11 @@ type View struct {
 	Context netctx.Context
 	Rows    []Row
 	Taken   time.Time
+	// Ignored names the .conf files that were left alone, one sentence each.
+	// Carried on the view rather than logged where it was noticed, because
+	// nothing down there knows whether anybody is looking - and a file silently
+	// missing from the table is the one outcome worth avoiding.
+	Ignored []string
 }
 
 // AnyUp reports whether at least one tunnel is live. It drives the meaning of
@@ -118,7 +123,7 @@ func (a *App) locator() wg.Locator {
 // View reads the configs, the live state and the network context, and merges
 // them into rows ordered needed-first.
 func (a *App) View() (View, error) {
-	tunnels, err := wgconf.LoadDir(a.Config.ConfigDir)
+	tunnels, ignored, err := wgconf.LoadDir(a.Config.ConfigDir)
 	if err != nil {
 		return View{}, err
 	}
@@ -153,7 +158,7 @@ func (a *App) View() (View, error) {
 		return rows[i].Tunnel.Name < rows[j].Tunnel.Name
 	})
 
-	return View{Context: ctx, Rows: rows, Taken: now}, nil
+	return View{Context: ctx, Rows: rows, Taken: now, Ignored: ignored}, nil
 }
 
 // groupRank keeps the always-on tunnels at the top of the table.

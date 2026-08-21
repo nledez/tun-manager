@@ -936,3 +936,32 @@ func TestSampleSurvivesAnUnreadableState(t *testing.T) {
 // what they are about is everything around the call; the check has its own
 // tests in internal/wg.
 func installedWgQuick(string) error { return nil }
+
+func TestTheViewCarriesTheFilesItLeftAlone(t *testing.T) {
+	// Carried rather than logged where it was noticed: nothing down in the
+	// parser knows whether anybody is looking, and a tunnel silently missing
+	// from the table is the outcome worth avoiding.
+	dir := t.TempDir()
+	body := "[Interface]\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = " +
+		"K1sVFxKNGV5nEUUJ7l9OpbXbEcJ1yLb0aP52fEcgcHU=\n"
+	for _, name := range []string{"alpha.conf", "two words.conf"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	a := newApp(t, upState(), nil, away())
+	a.Config.ConfigDir = dir
+
+	view, err := a.View()
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+
+	if len(view.Rows) != 1 || view.Rows[0].Tunnel.Name != "alpha" {
+		t.Errorf("rows = %v, want alpha alone", view.Rows)
+	}
+	if len(view.Ignored) != 1 || !strings.Contains(view.Ignored[0], "two words.conf") {
+		t.Errorf("Ignored = %v, want the skipped file named", view.Ignored)
+	}
+}
