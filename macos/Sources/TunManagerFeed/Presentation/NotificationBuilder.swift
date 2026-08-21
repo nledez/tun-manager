@@ -35,6 +35,26 @@ public enum NotificationBuilder {
     }
 }
 
+extension NotificationBuilder {
+    /// A notification somebody asked for, to find out whether notifications
+    /// arrive at all.
+    ///
+    /// It exists because every other notification is silent when it fails:
+    /// permission may have been refused, or the bundle may not be registered,
+    /// and either way nothing appears and nothing says why. This one is asked
+    /// for on purpose, so its absence is an answer.
+    ///
+    /// Its own identifier, and a fixed one: asking twice replaces the first
+    /// rather than stacking, and it can never collide with a tunnel called
+    /// "test" - those are keyed under "tunnel.".
+    public static func sample() -> NotificationRequest {
+        NotificationRequest(
+            identifier: "test",
+            title: "Tun Manager",
+            body: "Notifications are working. This one was asked for from About.")
+    }
+}
+
 extension Health {
     /// The name the publisher uses, so a notification and the table agree.
     public var wireName: String {

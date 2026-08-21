@@ -85,16 +85,6 @@ func (n Notifier) command(t Transition) (string, []string) {
 	return path, osascriptArgs(t)
 }
 
-// Preview posts a sample notification and reports which command carried it, so
-// that a notification arriving can be seen rather than assumed.
-//
-// It ignores Enabled, because asking for one is the point, and it returns the
-// failure rather than swallowing it, because finding out is the point too.
-func (n Notifier) Preview(ctx context.Context) (string, error) {
-	path, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
-	return path, n.User.CommandContext(ctx, path, args...).Run()
-}
-
 // Notify posts one notification per transition. Failures are silent: a missing
 // GUI session must never disturb the TUI.
 func (n Notifier) Notify(ctx context.Context, transitions []Transition) {

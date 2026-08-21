@@ -278,10 +278,25 @@ final class StatusItemController: NSObject, FeedObserver, NSMenuDelegate {
         alert.informativeText = about.details.joined(separator: "\n")
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: about.testNotification)
         // An accessory application has nothing frontmost, so without this the
         // panel opens behind whatever the user is actually looking at.
         NSApplication.shared.activate()
-        alert.runModal()
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        // Posted after the panel has gone, because a banner arriving behind a
+        // modal window is a banner nobody sees - which is the one thing this
+        // button must not do.
+        guard notifications.isAllowed else {
+            let refused = NSAlert()
+            refused.messageText = about.testNotification
+            refused.informativeText = about.notificationsRefused
+            refused.alertStyle = .warning
+            refused.addButton(withTitle: "OK")
+            refused.runModal()
+            return
+        }
+        notifications.post([NotificationBuilder.sample()])
     }
 
     @objc private func quit() { NSApplication.shared.terminate(nil) }

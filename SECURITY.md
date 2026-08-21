@@ -139,7 +139,8 @@ elsewhere, or checking what you run, is the remedy — and it is the reason the
 release archives are checksummed.
 
 **Notifications go through one absolute path.** `/usr/bin/osascript`, never a
-`PATH` lookup: `sudo` on macOS does not reset `PATH`, so a program looking up a
+`PATH` lookup, and there is no command that posts a sample -- the application's
+About panel does that instead: `sudo` on macOS does not reset `PATH`, so a program looking up a
 tool by name as root would be running a name chosen by whoever typed `sudo`.
 `terminal-notifier` support was removed for that reason — being preferred when
 installed made the tool root reached for a matter of what was on that `PATH`,

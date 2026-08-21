@@ -52,6 +52,21 @@ public struct About: Sendable, Equatable {
         return "Tun Manager \(appVersion) — \(label)"
     }
 
+    /// The panel's other button. It posts a notification, which is the only way
+    /// to find out whether they arrive: every notification this application
+    /// sends on its own is silent when it fails - permission refused, bundle
+    /// not registered - so one that was asked for is the only one whose absence
+    /// means something.
+    public var testNotification: String { "Test Notification" }
+
+    /// What to say when the system has been told not to show them. Posting
+    /// would do nothing at all, and "nothing happened" is the one answer this
+    /// button exists to avoid.
+    public var notificationsRefused: String {
+        "Tun Manager is not allowed to post notifications. Turn them on in "
+            + "System Settings → Notifications → Tun Manager."
+    }
+
     /// Two programs are involved here and they version separately, so both
     /// answers are given and both are labelled.
     public var details: [String] {

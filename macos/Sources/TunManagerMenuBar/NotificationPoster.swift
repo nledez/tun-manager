@@ -12,6 +12,11 @@ final class NotificationPoster {
     private let log = Logger(subsystem: "net.ledez.tun-manager", category: "notifications")
     private var allowed = false
 
+    /// Whether the system will show anything at all. Read by the About panel,
+    /// which offers to post one and has to be able to say when posting it
+    /// would be doing nothing.
+    var isAllowed: Bool { allowed }
+
     /// Asks once, at launch. A refusal is remembered by the system, so asking
     /// again on every start would be nagging rather than persistence.
     func requestPermission() {

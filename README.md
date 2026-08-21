@@ -659,9 +659,11 @@ the log pane redacts anything shaped like a WireGuard key.
 
 ## Notification without `Tun Manager.app`
 
-Notifications go through `/usr/bin/osascript`, and through nothing else.
-`sudo tun-manager notify` posts a sample so you can see what your machine does
-with it.
+Notifications go through `/usr/bin/osascript`, and through nothing else. There
+is no command to try one with: `sudo tun-manager notify` existed for that and is
+gone, along with everything it probed. `Tun Manager.app` has **Test
+Notification** in its About panel, which posts one and says so when the system
+has been told not to show any.
 
 The path is absolute and is never looked up in `PATH`. `sudo` on macOS does not
 reset `PATH` — there is no `secure_path` in the sudoers it ships — so anything

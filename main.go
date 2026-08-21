@@ -49,7 +49,6 @@ Usage:
                                      (shows the file and asks; --yes skips)
   sudo tun-manager backup             archive the configuration and every .conf
   tun-manager doctor                  check the environment
-  tun-manager notify                  post a sample notification
   tun-manager version                 print the build version
 
 Flags, before the command (simulation only, refused under sudo):
@@ -240,10 +239,6 @@ func (e *env) run(args []string) error {
 		// doctor is the one command that must work as a plain user: telling you
 		// that you are not root is part of its job.
 		return e.runDoctor()
-	case "notify":
-		// About the desktop session rather than the tunnels, so it has no more
-		// reason to ask for a password than the notifications themselves do.
-		return e.runNotify()
 	}
 
 	// Root is needed for the real thing: the UAPI sockets under
@@ -682,34 +677,6 @@ func (e *env) runDoctor() error {
 	}
 	if !cli.AllPassed(checks) {
 		return errors.New("some checks failed")
-	}
-	return nil
-}
-
-// runNotify posts a sample notification and says what carried it, so that one
-// arriving can be seen rather than assumed.
-func (e *env) runNotify() error {
-	n := e.notifier
-	if n == nil {
-		cfg, u, err := e.config()
-		if err != nil {
-			return err
-		}
-		built := notify.New(u, cfg.Notify)
-		n = &built
-	}
-
-	command, postErr := n.Preview(context.Background())
-
-	report := fmt.Sprintf("notify: command %s\n", command)
-	if postErr == nil {
-		report += "notify: posted\n"
-	}
-	if _, err := io.WriteString(e.out, report); err != nil {
-		return err
-	}
-	if postErr != nil {
-		return fmt.Errorf("post a notification with %s: %w", command, postErr)
 	}
 	return nil
 }

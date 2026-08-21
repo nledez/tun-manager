@@ -935,21 +935,6 @@ func TestABatchReportsThatTheApplicationCouldNotBeBuilt(t *testing.T) {
 	}
 }
 
-func TestNotifyRunsWithoutRoot(t *testing.T) {
-	// Notifications are about the desktop session, not about the tunnels, so
-	// this must not demand a password.
-	e := testEnv(t, &fakeRunner{})
-	e.euid = 501
-	e.build = func() (*app.App, error) { return nil, errors.New("notify must not open anything") }
-	e.notifier = &notify.Notifier{Binary: "/usr/bin/true"}
-
-	if err := e.run([]string{"notify"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-}
-
-// TestMain neutralises the notification tools before any test runs. See
-// stubNotificationTools for why a per-test Binary is not enough.
 func TestMain(m *testing.M) {
 	dir, err := stubNotificationTools()
 	if err != nil {
@@ -983,84 +968,6 @@ func stubNotificationTools() (string, error) {
 	}
 	notify.OsascriptPath = script
 	return dir, nil
-}
-
-// fakeNotifierBinary is a script that records nothing and succeeds.
-func fakeNotifierBinary(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "osascript")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	return path
-}
-
-func TestNotifyReportsWhatItUsed(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	e.notifier = &notify.Notifier{Binary: fakeNotifierBinary(t)}
-
-	if err := e.run([]string{"notify"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-
-	got := output(e)
-	for _, want := range []string{"osascript", "posted"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("output missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestNotifyReportsAFailure(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	e.notifier = &notify.Notifier{Binary: filepath.Join(t.TempDir(), "absent")}
-
-	if err := e.run([]string{"notify"}); err == nil {
-		t.Fatal("notify succeeded with a missing command, want the failure reported")
-	}
-}
-
-func TestNotifyBuildsItsOwnNotifierWhenNoneIsInjected(t *testing.T) {
-	isolatedHome(t)
-	e := testEnv(t, &fakeRunner{})
-	e.euid = 501
-	// Nothing is injected, so it has to resolve the user, the configuration and
-	// the command by itself. This is the test that used to put a real
-	// notification on the maintainer's screen: it is the one path through
-	// `notify` where no Binary is set. TestMain is what stops that now.
-	_ = e.run([]string{"notify"})
-
-	got := output(e)
-	if !strings.Contains(got, "command") {
-		t.Errorf("output does not name the command it used:\n%s", got)
-	}
-	// The guard, asserted rather than assumed: what it reached for has to be
-	// the stand-in TestMain put there, not the osascript on this machine.
-	if !strings.Contains(got, notify.OsascriptPath) {
-		t.Errorf("the command was not the stand-in %q:\n%s", notify.OsascriptPath, got)
-	}
-}
-
-func TestNotifyStopsWhenTheConfigurationCannotBeRead(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	boom := errors.New("unreadable config")
-	e.config = func() (*profile.Config, privdrop.User, error) { return nil, privdrop.User{}, boom }
-
-	if err := e.run([]string{"notify"}); !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want it to wrap %v", err, boom)
-	}
-}
-
-func TestNotifyReportsAWriteFailure(t *testing.T) {
-	// `tun-manager notify | head` closes the pipe early; the exit code must not
-	// claim the notification was reported when nothing was written.
-	e := testEnv(t, &fakeRunner{})
-	e.notifier = &notify.Notifier{Binary: "/usr/bin/true"}
-	e.out = failingWriter{err: errors.New("broken pipe")}
-
-	if err := e.run([]string{"notify"}); err == nil {
-		t.Fatal("notify succeeded with a broken output, want the error reported")
-	}
 }
 
 func TestImportAddsTheTunnelToTheConfiguration(t *testing.T) {

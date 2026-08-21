@@ -100,3 +100,24 @@ import Testing
 
     #expect(about.feedKey == "not connected")
 }
+
+@Test func thePanelOffersToPostOneBecauseTheOthersAreSilentWhenTheyFail() {
+    // Every notification this application sends on its own is silent when it
+    // fails - permission refused, bundle not registered - so one asked for on
+    // purpose is the only one whose absence means anything.
+    let about = About(
+        appVersion: "0.6.0", build: "v0.6.0", publisherVersion: nil, socketPath: "/x")
+
+    #expect(about.testNotification == "Test Notification")
+    #expect(about.notificationsRefused.contains("System Settings"))
+}
+
+@Test func theSampleIsKeptApartFromEveryTunnelsNotification() {
+    // Tunnels are keyed under "tunnel.", so this can never replace one of
+    // theirs - and asking twice replaces itself rather than stacking.
+    let sample = NotificationBuilder.sample()
+
+    #expect(sample.identifier == "test")
+    #expect(sample.identifier.hasPrefix("tunnel.") == false)
+    #expect(sample.body.contains("working"))
+}
