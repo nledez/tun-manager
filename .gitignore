@@ -1,10 +1,18 @@
+# Go build products. Anchored: only the ones this Makefile writes at the root,
+# so a bin/ or a dist/ that means something else further down stays visible.
 /bin/
 /coverage.out
 /dist/
 
-# subagent-driven development scratch
-.superpowers/
-
 # Swift build products
 macos/.build/
 macos/build/
+
+# direnv. Deliberately not anchored, unlike the build products above: what this
+# file holds is the point of it — the GITHUB_TOKEN `make macos-publish` needs,
+# and whatever else a checkout is given and nobody else should have. One in a
+# subdirectory is the same secret, and the same commit away from publishing it.
+.envrc
+
+# subagent-driven development scratch
+.superpowers/
