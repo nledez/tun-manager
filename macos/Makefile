@@ -172,7 +172,11 @@ release:
 # finish in either order, and this is the half that needs both.
 publish:
 	@command -v gh >/dev/null 2>&1 || { echo "gh not installed: brew install gh"; exit 1; }
-	@test -f "$(RELEASE_ZIP)" || { echo "no $(RELEASE_ZIP): run make release first"; exit 1; }
+	@# Named from the root, which is where the sequence is run and documented:
+	@# `make release` there is the one that tags and pushes a Go version, so
+	@# sending somebody to it from here would be sending them to the wrong tag.
+	@test -f "$(RELEASE_ZIP)" \
+		|| { echo "no $(RELEASE_ZIP): run 'make macos-release' from the repository root first"; exit 1; }
 	@# Asked separately, because an unauthenticated gh fails the lookup below
 	@# exactly as a missing release does, and would send you looking at CI for a
 	@# problem that is on this machine.
