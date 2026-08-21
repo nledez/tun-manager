@@ -108,27 +108,48 @@ names a *tunnel*, never an address — the address comes from that tunnel's
 configuration — so nothing sent from outside can make root reach somewhere it was
 not already configured to reach. Keep it that way.
 
+## What `tun-manager` checks
+
+The trust boundary above says where untrusted input comes from. This says what
+is done about it, so that a defence which disappears is a paragraph that stops
+being true rather than nothing at all.
+
+**It starts no process but `wg-quick`.** It used to start one more — `osascript`,
+demoted to the user who ran `sudo`, to post a notification — and that path is
+gone: `Tun Manager.app` raises notifications from a session that is already the
+right one. Two questions went with it. `sudo` on macOS does not reset `PATH`, so
+a tool looked up by name as root is a name chosen by whoever typed `sudo`; and a
+script composed for an interpreter has to be escaped correctly forever. Neither
+has to be answered now.
+
+**Reading the user's configuration ends.** Symbolic links are followed there on
+purpose — a `~/.config` full of links into a dotfiles repository is ordinary —
+so what stops a link from being useful is that the thing at the end of it must
+be a regular file of a sane size. Without that, a FIFO holds a root process open
+at startup and `/dev/zero` reads until the machine gives out. The parser's
+complaint is rewritten too: "cannot unmarshal !!str `hunter2...`" hands over
+seven characters of a file the reader may not be allowed to open. Line numbers
+and the names of settings survive; values do not.
+
+**A setting is never quietly ignored.** A key that moved to the privileged file
+is refused by name, saying where it went. A `refresh_interval` below a second is
+raised — a refresh reads the WireGuard control sockets as root — and `doctor`
+says so, with both numbers. A `.conf` whose name is not a usable tunnel name is
+skipped, and the log pane names the file.
+
+**Nothing read from a file is drawn as it is.** A terminal is an interpreter and
+a menu draws what it is given: an escape sequence in a context name repaints the
+screen, a bidirectional override draws one address as another, and a ten
+thousand character name takes the table apart. Every value out of a file or out
+of a command's output passes through one function first, on both sides. What is
+sent back to `tun-manager` — the tunnel to watch, the one to probe — is always
+the name it knows and never the cleaned one.
+
 ## Residual risks, accepted knowingly
 
 These are not oversights. They are the places where the cost of closing the gap
-was judged higher than the gap.
-
-**Nothing read from a file is drawn as it is.** A terminal is an interpreter,
-and a menu draws what it is given: an escape sequence in a context name repaints
-the screen, and a bidirectional override draws one address as another. Every
-value that came from a configuration file or from the output of a command goes
-through one function before it is shown, on both sides. What is sent back to
-`tun-manager` — the tunnel to watch, the one to probe — is always the name it
-knows, never the cleaned one.
-
-**The user's configuration is read as root, and reading it ends.** Symbolic
-links are followed there on purpose — a `~/.config` full of links into a
-dotfiles repository is ordinary — so what stops a link from being useful is that
-the thing at the end of it must be a regular file of a sane size, and that the
-parser's complaint is rewritten before anybody sees it. Without those, a FIFO
-holds the process open at startup, `/dev/zero` reads until the machine gives
-out, and "cannot unmarshal !!str `hunter2...`" hands over seven characters of a
-file the reader could not have opened themselves.
+was judged higher than the gap. Each says what an attacker gains, because a risk
+without that is a warning nobody can act on.
 
 **Groups and overrides stay on the user's side.** An attacker running as you can
 edit them, and so change which tunnels come up when you press `s`, or which
@@ -140,14 +161,18 @@ through a tunnel you did not intend, or kept out of one you did.
 **The status socket is readable by you.** It is bound by root and then handed to
 whoever ran `sudo tun-manager` — owned by them, mode `0600` — which is what lets
 the menu bar application open it. Any other process running as you can open it
-too, and read tunnel names, endpoints, handshake ages and counters, and ask for
-a probe. Nothing on that socket can start or stop a tunnel.
+too, and read tunnel names, endpoints, handshake ages and counters. It can also
+ask for a probe, which makes a root process send packets: bounded by naming a
+*tunnel* rather than an address, so nothing on that socket reaches anywhere
+`tun-manager` was not already configured to reach, and floored at one round
+every two seconds. Nothing there can start or stop a tunnel.
 
 **The application's pin can be reached by you.** `Tun Manager.app` remembers the
 publisher's key in the keychain rather than in defaults, because any process
 running as you can write a defaults key. The keychain is better and not perfect:
 a process running as you, with access to your keychain, could replace what is
-pinned. What it cannot do is answer on the socket as root.
+pinned — and would then be trusted the next time that socket answers. What it
+cannot do is answer on the socket as root, which is the other half of the check.
 
 **Whoever can write the binary chooses what root does.** `sudo` reads a path and
 runs whatever is at it, so the password protects nothing if that name can be
@@ -158,21 +183,16 @@ who ran the install. `ls -ld /usr/local/bin` answers it in one line; the README
 says what to do with either answer. It is also why the release archives are
 checksummed.
 
-**`tun-manager` starts no process but `wg-quick`.** It used to start one more —
-`osascript`, demoted to the user who ran `sudo`, to post a notification — and
-that whole path is gone: `Tun Manager.app` raises notifications from a session
-that is already the right one. What went with it is a program running as root
-composing a script for an interpreter and starting a GUI process under somebody
-else's identity. That was two questions to keep answering — `sudo` on macOS does
-not reset `PATH`, so a tool looked up by name as root is a name chosen by whoever
-typed `sudo`; and the script was text this program composed, so it had to be
-escaped correctly forever. Neither has to be answered now.
+**A demo publisher is not checked for being root.** A publisher named with
+`--socket` is exempt, because the simulator does not run as one — and that is
+exactly why it is safe to talk to: it reaches nothing you could not reach
+anyway. What it costs is that the exemption exists at all, so the application
+says which one it is connected to, permanently, for as long as it is connected.
 
-**The demo publisher is not root, on purpose.** A publisher named with
-`--socket` is not checked for being root, because the simulator does not run as
-one — and that is exactly why it is safe: it can reach nothing you could not
-reach anyway. The application says so, permanently, for as long as it is
-connected to one.
+**The tunnels' own hooks run as root**, as [above](#the-tunnels-themselves).
+Importing one is a decision a person makes with the file on the screen; a `.conf`
+that arrives in that directory any other way was put there by root, and root
+answers for it.
 
 ## What the menu bar application checks
 

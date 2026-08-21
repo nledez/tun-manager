@@ -70,8 +70,8 @@ Running as root is the reason the configuration is in two files rather than one:
 what root executes, binds and removes is read from `/private/wireguard/config`,
 which only root can write, and never from the file under your home directory.
 [SECURITY.md](SECURITY.md) says who the attacker is taken to be, where that line
-is drawn, what is deliberately left on the wrong side of it, and how to report a
-problem privately.
+is drawn, what is checked about everything that crosses it, what is deliberately
+left on the wrong side of it, and how to report a problem privately.
 
 **Whoever can write the binary chooses what root does**, and that is a fact about
 the directory it sits in rather than about this program. `sudo` reads a path and
