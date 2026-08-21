@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -229,201 +228,38 @@ func TestNotifyStopsWithItsContext(t *testing.T) {
 	}
 }
 
-func TestAZeroNotifierStillNamesACommand(t *testing.T) {
-	// Nothing runs here: the point is that it resolves to something installed
-	// rather than to an empty string.
+func TestTheCommandIsAnAbsolutePathAndNeverALookup(t *testing.T) {
+	// sudo on macOS does not reset PATH - there is no secure_path in the
+	// sudoers it ships - so anything this program looks up by name is a name
+	// chosen by whoever typed sudo, started by a process running as root. This
+	// used to prefer terminal-notifier when it was on that PATH. It is now one
+	// absolute path, and PATH is not consulted at all.
+	//
+	// The seam TestMain uses is put back for the length of this test, because
+	// what the production value is happens to be the thing being asserted.
+	stub := OsascriptPath
+	OsascriptPath = "/usr/bin/osascript"
+	t.Cleanup(func() { OsascriptPath = stub })
+
+	planted := t.TempDir()
+	if err := os.WriteFile(filepath.Join(planted, "osascript"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("PATH", planted)
+
 	path, args := (Notifier{}).command(Transition{Tunnel: "alpha"})
 
-	if path == "" {
-		t.Error("no command resolved")
+	if path != "/usr/bin/osascript" {
+		t.Errorf("command = %q, want the absolute osascript", path)
 	}
 	if len(args) == 0 {
 		t.Error("no arguments built")
 	}
 }
 
-func TestTerminalNotifierIsHandedTheIcon(t *testing.T) {
-	// -contentImage rather than -appIcon: since macOS 11 the icon of a
-	// notification comes from the bundle that sent it, and -appIcon is accepted
-	// but ignored. -contentImage puts the image beside the text, which shows.
-	n := Notifier{Enabled: true, Binary: "/somewhere/terminal-notifier", Icon: "/tmp/icon.png"}
-
-	_, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
-
-	if !argsContain(args, "-contentImage", "/tmp/icon.png") {
-		t.Errorf("args = %v, want the image passed", args)
-	}
-	for _, a := range args {
-		if a == "-appIcon" {
-			t.Errorf("args = %v, want no -appIcon: macOS ignores it", args)
-		}
-	}
-	if !argsContain(args, "-title", "tun-manager") {
-		t.Errorf("args = %v, want a title", args)
-	}
-	if !argsContain(args, "-subtitle", "alpha up") {
-		t.Errorf("args = %v, want the transition as the subtitle", args)
-	}
-}
-
-func TestTerminalNotifierWithoutAnIconStillPosts(t *testing.T) {
-	n := Notifier{Enabled: true, Binary: "/somewhere/terminal-notifier"}
-
-	_, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
-
-	for _, a := range args {
-		if a == "-contentImage" {
-			t.Errorf("args = %v, want no image flag when there is no image", args)
-		}
-	}
-}
-
-func TestOsascriptIsUsedWhenTerminalNotifierIsNot(t *testing.T) {
-	n := Notifier{Enabled: true, Binary: "/usr/bin/osascript", Icon: "/tmp/icon.png"}
-
-	path, args := n.command(Transition{Tunnel: "alpha", From: wg.Down, To: wg.Up})
-
-	if path != "/usr/bin/osascript" {
-		t.Errorf("path = %q", path)
-	}
-	if len(args) != 2 || args[0] != "-e" {
-		t.Fatalf("args = %v, want an osascript -e invocation", args)
-	}
-	if !contains(args[1], "alpha up") {
-		t.Errorf("script = %q, want it to describe the transition", args[1])
-	}
-}
-
-func TestTheCommandIsChosenByItsName(t *testing.T) {
-	// The tool is identified by what it is called, which is how a test can
-	// point either backend at a script that records its arguments.
-	tn := Notifier{Binary: "/opt/homebrew/bin/terminal-notifier"}
-	if _, args := tn.command(Transition{Tunnel: "a"}); args[0] != "-title" {
-		t.Errorf("args = %v, want the terminal-notifier form", args)
-	}
-
-	osa := Notifier{Binary: "/usr/bin/osascript"}
-	if _, args := osa.command(Transition{Tunnel: "a"}); args[0] != "-e" {
-		t.Errorf("args = %v, want the osascript form", args)
-	}
-}
-
-func TestNewMaterialisesTheIconUnderTheUserCache(t *testing.T) {
-	home := t.TempDir()
-	u := privdrop.User{Username: "operator", HomeDir: home}
-
-	n := New(u, true)
-
-	if n.Icon == "" {
-		t.Fatal("Icon is empty, want the embedded image written out")
-	}
-	if !strings.HasPrefix(n.Icon, home) {
-		t.Errorf("Icon = %q, want it under %q", n.Icon, home)
-	}
-	written, err := os.ReadFile(n.Icon)
-	if err != nil {
-		t.Fatalf("read the icon: %v", err)
-	}
-	if len(written) == 0 || !bytes.HasPrefix(written, []byte("\x89PNG")) {
-		t.Errorf("the icon is not a PNG (%d bytes)", len(written))
-	}
-}
-
-func TestNewWithoutAWritableCacheStillNotifies(t *testing.T) {
-	// A notification with no icon beats no notification.
-	u := privdrop.User{Username: "operator", HomeDir: "/dev/null/nowhere"}
-
-	n := New(u, true)
-
-	if n.Icon != "" {
-		t.Errorf("Icon = %q, want none when it could not be written", n.Icon)
-	}
-	if !n.Enabled {
-		t.Error("Enabled = false, want the notifier still usable")
-	}
-}
-
-func argsContain(args []string, flag, value string) bool {
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == flag && args[i+1] == value {
-			return true
-		}
-	}
-	return false
-}
-
-func TestNewWithAnUnwritableIconPathStillNotifies(t *testing.T) {
-	// The directory is there but the file cannot be written: a directory in its
-	// place is the simplest way to arrange that.
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".cache", "tun-manager", "icon.png"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	n := New(privdrop.User{HomeDir: home}, true)
-
-	if n.Icon != "" {
-		t.Errorf("Icon = %q, want none when the file could not be written", n.Icon)
-	}
-}
-
-func TestTheInstalledCommandIsFoundOnThePath(t *testing.T) {
-	// With no Binary set, the notifier resolves whichever of the two tools is
-	// installed rather than assuming a path.
-	dir := t.TempDir()
-	fake := filepath.Join(dir, preferred)
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	t.Setenv("PATH", dir)
-
-	path, args := Notifier{Icon: "/tmp/icon.png"}.command(Transition{Tunnel: "alpha"})
-
-	if path != fake {
-		t.Errorf("path = %q, want the one on PATH %q", path, fake)
-	}
-	if !argsContain(args, "-contentImage", "/tmp/icon.png") {
-		t.Errorf("args = %v, want the image passed", args)
-	}
-}
-
-func TestOsascriptIsTakenFromThePathWhenItIsThere(t *testing.T) {
-	// The usual macOS machine: no terminal-notifier installed, osascript on
-	// PATH at its normal place. Going through PATH for both names is what lets
-	// a test neutralise the pair by controlling PATH alone.
-	dir := t.TempDir()
-	fake := filepath.Join(dir, fallbackName)
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	t.Setenv("PATH", dir)
-
-	path, args := Notifier{}.command(Transition{Tunnel: "alpha"})
-
-	if path != fake {
-		t.Errorf("path = %q, want the one on PATH %q", path, fake)
-	}
-	if len(args) != 2 || args[0] != "-e" {
-		t.Errorf("args = %v, want the osascript form", args)
-	}
-}
-
-func TestWithoutTerminalNotifierItFallsBackToOsascript(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-
-	path, args := Notifier{}.command(Transition{Tunnel: "alpha"})
-
-	if path != fallback {
-		t.Errorf("path = %q, want %q", path, fallback)
-	}
-	if len(args) != 2 || args[0] != "-e" {
-		t.Errorf("args = %v, want the osascript form", args)
-	}
-}
-
 func TestPreviewPostsThroughTheResolvedCommand(t *testing.T) {
 	binary, log := recorder(t)
-	n := Notifier{Binary: binary, Icon: "/tmp/icon.png", User: privdrop.User{HomeDir: t.TempDir()}}
+	n := Notifier{Binary: binary, User: privdrop.User{HomeDir: t.TempDir()}}
 
 	got, err := n.Preview(context.Background())
 	if err != nil {

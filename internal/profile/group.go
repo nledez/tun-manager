@@ -2,8 +2,6 @@ package profile
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -120,19 +118,6 @@ func writeNew(path, group, tunnel string) error {
 	return writeThroughTemp(path, []byte(body), defaultConfigMode)
 }
 
-// tempSuffix names the file a rewrite goes through. Random, so that nobody can
-// have got there first; a variable so a test can pin it and plant something at
-// the name to prove that being there is what gets refused.
-var tempSuffix = func() string {
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		// crypto/rand does not fail on darwin. If it ever did, a predictable
-		// name would be worse than no rewrite at all.
-		return ""
-	}
-	return hex.EncodeToString(raw[:])
-}
-
 // writeThroughTemp writes a file by way of one that did not exist a moment ago,
 // under a name nobody could have guessed, and moves it into place.
 //
@@ -142,7 +127,11 @@ var tempSuffix = func() string {
 // simply is the file. Renaming over the destination replaces the *name*, so a
 // link somebody left there loses its name and its target keeps its contents.
 func writeThroughTemp(path string, body []byte, mode os.FileMode) error {
-	tmp := path + "." + tempSuffix() + ".tmp"
+	suffix, err := fsx.TempName()
+	if err != nil {
+		return err
+	}
+	tmp := path + "." + suffix + ".tmp"
 	defer fsx.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
 
 	f, err := fsx.CreateFresh("", tmp, mode)

@@ -290,3 +290,35 @@ func TestCreateFreshWillNotWalkThroughALink(t *testing.T) {
 		t.Error("CreateFresh created a file through a symbolic link")
 	}
 }
+
+func TestTempNameIsUnguessableAndDifferentEveryTime(t *testing.T) {
+	first, err := TempName()
+	if err != nil {
+		t.Fatalf("TempName: %v", err)
+	}
+	second, err := TempName()
+	if err != nil {
+		t.Fatalf("TempName: %v", err)
+	}
+
+	if len(first) != 16 {
+		t.Errorf("TempName = %q, want sixteen hex characters", first)
+	}
+	if first == second {
+		t.Error("two draws came back the same")
+	}
+}
+
+func TestADrawThatFailsWritesNothingRatherThanSomethingPredictable(t *testing.T) {
+	// crypto/rand does not fail on darwin. If it ever did, falling back to a
+	// fixed name would put a guessable name in a directory somebody else can
+	// write, which is the whole thing this exists to stop - so the failure is
+	// reported and the caller writes nothing.
+	previous := randRead
+	randRead = func([]byte) (int, error) { return 0, errors.New("out of entropy") }
+	t.Cleanup(func() { randRead = previous })
+
+	if name, err := TempName(); err == nil {
+		t.Errorf("TempName returned %q, want the failure reported", name)
+	}
+}

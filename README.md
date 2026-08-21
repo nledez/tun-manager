@@ -659,17 +659,20 @@ the log pane redacts anything shaped like a WireGuard key.
 
 ## Notification without `Tun Manager.app`
 
-Notifications show the logo above as a thumbnail when [`terminal-notifier`][tn]
-is installed (`brew install terminal-notifier`), and fall back to `osascript`
-without it.
+Notifications go through `/usr/bin/osascript`, and through nothing else.
+`sudo tun-manager notify` posts a sample so you can see what your machine does
+with it.
 
-The icon on the left of a notification is not ours to set: since macOS 11 it is
-the icon of the `.app` bundle that sent the notification, so it shows whichever
-tool did the sending. `terminal-notifier` still accepts `-appIcon`, but macOS
-ignores it. `sudo tun-manager notify` posts a sample so you can see what your
-machine does with it.
+The path is absolute and is never looked up in `PATH`. `sudo` on macOS does not
+reset `PATH` — there is no `secure_path` in the sudoers it ships — so anything
+this program looked up by name would be a name chosen by whoever typed `sudo`,
+started by a process running as root. That is also why `terminal-notifier` is no
+longer used: it was preferred when installed, which put the choice of what root
+reaches for in the hands of a `PATH` entry, and all it bought was a thumbnail.
 
-[tn]: https://github.com/julienXX/terminal-notifier
+The icon on the left of a notification is not ours to set in any case: since
+macOS 11 it is the icon of the `.app` bundle that sent it, so it shows whichever
+tool did the sending.
 
 ## License
 

@@ -345,9 +345,9 @@ func TestAddToGroupReportsAWriteItCannotFinish(t *testing.T) {
 // test can arrange for something to be sitting on it.
 func pinTempSuffix(t *testing.T, suffix string) {
 	t.Helper()
-	was := tempSuffix
-	tempSuffix = func() string { return suffix }
-	t.Cleanup(func() { tempSuffix = was })
+	was := fsx.TempName
+	fsx.TempName = func() (string, error) { return suffix, nil }
+	t.Cleanup(func() { fsx.TempName = was })
 }
 
 func TestARewriteWillNotWriteThroughAFileSomebodyLeftAtTheTemporaryName(t *testing.T) {
@@ -401,6 +401,20 @@ func TestAddToGroupReportsATemporaryFileItCannotClose(t *testing.T) {
 
 	if err := AddToGroup(path, GroupAll, "bravo"); err == nil {
 		t.Error("AddToGroup reported success on a file it could not close")
+	}
+	if got := readConfig(t, path); strings.Contains(got, "bravo") {
+		t.Errorf("the configuration was changed anyway:\n%s", got)
+	}
+}
+
+func TestAddToGroupWritesNothingWhenItCannotDrawAName(t *testing.T) {
+	path := writeConfig(t, "groups:\n  all:\n    - alpha\n")
+	previous := fsx.TempName
+	fsx.TempName = func() (string, error) { return "", errors.New("out of entropy") }
+	t.Cleanup(func() { fsx.TempName = previous })
+
+	if err := AddToGroup(path, GroupAll, "bravo"); err == nil {
+		t.Error("AddToGroup reported success without a name to write under")
 	}
 	if got := readConfig(t, path); strings.Contains(got, "bravo") {
 		t.Errorf("the configuration was changed anyway:\n%s", got)

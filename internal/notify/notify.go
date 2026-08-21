@@ -6,10 +6,7 @@ package notify
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -48,113 +45,48 @@ func Diff(prev, next map[string]wg.Health) []Transition {
 	return out
 }
 
-// The two ways a notification reaches the desktop. terminal-notifier can be
-// told which icon to show; osascript cannot - "display notification" has no
-// clause for one, so it shows whatever icon the sender happens to have.
-const (
-	preferred    = "terminal-notifier"
-	fallbackName = "osascript"
-	fallback     = "/usr/bin/" + fallbackName
-)
-
-// icon is carried in the binary so an installed tun-manager has one without an
-// install step and without a file that can go missing. Regenerate it from the
-// full-size image with `make icon`.
+// OsascriptPath is how a notification reaches the desktop, and the only way.
 //
-//go:embed icon.png
-var icon []byte
+// Absolute, and never looked up in PATH. sudo on macOS does not reset PATH -
+// there is no secure_path in the shipped sudoers - so a lookup here would let
+// anything named on that PATH be started by a program running as root. It is
+// also why terminal-notifier is gone: it was preferred when installed, which
+// meant the tool root reached for was chosen by whatever was on the PATH of the
+// person who typed sudo. The only thing it bought was a thumbnail.
+// A variable, and only so that a test suite can point it at a stand-in:
+// nothing in the program ever writes to it, and a suite that forgets to set
+// Notifier.Binary would otherwise post a real notification onto the screen of
+// whoever is running it.
+var OsascriptPath = "/usr/bin/osascript"
 
 // Notifier posts notifications to the user's session.
 type Notifier struct {
 	User    privdrop.User
 	Enabled bool
 
-	// Icon is the image the notification shows, when the command in use can
-	// display one.
-	Icon string
-
 	// Binary is the command that posts a notification. It is a field so a test
 	// can point it at a script that records its arguments rather than at the
-	// real thing, which would reach the desktop. Empty means whichever of the
-	// two is installed.
+	// real thing, which would reach the desktop. Empty means osascript, at its
+	// absolute path.
 	Binary string
 }
 
-// New writes the icon out and returns a notifier that can show it.
+// New returns a notifier that posts as the pre-sudo user.
 func New(u privdrop.User, enabled bool) Notifier {
-	return Notifier{User: u, Enabled: enabled, Icon: writeIcon(u)}
+	return Notifier{User: u, Enabled: enabled}
 }
 
-// writeIcon puts the embedded image where the notification command can read it,
-// as the pre-sudo user who will be running that command. A failure is not worth
-// reporting: a notification with no icon beats no notification.
-//
-// It goes through privdrop rather than os, because this is root writing into
-// somebody else's home directory. ~/.cache/tun-manager belongs to that
-// somebody: they can replace it with a symbolic link between one run and the
-// next, and os.MkdirAll would follow it without a word. What is written here is
-// a picture, but the write is root's, and root writing where it was pointed is
-// the whole of a local privilege escalation.
-func writeIcon(u privdrop.User) string {
-	dir := u.CacheDir("tun-manager")
-	if err := u.MkdirAll(dir, 0o755); err != nil {
-		return ""
-	}
-	path := filepath.Join(dir, "icon.png")
-	if err := u.WriteFile(path, icon, 0o644); err != nil {
-		return ""
-	}
-	return path
-}
-
-// command picks how to post one transition. The tool is identified by what it
-// is called, which is also how a test points either form at a script of its own.
+// command picks how to post one transition.
 func (n Notifier) command(t Transition) (string, []string) {
 	path := n.Binary
 	if path == "" {
-		path = resolve()
-	}
-
-	if strings.Contains(filepath.Base(path), preferred) {
-		return path, n.notifierArgs(t)
+		path = OsascriptPath
 	}
 	return path, osascriptArgs(t)
 }
 
-// resolve finds the tool to post with, preferring the one that can show an
-// icon.
-//
-// Both names go through PATH before the absolute path is tried. That is not for
-// production, where osascript is always at /usr/bin: it is so a test can
-// neutralise both tools by controlling PATH alone. Binary exists for the same
-// purpose, but it has to be remembered, and a test that forgets posts a real
-// notification onto the screen of whoever is running the suite - with nothing
-// failing and nothing logged to say so.
-func resolve() string {
-	for _, name := range []string{preferred, fallbackName} {
-		if found, err := exec.LookPath(name); err == nil {
-			return found
-		}
-	}
-	return fallback
-}
-
-func (n Notifier) notifierArgs(t Transition) []string {
-	title, body := t.Message()
-	args := []string{"-title", "tun-manager", "-subtitle", title, "-message", body}
-	if n.Icon != "" {
-		// -contentImage, not -appIcon. Since macOS 11 the icon of a
-		// notification is the icon of the .app bundle that sent it, and
-		// -appIcon is accepted but ignored: notifications sent through
-		// terminal-notifier show a terminal whatever is passed. -contentImage
-		// attaches the image beside the text instead, which does display.
-		args = append(args, "-contentImage", n.Icon)
-	}
-	return args
-}
-
 // Preview posts a sample notification and reports which command carried it, so
-// that whether the icon shows up can be seen rather than assumed.
+// that a notification arriving can be seen rather than assumed.
 //
 // It ignores Enabled, because asking for one is the point, and it returns the
 // failure rather than swallowing it, because finding out is the point too.

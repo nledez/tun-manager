@@ -8,8 +8,6 @@ package privdrop
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -76,12 +74,6 @@ func (u User) ConfigDir(app string) string {
 	return filepath.Join(u.HomeDir, ".config", app)
 }
 
-// CacheDir returns the per-application cache directory of the user, for things
-// the program can regenerate.
-func (u User) CacheDir(app string) string {
-	return filepath.Join(u.HomeDir, ".cache", app)
-}
-
 // CommandContext builds a command that runs as the pre-sudo user when possible,
 // so that GUI-facing tools reach the right session. Without a demotable user
 // the command is returned unchanged and simply runs as root.
@@ -134,7 +126,11 @@ func (u User) WriteFile(path string, data []byte, mode os.FileMode) error {
 	// file root owned became one they could fill in with anything. The rename
 	// below replaces the *name*, so whatever was there keeps its contents and
 	// its owner.
-	tmp := path + "." + tempName() + ".tmp"
+	suffix, err := fsx.TempName()
+	if err != nil {
+		return err
+	}
+	tmp := path + "." + suffix + ".tmp"
 	f, err := fsx.CreateFresh(u.HomeDir, tmp, mode)
 	if err != nil {
 		return err
@@ -155,26 +151,4 @@ func (u User) WriteFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return fsx.Rename(tmp, path)
-}
-
-// tempName names the file a write goes through. Random, so that nobody can have
-// got there first; a variable so a test can pin it and prove that something
-// already at the name is what gets refused.
-var tempName = func() string {
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		// crypto/rand does not fail on darwin. If it ever did, a predictable
-		// name would be worse than not writing at all.
-		return ""
-	}
-	return hex.EncodeToString(raw[:])
-}
-
-// MkdirAll makes a directory under the user's home and hands it back to them,
-// refusing to walk through a symbolic link on the way.
-func (u User) MkdirAll(dir string, mode os.FileMode) error {
-	if err := fsx.MkdirAllNoFollow(u.HomeDir, dir, mode); err != nil {
-		return err
-	}
-	return u.Chown(dir)
 }

@@ -13,6 +13,8 @@
 package fsx
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -146,6 +148,26 @@ func CreateNoFollow(under, path string, mode os.FileMode) (*os.File, error) {
 		return nil, err
 	}
 	return OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+}
+
+// randRead is where the unguessable part of a temporary name comes from. A
+// variable so a test can make the draw fail: crypto/rand does not fail on
+// darwin, and a name drawn from a source that had run out would be a
+// predictable name, which is the one thing this must never be.
+var randRead = rand.Read
+
+// TempName draws the part of a temporary file name that nobody can guess.
+//
+// A variable so a test can pin it and plant something at the name it returns.
+// The error is not swallowed into a fixed fallback: a predictable name in a
+// directory somebody else can write is exactly the hole this exists to close,
+// so not writing at all is the better failure.
+var TempName = func() (string, error) {
+	var raw [8]byte
+	if _, err := randRead(raw[:]); err != nil {
+		return "", fmt.Errorf("draw a temporary name: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // CreateFresh creates a file that did not exist a moment ago, and refuses

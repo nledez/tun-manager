@@ -306,21 +306,6 @@ func TestResolveRejectsANonNumericGID(t *testing.T) {
 	}
 }
 
-func TestCacheDirSitsUnderTheRealUserHome(t *testing.T) {
-	// Under sudo, HOME points at /var/root; anything the program writes for the
-	// user to read has to land in their home, not root's.
-	u := User{Username: "operator", HomeDir: "/home/operator"}
-
-	got := u.CacheDir("tun-manager")
-
-	want := filepath.Join("/home/operator", ".cache", "tun-manager")
-	if got != want {
-		t.Errorf("CacheDir = %q, want %q", got, want)
-	}
-}
-
-// MARK: writing into somebody else's home, as root
-
 func TestWriteFileWritesAndHandsOver(t *testing.T) {
 	// The two halves of the same act: root creates the file, and the user it
 	// belongs to owns it afterwards. A file left root-owned under ~/.cache is
@@ -434,43 +419,6 @@ func TestWriteFileReportsAWriteItCannotFinish(t *testing.T) {
 	_ = boom
 }
 
-func TestMkdirAllMakesAndHandsOver(t *testing.T) {
-	var calls []chownCall
-	recordingChown(t, &calls)
-	home := t.TempDir()
-	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
-	dir := filepath.Join(home, ".cache", "tun-manager")
-
-	if err := u.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		t.Errorf("stat = %v, %v", info, err)
-	}
-	if len(calls) != 1 || calls[0].path != dir {
-		t.Errorf("handed over %+v, want the directory itself", calls)
-	}
-}
-
-func TestMkdirAllRefusesALinkSomebodyPlanted(t *testing.T) {
-	home := t.TempDir()
-	elsewhere := t.TempDir()
-	if err := os.Symlink(elsewhere, filepath.Join(home, ".cache")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
-
-	err := u.MkdirAll(filepath.Join(home, ".cache", "tun-manager"), 0o755)
-
-	if err == nil {
-		t.Fatal("MkdirAll made a directory through a link")
-	}
-	if _, statErr := os.Stat(filepath.Join(elsewhere, "tun-manager")); !os.IsNotExist(statErr) {
-		t.Error("it was made on the other side of the link")
-	}
-}
-
 func TestChownChangesTheLinkAndNotWhatItPointsAt(t *testing.T) {
 	// The difference between os.Lchown and os.Chown, which is the difference
 	// between handing back a file and handing somebody the file it points at.
@@ -543,5 +491,35 @@ func TestWriteFileReportsAFileItCannotClose(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(home, "icon.png")); statErr == nil {
 		t.Error("an unfinished file was moved into place")
+	}
+}
+
+func TestWriteFileReportsAFileItCannotCreate(t *testing.T) {
+	// The directory is not there. Nothing is written, and the failure says so
+	// rather than being swallowed into a file that never appears.
+	home := t.TempDir()
+	u := User{Username: "someone", UID: os.Getuid(), GID: os.Getgid(), HomeDir: home}
+
+	err := u.WriteFile(filepath.Join(home, "absent", "icon.png"), []byte("a picture"), 0o644)
+
+	if err == nil {
+		t.Error("WriteFile reported success with nowhere to write")
+	}
+}
+
+func TestWriteFileWritesNothingWhenItCannotDrawAName(t *testing.T) {
+	home := t.TempDir()
+	previous := fsx.TempName
+	fsx.TempName = func() (string, error) { return "", errors.New("out of entropy") }
+	t.Cleanup(func() { fsx.TempName = previous })
+
+	u := User{Username: "someone", UID: os.Getuid(), GID: os.Getgid(), HomeDir: home}
+	err := u.WriteFile(filepath.Join(home, "icon.png"), []byte("a picture"), 0o644)
+
+	if err == nil {
+		t.Error("WriteFile reported success without a name to write under")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "icon.png")); statErr == nil {
+		t.Error("something was written anyway")
 	}
 }

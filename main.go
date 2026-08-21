@@ -686,8 +686,8 @@ func (e *env) runDoctor() error {
 	return nil
 }
 
-// runNotify posts a sample notification and says what carried it, so that
-// whether the icon shows up can be seen rather than assumed.
+// runNotify posts a sample notification and says what carried it, so that one
+// arriving can be seen rather than assumed.
 func (e *env) runNotify() error {
 	n := e.notifier
 	if n == nil {
@@ -701,19 +701,7 @@ func (e *env) runNotify() error {
 
 	command, postErr := n.Preview(context.Background())
 
-	// Two different reasons for no icon, and telling them apart is the whole
-	// point of this command.
-	var icon string
-	switch tool := filepath.Base(command); {
-	case !strings.Contains(tool, "terminal-notifier"):
-		icon = "no icon    " + tool + " has no clause for one; install terminal-notifier"
-	case n.Icon == "":
-		icon = "no icon    it could not be written to the cache"
-	default:
-		icon = "icon       " + n.Icon
-	}
-
-	report := fmt.Sprintf("notify: command %s\nnotify: %s\n", command, icon)
+	report := fmt.Sprintf("notify: command %s\n", command)
 	if postErr == nil {
 		report += "notify: posted\n"
 	}

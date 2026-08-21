@@ -964,37 +964,31 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// stubNotificationTools puts a harmless stand-in for terminal-notifier and
-// osascript on PATH, so no test in this package can reach the desktop.
+// stubNotificationTools points the notification command at a harmless
+// stand-in, so no test in this package can reach the desktop.
 //
-// internal/notify picks its tool by looking both names up on PATH. A test that
-// builds a notifier without pointing Binary at a script of its own would
-// otherwise post a real notification onto the screen of whoever is running the
-// suite, with nothing failing to say so.
+// internal/notify posts through one absolute path. A test that builds a
+// notifier without pointing Binary at a script of its own would otherwise post
+// a real notification onto the screen of whoever is running the suite, with
+// nothing failing to say so.
 func stubNotificationTools() (string, error) {
 	dir, err := os.MkdirTemp("", "notify-stubs")
 	if err != nil {
 		return "", err
 	}
-	for _, name := range []string{"terminal-notifier", "osascript"} {
-		script := filepath.Join(dir, name)
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
-			return "", err
-		}
-	}
-	if err := os.Setenv("PATH", dir); err != nil {
+	script := filepath.Join(dir, "osascript")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
 		return "", err
 	}
+	notify.OsascriptPath = script
 	return dir, nil
 }
 
-// fakeNotifierBinary is named after the real tool, because that name is what
-// decides the argument form and whether an icon can be shown.
+// fakeNotifierBinary is a script that records nothing and succeeds.
 func fakeNotifierBinary(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "terminal-notifier")
+	path := filepath.Join(t.TempDir(), "osascript")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -1003,48 +997,17 @@ func fakeNotifierBinary(t *testing.T) string {
 
 func TestNotifyReportsWhatItUsed(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
-	e.notifier = &notify.Notifier{Binary: fakeNotifierBinary(t), Icon: "/tmp/icon.png"}
-
-	if err := e.run([]string{"notify"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-
-	got := output(e)
-	for _, want := range []string{"terminal-notifier", "/tmp/icon.png", "posted"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("output missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestNotifySaysWhenTheCommandCannotShowAnIcon(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	e.notifier = &notify.Notifier{Binary: "/usr/bin/true", Icon: "/tmp/icon.png"}
-
-	if err := e.run([]string{"notify"}); err != nil {
-		t.Fatalf("notify: %v", err)
-	}
-
-	if !strings.Contains(output(e), "no icon") {
-		t.Errorf("output does not say the command cannot show one:\n%s", output(e))
-	}
-	if !strings.Contains(output(e), "terminal-notifier") {
-		t.Errorf("output does not say what to install:\n%s", output(e))
-	}
-}
-
-func TestNotifySaysWhenTheIconCouldNotBeWritten(t *testing.T) {
-	// The command can show one, but there is nothing to show: a different
-	// problem from the one above, and worth telling apart.
-	e := testEnv(t, &fakeRunner{})
 	e.notifier = &notify.Notifier{Binary: fakeNotifierBinary(t)}
 
 	if err := e.run([]string{"notify"}); err != nil {
 		t.Fatalf("notify: %v", err)
 	}
 
-	if !strings.Contains(output(e), "no icon") {
-		t.Errorf("output does not mention the missing icon:\n%s", output(e))
+	got := output(e)
+	for _, want := range []string{"osascript", "posted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -1064,18 +1027,17 @@ func TestNotifyBuildsItsOwnNotifierWhenNoneIsInjected(t *testing.T) {
 	// Nothing is injected, so it has to resolve the user, the configuration and
 	// the command by itself. This is the test that used to put a real
 	// notification on the maintainer's screen: it is the one path through
-	// `notify` where no Binary is set, so it resolved whatever was installed
-	// and posted through it, icon and all. TestMain is what stops that now.
+	// `notify` where no Binary is set. TestMain is what stops that now.
 	_ = e.run([]string{"notify"})
 
 	got := output(e)
 	if !strings.Contains(got, "command") {
 		t.Errorf("output does not name the command it used:\n%s", got)
 	}
-	// The guard, asserted rather than assumed: the tool it resolved has to be
-	// the stub TestMain put on PATH, not one installed on this machine.
-	if !strings.Contains(got, os.Getenv("PATH")) {
-		t.Errorf("the command came from outside the stub directory %q:\n%s", os.Getenv("PATH"), got)
+	// The guard, asserted rather than assumed: what it reached for has to be
+	// the stand-in TestMain put there, not the osascript on this machine.
+	if !strings.Contains(got, notify.OsascriptPath) {
+		t.Errorf("the command was not the stand-in %q:\n%s", notify.OsascriptPath, got)
 	}
 }
 
