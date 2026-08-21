@@ -173,6 +173,10 @@ release:
 publish:
 	@command -v gh >/dev/null 2>&1 || { echo "gh not installed: brew install gh"; exit 1; }
 	@test -f "$(RELEASE_ZIP)" || { echo "no $(RELEASE_ZIP): run make release first"; exit 1; }
+	@# Asked separately, because an unauthenticated gh fails the lookup below
+	@# exactly as a missing release does, and would send you looking at CI for a
+	@# problem that is on this machine.
+	@gh auth status >/dev/null 2>&1 || { echo "gh is not signed in: run gh auth login"; exit 1; }
 	@gh release view "$(VERSION)" >/dev/null 2>&1 \
 		|| { echo "no $(VERSION) release yet: CI cuts it once the tagged commit is green"; exit 1; }
 	@# Re-checked here rather than trusted from `release`: the zip on disk may
