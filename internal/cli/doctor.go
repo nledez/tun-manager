@@ -310,6 +310,20 @@ func checkConfigFile(cfg *profile.Config) Check {
 			Detail: fmt.Sprintf("no file at %s, using built-in defaults", cfg.Path),
 		}
 	}
+	if cfg.RefreshRaisedFrom > 0 {
+		// Said rather than silently applied. A setting that does not do what it
+		// says is worth a line even when the difference is small: somebody
+		// wrote that number for a reason, and finding out here beats wondering
+		// why the table is slower than they asked for.
+		return Check{
+			Name:   "configuration",
+			Status: Warn,
+			Detail: fmt.Sprintf(
+				"%s: refresh_interval %s is below the %s floor and was raised to it — "+
+					"a refresh reads the WireGuard control sockets as root",
+				cfg.Path, cfg.RefreshRaisedFrom, profile.MinRefresh),
+		}
+	}
 	return Check{Name: "configuration", Status: Pass, Detail: cfg.Path}
 }
 

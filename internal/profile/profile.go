@@ -27,6 +27,20 @@ const (
 	DefaultWgQuick = "/opt/homebrew/bin/wg-quick"
 	DefaultRefresh = 5 * time.Minute
 
+	// MinRefresh is the fastest this program will refresh on its own.
+	//
+	// A refresh reads the WireGuard control sockets, which is work root does
+	// on behalf of a file a plain user writes: `refresh_interval: 1ns` is
+	// positive, so it passed the "unset falls back to the default" rule, and
+	// left a root process reading those sockets as fast as it could. One second
+	// is far below anything a person watching a table would notice and far
+	// above a loop.
+	//
+	// A value under it is raised rather than refused. A configuration that will
+	// not load is a program that will not start, which is a much worse way to
+	// lose than a table that refreshes a little slower than asked.
+	MinRefresh = time.Second
+
 	// DefaultFeedSocket is where the status feed binds. /var/run is cleared on
 	// reboot, which disposes of a socket left behind by a crash for free.
 	DefaultFeedSocket = "/var/run/tun-manager.sock"
@@ -64,6 +78,12 @@ type Config struct {
 	Contexts        []netctx.Rule       `yaml:"contexts"`
 	Groups          map[string][]string `yaml:"groups"`
 	Overrides       []Override          `yaml:"overrides"`
+
+	// RefreshRaisedFrom is what the file asked for when that was below
+	// MinRefresh, and zero otherwise. Kept so `doctor` can say the setting was
+	// not applied as written: a value silently changed is the thing this
+	// program refuses to do elsewhere.
+	RefreshRaisedFrom time.Duration `yaml:"-"`
 
 	// Path is the file the configuration was read from, for `doctor`.
 	Path string `yaml:"-"`
@@ -197,8 +217,14 @@ func (c *Config) applyDefaults() {
 	if c.ConfigDir == "" {
 		c.ConfigDir = d.ConfigDir
 	}
-	if c.RefreshInterval <= 0 {
+	switch {
+	case c.RefreshInterval <= 0:
+		// Not asked for at all, or written out as blank: the default, and
+		// nothing to report.
 		c.RefreshInterval = d.RefreshInterval
+	case c.RefreshInterval < MinRefresh:
+		c.RefreshRaisedFrom = c.RefreshInterval
+		c.RefreshInterval = MinRefresh
 	}
 	if c.Groups == nil {
 		c.Groups = map[string][]string{}

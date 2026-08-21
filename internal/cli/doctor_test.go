@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/privdrop"
@@ -710,5 +711,44 @@ func TestDoctorDoesNotWarnAboutWhatItAlreadyRefuses(t *testing.T) {
 
 	if c.Status != Pass {
 		t.Errorf("status = %v, want %v: %s", c.Status, Pass, c.Detail)
+	}
+}
+
+// doctorConfig is a loaded-looking configuration: a real path, and the built-in
+// values for everything else.
+func doctorConfig(t *testing.T) *profile.Config {
+	t.Helper()
+	cfg := profile.Default()
+	cfg.Path = filepath.Join(t.TempDir(), "config.yaml")
+	return cfg
+}
+
+func TestDoctorSaysWhenARefreshIntervalWasRaised(t *testing.T) {
+	// A setting that does not do what it says is worth a line, however small
+	// the difference: somebody wrote that number for a reason, and finding out
+	// here beats wondering why the table is slower than they asked for.
+	cfg := doctorConfig(t)
+	cfg.RefreshRaisedFrom = time.Nanosecond
+
+	check := checkConfigFile(cfg)
+
+	if check.Status != Warn {
+		t.Errorf("status = %v, want a warning", check.Status)
+	}
+	for _, want := range []string{"refresh_interval", "1ns", profile.MinRefresh.String(), "root"} {
+		if !strings.Contains(check.Detail, want) {
+			t.Errorf("detail does not mention %q: %s", want, check.Detail)
+		}
+	}
+}
+
+func TestDoctorSaysNothingAboutARefreshIntervalItKept(t *testing.T) {
+	check := checkConfigFile(doctorConfig(t))
+
+	if check.Status != Pass {
+		t.Errorf("status = %v, want a pass", check.Status)
+	}
+	if strings.Contains(check.Detail, "refresh_interval") {
+		t.Errorf("detail talks about a setting nobody changed: %s", check.Detail)
 	}
 }

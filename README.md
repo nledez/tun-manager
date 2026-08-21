@@ -195,7 +195,9 @@ tun-manager doctor                  # environment check; sudo to see the tunnels
 | `↑↓` `jk` | move · `?` help · `q` quit |
 
 The table refreshes on its own every `refresh_interval` (5 minutes by default),
-and right after every operation.
+and right after every operation. Anything under a second is raised to a second
+rather than refused, and `doctor` says so: a refresh reads the WireGuard control
+sockets, which is work root does on the say-so of a file under your home.
 
 `g` opens a graph of the tunnel under the cursor, download above upload, each on
 its own scale so that a busy download does not flatten the upload into a line

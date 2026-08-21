@@ -30,7 +30,9 @@
 # The tunnel names here are placeholders and the addresses come from the ranges
 # reserved for documentation (RFC 5737).
 
-# How often the TUI refreshes on its own.
+# How often the TUI refreshes on its own. Anything under a second is raised to
+# a second — a refresh reads the WireGuard control sockets as root — and
+# `tun-manager doctor` says so rather than changing it quietly.
 refresh_interval: 5m
 
 # Recognisable networks. The first rule whose CIDR matches an address on one of

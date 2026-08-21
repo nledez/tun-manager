@@ -486,3 +486,52 @@ func TestTheNotifyKeyIsRefusedAndSaysWhereNotificationsWent(t *testing.T) {
 		}
 	}
 }
+
+func TestARefreshIntervalBelowTheFloorIsRaisedRatherThanRefused(t *testing.T) {
+	// `refresh_interval: 1ns` is positive, so it went straight past the rule
+	// that turns an unset value into the default, and left a root process
+	// reading the WireGuard control sockets as fast as it could - on the say-so
+	// of a file a plain user writes.
+	//
+	// Raised, not refused: a configuration that will not load is a program that
+	// will not start, which is a much worse way to lose than a table that
+	// refreshes a little slower than asked.
+	for _, asked := range []time.Duration{time.Nanosecond, time.Millisecond, 999 * time.Millisecond} {
+		cfg := loadString(t, "refresh_interval: "+asked.String()+"\n")
+
+		if cfg.RefreshInterval != MinRefresh {
+			t.Errorf("%s became %s, want the %s floor", asked, cfg.RefreshInterval, MinRefresh)
+		}
+		if cfg.RefreshRaisedFrom != asked {
+			t.Errorf("RefreshRaisedFrom = %s, want %s so doctor can say so", cfg.RefreshRaisedFrom, asked)
+		}
+	}
+}
+
+func TestARefreshIntervalAboveTheFloorIsLeftAlone(t *testing.T) {
+	for _, asked := range []time.Duration{time.Second, 30 * time.Second, 5 * time.Minute, time.Hour} {
+		cfg := loadString(t, "refresh_interval: "+asked.String()+"\n")
+
+		if cfg.RefreshInterval != asked {
+			t.Errorf("%s became %s, want it untouched", asked, cfg.RefreshInterval)
+		}
+		if cfg.RefreshRaisedFrom != 0 {
+			t.Errorf("RefreshRaisedFrom = %s, want nothing to report", cfg.RefreshRaisedFrom)
+		}
+	}
+}
+
+func TestARefreshIntervalOfNothingIsTheDefaultAndNotTheFloor(t *testing.T) {
+	// Zero and negative mean "not asked for", which the defaults answer. There
+	// is nothing to report there: nobody's setting was changed.
+	for _, body := range []string{"refresh_interval: 0s\n", "refresh_interval: -5s\n", "groups:\n"} {
+		cfg := loadString(t, body)
+
+		if cfg.RefreshInterval != DefaultRefresh {
+			t.Errorf("%q gave %s, want the default %s", body, cfg.RefreshInterval, DefaultRefresh)
+		}
+		if cfg.RefreshRaisedFrom != 0 {
+			t.Errorf("%q reported a raise of %s, want none", body, cfg.RefreshRaisedFrom)
+		}
+	}
+}
