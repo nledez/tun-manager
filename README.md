@@ -73,6 +73,46 @@ which only root can write, and never from the file under your home directory.
 is drawn, what is deliberately left on the wrong side of it, and how to report a
 problem privately.
 
+**Whoever can write the binary chooses what root does**, and that is a fact about
+the directory it sits in rather than about this program. `sudo` reads a path and
+runs whatever is at it; if that name can be replaced without a password, the
+password protects nothing.
+
+On a stock macOS, `/usr/local/bin` is `root:wheel` and `0755`, so only root can
+put something there. It does not always stay that way: `/usr/local` does not
+exist until something creates it, and whatever creates it decides who owns it —
+Homebrew on Intel Macs hands the directories under `/usr/local` to the user who
+ran the install, and other installers do the same. Worth one look:
+
+```sh
+ls -ld /usr/local/bin
+```
+
+`root  wheel` is the answer you want. If it names you or a group you are in, a
+process running as you can replace `tun-manager` between two runs, and the next
+`sudo tun-manager` runs their file. Either hand the directory back:
+
+```sh
+sudo chown root:wheel /usr/local/bin && sudo chmod 755 /usr/local/bin
+```
+
+— which is safe for anything already installed there, since it changes the
+directory and not its contents — or put it somewhere root owns from the start:
+
+```sh
+sudo mkdir -p /opt/tun-manager/bin        # created by root, so owned by root
+make install PREFIX=/opt/tun-manager
+```
+
+and call it by that path, or put it on your `PATH`. Not `/usr/bin` or
+`/usr/sbin`: both carry the `restricted` flag, and System Integrity Protection
+refuses writes there even to root — `ls -ldO /usr/bin` shows it.
+
+The same question applies to `wg-quick`, and there the answer is usually "no":
+`brew install wireguard-tools` leaves it under a prefix the user owns. That one
+`tun-manager` checks for itself, before every run — see [Adding a
+tunnel](#adding-a-tunnel).
+
 ## Install
 
 Download the archive for your machine from the

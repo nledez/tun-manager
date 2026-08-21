@@ -140,11 +140,14 @@ running as you can write a defaults key. The keychain is better and not perfect:
 a process running as you, with access to your keychain, could replace what is
 pinned. What it cannot do is answer on the socket as root.
 
-**`/usr/local/bin` is writable by admin users without a password.** That is
-macOS, not this program: if you install there, any process running as an
-administrator can replace the binary you are about to run with `sudo`. Installing
-elsewhere, or checking what you run, is the remedy — and it is the reason the
-release archives are checksummed.
+**Whoever can write the binary chooses what root does.** `sudo` reads a path and
+runs whatever is at it, so the password protects nothing if that name can be
+replaced without one. On a stock macOS `/usr/local/bin` is `root:wheel`, but
+`/usr/local` does not exist until something creates it and whatever creates it
+decides who owns it — Homebrew on Intel Macs hands those directories to the user
+who ran the install. `ls -ld /usr/local/bin` answers it in one line; the README
+says what to do with either answer. It is also why the release archives are
+checksummed.
 
 **`tun-manager` starts no process but `wg-quick`.** It used to start one more —
 `osascript`, demoted to the user who ran `sudo`, to post a notification — and
