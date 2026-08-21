@@ -10,7 +10,7 @@ COVERAGE := coverage.out
 COVERAGE_MIN := 100
 COVER_PKGS := $(shell go list ./...)
 
-.PHONY: all build test race cover cover-html vet lint fmt notices notices-check markers-check demo demo-configs demo-configs-check run install clean release release-check macos-build macos-test macos-app
+.PHONY: all build test race cover cover-html vet lint fmt notices notices-check markers-check demo demo-configs demo-configs-check run install clean release release-check macos-build macos-test macos-app macos-release macos-publish
 
 all: vet lint test notices-check markers-check demo-configs-check build
 
@@ -167,6 +167,15 @@ macos-test:
 
 macos-app:
 	$(MAKE) -C macos app
+
+# The two halves of publishing the menu bar client: notarise the universal
+# bundle for the current tag, then attach it to the release that tag produced.
+# Both refuse rather than repair; `macos/README.md` walks the order through.
+macos-release:
+	$(MAKE) -C macos release
+
+macos-publish:
+	$(MAKE) -C macos publish
 
 clean:
 	rm -rf bin dist $(COVERAGE)

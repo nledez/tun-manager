@@ -157,6 +157,36 @@ If you do move an un-notarised build to another machine of your own:
 xattr -dr com.apple.quarantine "/Applications/Tun Manager.app"
 ```
 
+## Publishing it
+
+The application ships on the same tag as `tun-manager`, but not through the
+same pipeline. CI cuts the release and builds the Go archives; the bundle is
+notarised here, on a machine that holds the Developer ID, and attached
+afterwards. The signing key never leaves that machine, which is the whole
+reason for the split — and it is why this cannot be a step in CI.
+
+```sh
+make -C .. release VERSION=0.6.1   # tags, pushes; CI cuts the release
+make -C .. macos-release           # universal, notarised, stapled
+make -C .. macos-publish           # attaches it to the release
+```
+
+`macos-release` refuses unless `HEAD` carries the tag, the tree is clean and
+the flavour is the release one: a bundle built beside a tag claims a version
+number that matches no commit, and the development flavour is a different
+application wearing this one's name. It builds `arm64` and `x86_64` — macOS 26
+still runs on Intel, and an arm64-only download does nothing there — and checks
+that it did.
+
+`macos-publish` waits on the other half. The release only exists once CI is
+green on the tagged commit, so the two steps finish in either order; run it
+again when the release is there. It re-runs `make verify` before uploading,
+because an un-notarised zip is something only the person downloading it finds
+out about.
+
+The plain `make notarize` stays what it was: a bundle you can hand to somebody
+directly, unversioned, with none of the above insisted on.
+
 ## Layout
 
 ```

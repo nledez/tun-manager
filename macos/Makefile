@@ -51,13 +51,24 @@ ifeq ($(strip $(SIGN_IDENTITY)),)
 SIGN_IDENTITY := -
 endif
 
+# Empty for a local build: it only has to run on the machine that made it, and
+# asking for the second architecture doubles the link for nothing. `release`
+# sets both, because macOS 26 still runs on Intel and a published application
+# that skips them is a download that does nothing on somebody's Mac.
+ARCHS ?=
+ARCH_FLAGS := $(foreach a,$(ARCHS),--arch $(a))
+
 # The keychain item holding the notarisation credentials. Created once with:
 #   xcrun notarytool store-credentials tun-manager \
 #     --apple-id <your-apple-id> --team-id <TEAMID> --password <app-specific>
 NOTARY_PROFILE ?= tun-manager
 ZIP := build/TunManager.zip
 
-.PHONY: all build test app run icon sign notarize verify clean
+# Named the way the archives GoReleaser publishes are named, so the two halves
+# of a release read as one download list rather than as two conventions.
+RELEASE_ZIP := build/tun-manager-menubar_$(SHORT_VERSION)_darwin_universal.zip
+
+.PHONY: all build test app run icon sign notarize verify release publish clean
 
 all: test app
 
@@ -71,12 +82,12 @@ test:
 # Assembles the bundle. `app` is phony and has no file prerequisites: make
 # breaks on prerequisites containing spaces, and "Tun Manager.app" has one.
 app: $(APP_ICON)
-	swift build -c release
+	swift build -c release $(ARCH_FLAGS)
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	# Asked for rather than spelled out: the path moves the moment --arch is
 	# added, and a hardcoded .build/release would package a stale binary.
-	cp "$$(swift build -c release --show-bin-path)/tun-manager-menubar" \
+	cp "$$(swift build -c release $(ARCH_FLAGS) --show-bin-path)/tun-manager-menubar" \
 		"$(APP)/Contents/MacOS/tun-manager-menubar"
 	cp "$(APP_ICON)" "$(APP)/Contents/Resources/AppIcon.icns"
 	# Patched on the copy, so the committed plist stays a complete, lintable
@@ -131,6 +142,45 @@ notarize: app
 	ditto -c -k --keepParent "$(APP)" "$(ZIP)"
 	@$(MAKE) verify
 	@echo "notarised: $(ZIP) can be given to somebody"
+
+# The bundle as it is published: universal, notarised, stapled, and carrying the
+# tag it was cut from.
+#
+# Deliberately not part of `make release` at the repository root. That gate must
+# not start requiring Xcode, and a Swift failure must not be able to hold back a
+# Go release — the two ship on the same tag, they do not share a build.
+#
+# Every check refuses rather than repairs, because the cost lands on whoever
+# downloads the result: a bundle built off a tag carries a version number that
+# matches no commit, and one built as the development flavour is a different
+# application wearing the release's name.
+release:
+	@test -z "$$(git status --porcelain)" \
+		|| { echo "the tree is dirty: the bundle would claim a version nobody can check out"; exit 1; }
+	@git describe --exact-match --tags HEAD >/dev/null 2>&1 \
+		|| { echo "HEAD carries no tag: cut the release from the repository root first"; exit 1; }
+	@test "$(FLAVOUR)" = release \
+		|| { echo "FLAVOUR=$(FLAVOUR) would publish the development build"; exit 1; }
+	$(MAKE) notarize ARCHS="arm64 x86_64" ZIP="$(RELEASE_ZIP)"
+	@lipo -archs "$(APP)/Contents/MacOS/tun-manager-menubar" | grep -qw x86_64 \
+		|| { echo "the binary is not universal: Intel Macs would download nothing that runs"; exit 1; }
+	@echo "release bundle: $(RELEASE_ZIP) ($(VERSION))"
+
+# Attaches the bundle to the release the tag produced. Separate from `release`
+# above because the two wait on different things: notarisation is minutes of
+# Apple's time, and the release itself does not exist until CI is green. They
+# finish in either order, and this is the half that needs both.
+publish:
+	@command -v gh >/dev/null 2>&1 || { echo "gh not installed: brew install gh"; exit 1; }
+	@test -f "$(RELEASE_ZIP)" || { echo "no $(RELEASE_ZIP): run make release first"; exit 1; }
+	@gh release view "$(VERSION)" >/dev/null 2>&1 \
+		|| { echo "no $(VERSION) release yet: CI cuts it once the tagged commit is green"; exit 1; }
+	@# Re-checked here rather than trusted from `release`: the zip on disk may
+	@# predate the tag, and an un-notarised upload is only discovered by whoever
+	@# downloads it.
+	@$(MAKE) verify
+	gh release upload "$(VERSION)" "$(RELEASE_ZIP)" --clobber
+	@echo "attached $(RELEASE_ZIP) to $(VERSION)"
 
 # The real gate, and only meaningful once notarised — which is why spctl lives
 # here and not in `app`, where it could never pass.

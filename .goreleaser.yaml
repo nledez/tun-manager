@@ -89,3 +89,19 @@ release:
     source with `make build`.
 
     tun-manager runs as root: the WireGuard control sockets are root-only.
+
+    ## The menu bar application
+
+    `tun-manager-menubar_{{ .Version }}_darwin_universal.zip` is optional: a
+    menu bar item showing what `tun-manager` knows about your tunnels. Unlike
+    the binaries above it is signed and notarized, so it opens on a double
+    click with nothing to clear first.
+
+    ```sh
+    unzip tun-manager-menubar_{{ .Version }}_darwin_universal.zip
+    mv "Tun Manager.app" /Applications/
+    ```
+
+    It is built and attached separately, and appears here shortly after the
+    release itself: notarization is Apple's time, not this workflow's. It needs
+    macOS 26.

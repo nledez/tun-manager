@@ -704,6 +704,19 @@ make release VERSION=0.1.0
 make release VERSION=0.1.0 DRY_RUN=1   # every check, no tag
 ```
 
+The menu bar application ships on the same tag and through a different route.
+CI cannot sign it: the Developer ID key stays on the machine that holds it,
+rather than in a repository secret that anyone with write access could sign
+with. So the bundle is notarised locally and attached afterwards, which is also
+what keeps this gate free of Xcode.
+
+```sh
+make macos-release   # universal, notarised, stapled, named after the tag
+make macos-publish   # attaches it to the release CI cut
+```
+
+[`macos/README.md`](macos/README.md) covers what each step refuses and why.
+
 CI runs the same checks on macOS, the only platform this targets, and publishes
 coverage to Coveralls on every push and pull request. It also runs the release
 pipeline short of publishing, so a broken `.goreleaser.yaml` fails there rather
