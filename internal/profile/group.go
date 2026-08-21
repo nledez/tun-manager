@@ -2,6 +2,8 @@ package profile
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -111,16 +113,39 @@ func writeNew(path, group, tunnel string) error {
 		return err
 	}
 	body := fmt.Sprintf("groups:\n  %s:\n    - %s\n", group, tunnel)
-	return writeNoFollow(path, []byte(body), defaultConfigMode)
+	// Through a temporary file and a rename, like a rewrite: the file may not
+	// exist, or may exist and be empty, and in either case the name may be
+	// something somebody else planted. Renaming replaces the name and leaves
+	// whatever was behind it alone.
+	return writeThroughTemp(path, []byte(body), defaultConfigMode)
 }
 
-// writeNoFollow writes a file without following a symbolic link at the path or
-// on the way to it.
-func writeNoFollow(path string, body []byte, mode os.FileMode) error {
-	// No boundary: this package does not know whose home the file is under, so
-	// only the component being written is judged. What is above it is checked by
-	// privdrop, which does know.
-	f, err := fsx.CreateNoFollow("", path, mode)
+// tempSuffix names the file a rewrite goes through. Random, so that nobody can
+// have got there first; a variable so a test can pin it and plant something at
+// the name to prove that being there is what gets refused.
+var tempSuffix = func() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		// crypto/rand does not fail on darwin. If it ever did, a predictable
+		// name would be worse than no rewrite at all.
+		return ""
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+// writeThroughTemp writes a file by way of one that did not exist a moment ago,
+// under a name nobody could have guessed, and moves it into place.
+//
+// The name being unguessable and the create being exclusive are the same
+// defence twice: O_NOFOLLOW refuses a symbolic link at the name and says
+// nothing about a hard one, because there is nothing to follow - the name
+// simply is the file. Renaming over the destination replaces the *name*, so a
+// link somebody left there loses its name and its target keeps its contents.
+func writeThroughTemp(path string, body []byte, mode os.FileMode) error {
+	tmp := path + "." + tempSuffix() + ".tmp"
+	defer fsx.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
+
+	f, err := fsx.CreateFresh("", tmp, mode)
 	if err != nil {
 		return err
 	}
@@ -128,7 +153,10 @@ func writeNoFollow(path string, body []byte, mode os.FileMode) error {
 		f.Close() //nolint:errcheck // the write is the failure being reported
 		return err
 	}
-	return f.Close()
+	if err := fsx.CloseFile(f); err != nil {
+		return err
+	}
+	return fsx.Rename(tmp, path)
 }
 
 // replace rewrites the file through a temporary one in the same directory, so
@@ -156,15 +184,15 @@ func replace(path string, doc *yaml.Node) error {
 	}
 
 	// Written beside the original and moved over it, so an interrupted write
-	// cannot leave the configuration truncated.
-	tmp := path + ".tmp"
-	defer fsx.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
-
+	// cannot leave the configuration truncated - and under an unguessable name,
+	// because this directory belongs to the user and root is the one writing in
+	// it. The old fixed name, config.yaml.tmp, was an invitation: leave a hard
+	// link there pointing at any root-owned file you can reach, wait for the
+	// next import, and root truncates that file and writes this document into
+	// it.
+	//
 	// The umask can take a bite out of mode, which tightens the file and never
 	// widens it. Tightening a configuration is safe; a chmod to put the bit
 	// back would be a branch that cannot fail on a file just written.
-	if err := writeNoFollow(tmp, buf.Bytes(), mode); err != nil {
-		return err
-	}
-	return fsx.Rename(tmp, path)
+	return writeThroughTemp(path, buf.Bytes(), mode)
 }

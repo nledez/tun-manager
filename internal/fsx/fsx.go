@@ -148,6 +148,23 @@ func CreateNoFollow(under, path string, mode os.FileMode) (*os.File, error) {
 	return OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
 }
 
+// CreateFresh creates a file that did not exist a moment ago, and refuses
+// anything that did.
+//
+// O_EXCL, which is the part O_NOFOLLOW cannot cover. A symbolic link at the
+// name is refused by O_NOFOLLOW; a *hard* link is not, because there is nothing
+// to follow - the name simply is the file. On darwin a plain user can make one
+// to a root-owned file they can reach, so a name root is about to create in a
+// directory that user can write is a name that may already be somebody else's
+// file, and O_TRUNC on it is root emptying that file and writing this one's
+// contents into it.
+func CreateFresh(under, path string, mode os.FileMode) (*os.File, error) {
+	if err := NoSymlinksUnder(under, Dir(path)); err != nil {
+		return nil, err
+	}
+	return OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+}
+
 // MkdirAllNoFollow makes a directory and its parents, refusing to walk through
 // a symbolic link below under.
 //

@@ -8,6 +8,8 @@ package privdrop
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -121,10 +123,24 @@ func (u User) Chown(path string) error {
 // is set on the open descriptor rather than on the path — there is no name in a
 // descriptor to swap between the write and the chown.
 func (u User) WriteFile(path string, data []byte, mode os.FileMode) error {
-	f, err := fsx.CreateNoFollow(u.HomeDir, path, mode)
+	// Through a file that did not exist a moment ago, under a name nobody could
+	// have guessed, and then moved into place.
+	//
+	// Writing to the name directly was the hole. O_NOFOLLOW refuses a symbolic
+	// link at it, and says nothing about a hard one - there is nothing to
+	// follow, the name simply is the file - and on darwin a plain user can make
+	// a hard link to a root-owned file they can reach. Left at this name, root
+	// truncated that file, wrote into it, and then handed it to the user: a
+	// file root owned became one they could fill in with anything. The rename
+	// below replaces the *name*, so whatever was there keeps its contents and
+	// its owner.
+	tmp := path + "." + tempName() + ".tmp"
+	f, err := fsx.CreateFresh(u.HomeDir, tmp, mode)
 	if err != nil {
 		return err
 	}
+	defer fsx.Remove(tmp) //nolint:errcheck // already gone once the rename succeeded
+
 	if u.Demotable {
 		if err := fsx.FchownFile(f, u.UID, u.GID); err != nil {
 			f.Close() //nolint:errcheck // the chown is the failure being reported
@@ -135,7 +151,23 @@ func (u User) WriteFile(path string, data []byte, mode os.FileMode) error {
 		f.Close() //nolint:errcheck // likewise
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	return f.Close()
+	if err := fsx.CloseFile(f); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return fsx.Rename(tmp, path)
+}
+
+// tempName names the file a write goes through. Random, so that nobody can have
+// got there first; a variable so a test can pin it and prove that something
+// already at the name is what gets refused.
+var tempName = func() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		// crypto/rand does not fail on darwin. If it ever did, a predictable
+		// name would be worse than not writing at all.
+		return ""
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // MkdirAll makes a directory under the user's home and hands it back to them,

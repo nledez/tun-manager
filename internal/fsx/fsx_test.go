@@ -236,3 +236,57 @@ func TestCreateNoFollowRefusesALinkOnTheWayToThePath(t *testing.T) {
 		t.Error("the file was written on the other side of the link")
 	}
 }
+
+func TestCreateFreshRefusesAFileThatIsAlreadyThere(t *testing.T) {
+	// The point of it. O_NOFOLLOW covers a symbolic link at the name and says
+	// nothing about a hard link, because there is nothing to follow - the name
+	// simply is the file, and on darwin a plain user can make one to a
+	// root-owned file they can reach.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taken")
+	if err := os.WriteFile(path, []byte("somebody else's"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if f, err := CreateFresh("", path, 0o600); err == nil {
+		f.Close()
+		t.Error("CreateFresh opened a file that was already there")
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "somebody else's" {
+		t.Errorf("the file was touched: %q, %v", body, err)
+	}
+}
+
+func TestCreateFreshWritesWhereNothingWasThere(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new")
+
+	f, err := CreateFresh("", path, 0o600)
+	if err != nil {
+		t.Fatalf("CreateFresh: %v", err)
+	}
+	if _, err := f.WriteString("mine"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if body, err := os.ReadFile(path); err != nil || string(body) != "mine" {
+		t.Errorf("read back %q, %v", body, err)
+	}
+}
+
+func TestCreateFreshWillNotWalkThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "elsewhere")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if f, err := CreateFresh(dir, filepath.Join(dir, "elsewhere", "new"), 0o600); err == nil {
+		f.Close()
+		t.Error("CreateFresh created a file through a symbolic link")
+	}
+}

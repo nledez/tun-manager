@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,11 +276,13 @@ func TestAddToGroupReportsADanglingDirectoryOnItsPath(t *testing.T) {
 }
 
 func TestAddToGroupReportsATemporaryFileItCannotWrite(t *testing.T) {
-	// The rewrite goes through a file beside the original. A directory sitting
-	// on that name is the one way to stop it without touching permissions,
-	// which would prove nothing when the suite runs under sudo.
+	// The rewrite goes through a file beside the original, under a name drawn
+	// at random. Pinned here so the test can put something on it: a directory,
+	// which is the one way to stop the write without touching permissions -
+	// those prove nothing when the suite runs under sudo.
 	path := writeConfig(t, "groups:\n  all:\n    - alpha\n")
-	if err := os.Mkdir(path+".tmp", 0o755); err != nil {
+	pinTempSuffix(t, "fixed")
+	if err := os.Mkdir(path+".fixed.tmp", 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
@@ -335,5 +338,71 @@ func TestAddToGroupReportsAWriteItCannotFinish(t *testing.T) {
 	}
 	if readConfig(t, path) != before {
 		t.Error("the configuration was rewritten anyway")
+	}
+}
+
+// pinTempSuffix fixes the random part of the temporary name for one test, so a
+// test can arrange for something to be sitting on it.
+func pinTempSuffix(t *testing.T, suffix string) {
+	t.Helper()
+	was := tempSuffix
+	tempSuffix = func() string { return suffix }
+	t.Cleanup(func() { tempSuffix = was })
+}
+
+func TestARewriteWillNotWriteThroughAFileSomebodyLeftAtTheTemporaryName(t *testing.T) {
+	// The configuration is under the user's home, and root rewrites it there.
+	// A symbolic link on the way is refused already - but O_NOFOLLOW says
+	// nothing about a *hard* link, and on darwin a plain user can make one to a
+	// root-owned file they can reach. Leave one at the name the rewrite is
+	// about to use and root truncates whatever is at the other end of it and
+	// writes YAML into it: an arbitrary root-owned file, chosen by whoever
+	// planted the link.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("groups:\n  all:\n    - alpha\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	victim := filepath.Join(dir, "victim")
+	const precious = "something root owns\n"
+	if err := os.WriteFile(victim, []byte(precious), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	// What an attacker plants and then waits on. The name is pinned so this
+	// test does not depend on guessing a random one: what is being proved is
+	// that a file already at the name is refused, not that the name is hard to
+	// guess - both are true and only one is a test.
+	pinTempSuffix(t, "fixed")
+	if err := os.Link(victim, path+".fixed.tmp"); err != nil {
+		t.Fatalf("hard link: %v", err)
+	}
+
+	// It fails, and that is fine: what matters is on the next line.
+	_ = AddToGroup(path, GroupAll, "bravo")
+
+	body, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatalf("read victim: %v", err)
+	}
+	if string(body) != precious {
+		t.Errorf("the file behind the hard link now holds %q: root wrote through it", body)
+	}
+}
+
+func TestAddToGroupReportsATemporaryFileItCannotClose(t *testing.T) {
+	// The write is only really done once the close says so. A full disk reports
+	// itself there and nowhere else, and a rename over the original at that
+	// point would put a truncated configuration in its place.
+	path := writeConfig(t, "groups:\n  all:\n    - alpha\n")
+	previous := fsx.CloseFile
+	fsx.CloseFile = func(*os.File) error { return errors.New("no space left on device") }
+	t.Cleanup(func() { fsx.CloseFile = previous })
+
+	if err := AddToGroup(path, GroupAll, "bravo"); err == nil {
+		t.Error("AddToGroup reported success on a file it could not close")
+	}
+	if got := readConfig(t, path); strings.Contains(got, "bravo") {
+		t.Errorf("the configuration was changed anyway:\n%s", got)
 	}
 }

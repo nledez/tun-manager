@@ -364,11 +364,11 @@ func TestWriteFileRefusesALinkSomebodyPlanted(t *testing.T) {
 	}
 	u := User{UID: 501, GID: 20, Demotable: true, HomeDir: home}
 
-	err := u.WriteFile(path, []byte("a picture"), 0o644)
+	// It may or may not report a failure: writing goes through a name of its
+	// own and then renames over this one, which replaces the link rather than
+	// following it. What must be true is on the next lines.
+	_ = u.WriteFile(path, []byte("a picture"), 0o644)
 
-	if err == nil {
-		t.Fatal("WriteFile followed a symbolic link")
-	}
 	body, readErr := os.ReadFile(target)
 	if readErr != nil || string(body) != "original" {
 		t.Errorf("what the link pointed at was written through: %q, %v", body, readErr)
@@ -487,5 +487,61 @@ func TestChownChangesTheLinkAndNotWhatItPointsAt(t *testing.T) {
 
 	if err := u.Chown(link); err != nil {
 		t.Errorf("Chown = %v, want the link itself to have been changed", err)
+	}
+}
+
+func TestWritingWillNotWriteThroughAFileSomebodyLeftAtTheName(t *testing.T) {
+	// This is root writing into a directory the user owns, and O_NOFOLLOW
+	// covers a symbolic link there but not a hard one - there is nothing to
+	// follow, the name simply is the file. On darwin a plain user can make a
+	// hard link to a root-owned file they can reach. Left at the name this
+	// writes to, root truncates that file, writes a picture into it, and then
+	// hands it to the user: a root-owned file becomes theirs to fill in.
+	home := t.TempDir()
+	victim := filepath.Join(home, "victim")
+	const precious = "something root owns\n"
+	if err := os.WriteFile(victim, []byte(precious), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+
+	path := filepath.Join(home, "icon.png")
+	if err := os.Link(victim, path); err != nil {
+		t.Fatalf("hard link: %v", err)
+	}
+
+	u := User{Username: "someone", UID: os.Getuid(), GID: os.Getgid(), HomeDir: home}
+	if err := u.WriteFile(path, []byte("a picture"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if body, err := os.ReadFile(path); err != nil || string(body) != "a picture" {
+		t.Errorf("the write did not land where it was meant to: %q, %v", body, err)
+	}
+
+	body, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatalf("read victim: %v", err)
+	}
+	if string(body) != precious {
+		t.Errorf("the file behind the hard link now holds %q: root wrote through it", body)
+	}
+}
+
+func TestWriteFileReportsAFileItCannotClose(t *testing.T) {
+	// The write is only really done once the close says so, and what is being
+	// written here is put in place by a rename afterwards: reporting success
+	// would move an incomplete file over the name.
+	home := t.TempDir()
+	previous := fsx.CloseFile
+	fsx.CloseFile = func(*os.File) error { return errors.New("no space left on device") }
+	t.Cleanup(func() { fsx.CloseFile = previous })
+
+	u := User{Username: "someone", UID: os.Getuid(), GID: os.Getgid(), HomeDir: home}
+	err := u.WriteFile(filepath.Join(home, "icon.png"), []byte("a picture"), 0o644)
+
+	if err == nil {
+		t.Error("WriteFile reported success on a file it could not close")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "icon.png")); statErr == nil {
+		t.Error("an unfinished file was moved into place")
 	}
 }
