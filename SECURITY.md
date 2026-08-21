@@ -71,8 +71,8 @@ it.
 
 ### `~/.config/tun-manager/config.yaml` — not trusted
 
-It holds the refresh interval, notification settings, network contexts, groups
-and per-tunnel overrides. It is under your home directory, which means the
+It holds the refresh interval, network contexts, groups and per-tunnel
+overrides. It is under your home directory, which means the
 attacker above can rewrite it whenever it likes.
 
 **Nothing in it may become a path that root executes, writes or removes.** That
@@ -146,13 +146,15 @@ administrator can replace the binary you are about to run with `sudo`. Installin
 elsewhere, or checking what you run, is the remedy — and it is the reason the
 release archives are checksummed.
 
-**Notifications go through one absolute path.** `/usr/bin/osascript`, never a
-`PATH` lookup, and there is no command that posts a sample -- the application's
-About panel does that instead: `sudo` on macOS does not reset `PATH`, so a program looking up a
-tool by name as root would be running a name chosen by whoever typed `sudo`.
-`terminal-notifier` support was removed for that reason — being preferred when
-installed made the tool root reached for a matter of what was on that `PATH`,
-and the only thing it bought was a thumbnail.
+**`tun-manager` starts no process but `wg-quick`.** It used to start one more —
+`osascript`, demoted to the user who ran `sudo`, to post a notification — and
+that whole path is gone: `Tun Manager.app` raises notifications from a session
+that is already the right one. What went with it is a program running as root
+composing a script for an interpreter and starting a GUI process under somebody
+else's identity. That was two questions to keep answering — `sudo` on macOS does
+not reset `PATH`, so a tool looked up by name as root is a name chosen by whoever
+typed `sudo`; and the script was text this program composed, so it had to be
+escaped correctly forever. Neither has to be answered now.
 
 **The demo publisher is not root, on purpose.** A publisher named with
 `--socket` is not checked for being root, because the simulator does not run as

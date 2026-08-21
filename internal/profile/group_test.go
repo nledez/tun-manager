@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -54,7 +55,7 @@ func TestAddToGroupKeepsEveryComment(t *testing.T) {
 	// This is a file the user maintains by hand. Re-marshalling the Config
 	// struct would produce a correct configuration that had lost all of this.
 	body := `# tun-manager configuration
-notify: true
+refresh_interval: 90s
 
 groups:
   # everything, for the stop-all key
@@ -73,7 +74,7 @@ groups:
 		"# tun-manager configuration",
 		"# everything, for the stop-all key",
 		"# the important one",
-		"notify: true",
+		"refresh_interval: 90s",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q was lost:\n%s", want, got)
@@ -124,7 +125,7 @@ func TestAddToGroupIsIdempotent(t *testing.T) {
 }
 
 func TestAddToGroupCreatesTheGroupWhenTheFileHasNone(t *testing.T) {
-	path := writeConfig(t, "notify: true\n")
+	path := writeConfig(t, "refresh_interval: 90s\n")
 
 	if err := AddToGroup(path, GroupAll, "alpha"); err != nil {
 		t.Fatalf("AddToGroup: %v", err)
@@ -137,8 +138,8 @@ func TestAddToGroupCreatesTheGroupWhenTheFileHasNone(t *testing.T) {
 	if got := cfg.Groups[GroupAll]; len(got) != 1 || got[0] != "alpha" {
 		t.Errorf("all = %v, want alpha", got)
 	}
-	if !cfg.Notify {
-		t.Error("notify = false, want the untouched key kept")
+	if cfg.RefreshInterval != 90*time.Second {
+		t.Errorf("refresh_interval = %s, want the untouched key kept", cfg.RefreshInterval)
 	}
 }
 

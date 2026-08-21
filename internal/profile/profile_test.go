@@ -21,7 +21,6 @@ const examplePath = "../../configs/config.example.yaml"
 // documentation (RFC 5737).
 const sampleYAML = `
 refresh_interval: 5m
-notify: true
 
 contexts:
   - name: office
@@ -59,9 +58,6 @@ func TestLoadReadsScalarSettings(t *testing.T) {
 
 	if cfg.RefreshInterval != 5*time.Minute {
 		t.Errorf("RefreshInterval = %v, want 5m", cfg.RefreshInterval)
-	}
-	if !cfg.Notify {
-		t.Error("Notify = false, want true")
 	}
 	if len(cfg.Contexts) != 1 || cfg.Contexts[0].Name != "office" {
 		t.Errorf("Contexts = %+v", cfg.Contexts)
@@ -263,62 +259,6 @@ func TestLoadReportsAReadFailureThatIsNotAMissingFile(t *testing.T) {
 	}
 }
 
-func TestAConfigurationFileWithoutTheFeedKeyStillGetsTheFeed(t *testing.T) {
-	// The keys are optional and what is left out falls back to the built-in
-	// default — which for a bool means the zero value unless Load is careful,
-	// and false is the opposite of what Default says. This is not theoretical:
-	// it turned the feed off for every configuration written before the feed
-	// existed, silently, with the menu bar reporting "not running" while
-	// tun-manager was running.
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("notify: true\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if !cfg.Notify {
-		t.Error("Notify = false, want the default for a key the file does not mention")
-	}
-}
-
-func TestAConfigurationFileWithoutTheNotifyKeyStillNotifies(t *testing.T) {
-	// The same trap, and it has been there longer.
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("notify: true\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if !cfg.Notify {
-		t.Error("Notify = false, want the default for a key the file does not mention")
-	}
-}
-
-func TestANotificationTurnedOffInTheFileStaysOff(t *testing.T) {
-	// The other half: a default that cannot be overridden is not a default.
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("notify: false\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if cfg.Notify {
-		t.Error("Notify = true, want it off")
-	}
-}
-
 func TestAFieldWrittenOutAsBlankFallsBackToItsDefault(t *testing.T) {
 	// Not the same as leaving a key out, which Load handles by starting from the
 	// defaults. This is a document that mentions a key and gives it nothing —
@@ -392,7 +332,7 @@ func TestAKeyThisProgramDoesNotKnowIsRefused(t *testing.T) {
 	// `feeed: false`, watches nothing happen, and has no way to find out why.
 	// Refusing costs a clear failure at startup instead of a silent one later.
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("notify: true\nfeeed: false\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("feeed: false\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -422,7 +362,7 @@ func TestAnEmptyConfigurationFileIsAllDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if !cfg.Notify || cfg.ConfigDir != ConfigDir {
+	if cfg.RefreshInterval != DefaultRefresh || cfg.ConfigDir != ConfigDir {
 		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
 	}
 }
@@ -438,7 +378,7 @@ func TestAFileThatIsOnlyCommentsIsAllDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if !cfg.Notify {
+	if cfg.RefreshInterval != DefaultRefresh {
 		t.Errorf("cfg = %+v, want the built-in defaults", cfg)
 	}
 }
@@ -466,7 +406,7 @@ func TestLoadRefusesConfigDirAndSaysWhereItWent(t *testing.T) {
 }
 
 func TestTheConfigDirectoryIsTheFixedOneByDefault(t *testing.T) {
-	cfg := loadString(t, "notify: true\n")
+	cfg := loadString(t, "")
 
 	if cfg.ConfigDir != ConfigDir {
 		t.Errorf("ConfigDir = %q, want the fixed %q", cfg.ConfigDir, ConfigDir)
@@ -521,5 +461,28 @@ func TestApplyDefaultsFillsEveryBlankField(t *testing.T) {
 	}
 	if cfg.Groups == nil {
 		t.Error("Groups is nil, want an empty map so the group commands have something to read")
+	}
+}
+
+func TestTheNotifyKeyIsRefusedAndSaysWhereNotificationsWent(t *testing.T) {
+	// It used to turn on notifications posted by this program: root starting a
+	// GUI process under somebody else's identity, for a banner. A key that
+	// silently stopped applying would be worse than a file that will not load,
+	// which is the same reason the keys that moved to the privileged file are
+	// refused rather than ignored.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("notify: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("the notify key was accepted, want a refusal saying where notifications went")
+	}
+	for _, want := range []string{"notify", "Tun Manager.app", "Remove the key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
 	}
 }

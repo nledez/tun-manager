@@ -12,7 +12,7 @@ func TestASkippedConfIsSaidOnceRatherThanOnEveryRefresh(t *testing.T) {
 	// A refresh happens every few minutes. The same warning forty times an hour
 	// is a warning somebody turns the log pane off to escape - and turning it
 	// off is how the next real failure goes unseen.
-	m := newModel(&app.App{}, nil, nil, nil)
+	m := newModel(&app.App{}, nil, nil)
 	note := "/private/wireguard/config/two words.conf: ignored, " + wgconf.NameRule
 
 	m.noteIgnored([]string{note})

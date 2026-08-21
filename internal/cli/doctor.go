@@ -83,7 +83,6 @@ func Doctor(cfg *profile.Config, priv *profile.Privileged, u privdrop.User, euid
 	}
 	return append(checks, []Check{
 		checkGroups(cfg),
-		checkNotifications(u),
 		checkFeed(priv, u),
 	}...)
 }
@@ -334,17 +333,6 @@ func checkGroups(cfg *profile.Config) Check {
 		Status: Pass,
 		Detail: fmt.Sprintf("%d group(s), %d membership(s), %d override(s)", len(cfg.Groups), total, len(cfg.Overrides)),
 	}
-}
-
-func checkNotifications(u privdrop.User) Check {
-	if !u.Demotable {
-		return Check{
-			Name:   "notifications",
-			Status: Warn,
-			Detail: "no SUDO_USER: osascript cannot reach a GUI session, notifications are disabled",
-		}
-	}
-	return Check{Name: "notifications", Status: Pass, Detail: "posted as " + u.Username}
 }
 
 // checkFeed reports whether the status feed can bind, and who would be allowed

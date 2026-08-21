@@ -137,24 +137,6 @@ func TestDoctorFailsOnAConfigDirWithoutTunnels(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsWhenNotificationsCannotReachTheSession(t *testing.T) {
-	cfg, priv, u := healthyEnv(t)
-	u.Demotable = false
-
-	checks := Doctor(cfg, priv, u, 0, "test")
-
-	c, ok := findCheck(checks, "notification")
-	if !ok {
-		t.Fatalf("no notification check in %+v", checks)
-	}
-	if c.Status != Warn {
-		t.Errorf("notification check status = %v, want %v", c.Status, Warn)
-	}
-	if !AllPassed(checks) {
-		t.Error("AllPassed = false, want true: a warning is not a failure")
-	}
-}
-
 func TestDoctorReportsWhichConfigFileIsInUse(t *testing.T) {
 	cfg, priv, u := healthyEnv(t)
 	cfg.IsDefault = true

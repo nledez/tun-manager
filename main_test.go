@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/fsx"
 	"ledez.net/tun-manager/internal/netctx"
-	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
@@ -122,8 +120,8 @@ func testEnv(t *testing.T, runner wg.Runner, live ...string) *env {
 		enforce:        func(string) error { return nil },
 		privilegedPath: profile.PrivilegedPath,
 		config: func() (*profile.Config, privdrop.User, error) {
-			// A real directory: notify.New writes the icon into the user's
-			// cache, and a test must not write outside its own tree.
+			// A real directory: the configuration and its backups are written
+			// under it, and a test must not write outside its own tree.
 			return cfg, privdrop.User{Username: "operator", HomeDir: home}, nil
 		},
 		build: func() (*app.App, error) {
@@ -425,7 +423,7 @@ func TestConfigPathSitsUnderTheRealUserHome(t *testing.T) {
 func TestTUIIsTheDefaultCommand(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var started bool
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error {
+	e.interactive = func(context.Context, *app.App, *feed.Server, []string) error {
 		started = true
 		return nil
 	}
@@ -438,48 +436,10 @@ func TestTUIIsTheDefaultCommand(t *testing.T) {
 	}
 }
 
-func TestTUIGetsANotifierBuiltFromTheConfiguration(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server, _ []string) error {
-		got = n
-		return nil
-	}
-
-	if err := e.run([]string{"tui"}); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-
-	if got == nil {
-		t.Fatal("notifier = nil, want one built from the configuration")
-	}
-	if got.User.Username != "operator" {
-		t.Errorf("notifier user = %q, want the pre-sudo user", got.User.Username)
-	}
-}
-
-func TestTUIUsesAnInjectedNotifier(t *testing.T) {
-	e := testEnv(t, &fakeRunner{})
-	want := &notify.Notifier{Enabled: false}
-	e.notifier = want
-	var got *notify.Notifier
-	e.interactive = func(_ context.Context, _ *app.App, n *notify.Notifier, _ *feed.Server, _ []string) error {
-		got = n
-		return nil
-	}
-
-	if err := e.run(nil); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if got != want {
-		t.Error("the injected notifier was replaced")
-	}
-}
-
 func TestTUIFailureIsReported(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	boom := errors.New("no terminal")
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error { return boom }
+	e.interactive = func(context.Context, *app.App, *feed.Server, []string) error { return boom }
 
 	if err := e.run(nil); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
@@ -489,7 +449,7 @@ func TestTUIFailureIsReported(t *testing.T) {
 func TestTUIBuildFailureStopsBeforeStarting(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	e.build = func() (*app.App, error) { return nil, errors.New("no wireguard socket") }
-	e.interactive = func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error {
+	e.interactive = func(context.Context, *app.App, *feed.Server, []string) error {
 		t.Fatal("the TUI started despite a failed build")
 		return nil
 	}
@@ -502,7 +462,7 @@ func TestTUIBuildFailureStopsBeforeStarting(t *testing.T) {
 func TestTheInterfaceStartsWithoutAFeedWhenItIsOff(t *testing.T) {
 	e := testEnv(t, &fakeRunner{})
 	var got *feed.Server
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, _ []string) error {
+	e.interactive = func(_ context.Context, _ *app.App, f *feed.Server, _ []string) error {
 		got = f
 		return nil
 	}
@@ -532,7 +492,7 @@ func TestTheInterfaceStartsWithAFeedWhenItIsOn(t *testing.T) {
 		return priv, nil
 	}
 	var got *feed.Server
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, _ []string) error {
+	e.interactive = func(_ context.Context, _ *app.App, f *feed.Server, _ []string) error {
 		got = f
 		// Checked here, not after e.run returns: runTUI cancels the feed's
 		// context once this callback returns, and its own shutdown removes
@@ -571,7 +531,7 @@ func TestTheInterfaceStepsOverAFeedThatCannotBind(t *testing.T) {
 	var got *feed.Server
 	var told []string
 	started := false
-	e.interactive = func(_ context.Context, _ *app.App, _ *notify.Notifier, f *feed.Server, problems []string) error {
+	e.interactive = func(_ context.Context, _ *app.App, f *feed.Server, problems []string) error {
 		got, told, started = f, problems, true
 		return nil
 	}
@@ -855,7 +815,7 @@ func TestRunTUIStopsWithItsContext(t *testing.T) {
 	cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- runTUI(ctx, nil, nil, nil, nil) }()
+	go func() { done <- runTUI(ctx, nil, nil, nil) }()
 
 	select {
 	case err := <-done:
@@ -933,41 +893,6 @@ func TestABatchReportsThatTheApplicationCouldNotBeBuilt(t *testing.T) {
 	if err := e.run([]string{"up", "--group", "needed"}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
 	}
-}
-
-func TestMain(m *testing.M) {
-	dir, err := stubNotificationTools()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "stub the notification tools:", err)
-		os.Exit(1)
-	}
-
-	code := m.Run()
-
-	// Not deferred: os.Exit does not run deferred calls.
-	os.RemoveAll(dir) //nolint:errcheck // the suite is over either way
-	os.Exit(code)
-}
-
-// stubNotificationTools points the notification command at a harmless
-// stand-in, so no test in this package can reach the desktop.
-//
-// internal/notify posts through one absolute path. A test that builds a
-// notifier without pointing Binary at a script of its own would otherwise post
-// a real notification onto the screen of whoever is running the suite, with
-// nothing failing to say so.
-func stubNotificationTools() (string, error) {
-	dir, err := os.MkdirTemp("", "notify-stubs")
-	if err != nil {
-		return "", err
-	}
-	script := filepath.Join(dir, "osascript")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		os.RemoveAll(dir) //nolint:errcheck // the error being returned is the one that matters
-		return "", err
-	}
-	notify.OsascriptPath = script
-	return dir, nil
 }
 
 func TestImportAddsTheTunnelToTheConfiguration(t *testing.T) {
@@ -1201,7 +1126,7 @@ func TestAConfigurationThatCannotBeReadIsStillReportedThroughTheOverrides(t *tes
 func TestAnotherConfigurationFileCanBeRead(t *testing.T) {
 	isolatedHome(t)
 	path := filepath.Join(t.TempDir(), "demo.yaml")
-	if err := os.WriteFile(path, []byte("notify: false\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("refresh_interval: 90s\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -1217,8 +1142,8 @@ func TestAnotherConfigurationFileCanBeRead(t *testing.T) {
 	if cfg.Path != path {
 		t.Errorf("Path = %q, want %q", cfg.Path, path)
 	}
-	if cfg.Notify {
-		t.Error("Notify = true, want the file's own value")
+	if cfg.RefreshInterval != 90*time.Second {
+		t.Errorf("RefreshInterval = %s, want the file's own value", cfg.RefreshInterval)
 	}
 }
 

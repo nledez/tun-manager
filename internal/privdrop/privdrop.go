@@ -1,20 +1,24 @@
 // Package privdrop recovers the identity of the user who ran `sudo tun-manager`.
 //
 // The whole program runs as root, which breaks two things: HOME points at
-// /var/root instead of the real user's home, and GUI-facing commands such as
-// osascript cannot reach the user's session. Both are fixed by looking at
-// SUDO_USER.
+// /var/root instead of the real user's home, so the configuration would be read
+// from the wrong place, and anything written under that home would belong to
+// root rather than to the person who has to edit it next. Both are fixed by
+// looking at SUDO_USER.
+//
+// It starts no processes. It used to run one - osascript, demoted, to post a
+// notification - and that went with the notifications themselves: a program
+// running as root starting a GUI process under somebody else's identity is a
+// lot of machinery to keep for a banner, and Tun Manager.app posts them from a
+// session that is already the right one.
 package privdrop
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
-	"syscall"
 
 	"ledez.net/tun-manager/internal/fsx"
 )
@@ -72,24 +76,6 @@ func Resolve(getenv func(string) string, lookup LookupFunc) (User, error) {
 // ConfigDir returns the per-application configuration directory of the user.
 func (u User) ConfigDir(app string) string {
 	return filepath.Join(u.HomeDir, ".config", app)
-}
-
-// CommandContext builds a command that runs as the pre-sudo user when possible,
-// so that GUI-facing tools reach the right session. Without a demotable user
-// the command is returned unchanged and simply runs as root.
-//
-// The context matters: a GUI tool with nobody to talk to can hang, and the
-// caller must be able to give up on it.
-func (u User) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if !u.Demotable {
-		return cmd
-	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{Uid: uint32(u.UID), Gid: uint32(u.GID)},
-	}
-	cmd.Env = append(os.Environ(), "HOME="+u.HomeDir, "USER="+u.Username)
-	return cmd
 }
 
 // Chown hands a file created by the root process back to the real user, so the

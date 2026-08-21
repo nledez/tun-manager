@@ -1,13 +1,10 @@
 package privdrop
 
 import (
-	"context"
 	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 
 	"ledez.net/tun-manager/internal/fsx"
@@ -105,63 +102,12 @@ func mapEnv(m map[string]string) func(string) string {
 	return func(key string) string { return m[key] }
 }
 
-func TestCommandRunsAsTheRealUserWhenDemotable(t *testing.T) {
-	u := User{Username: "operator", UID: 1000, GID: 1000, HomeDir: "/home/operator", Demotable: true}
-
-	cmd := u.CommandContext(context.Background(), "/usr/bin/osascript", "-e", "beep")
-
-	if cmd.SysProcAttr == nil || cmd.SysProcAttr.Credential == nil {
-		t.Fatal("no credential set, want the command demoted")
-	}
-	if got := cmd.SysProcAttr.Credential.Uid; got != 1000 {
-		t.Errorf("uid = %d, want 1000", got)
-	}
-	if !slices.Contains(cmd.Env, "HOME=/home/operator") {
-		t.Errorf("env = %v, want HOME pointing at the real home", cmd.Env)
-	}
-	if !slices.Contains(cmd.Env, "USER=operator") {
-		t.Errorf("env = %v, want USER set", cmd.Env)
-	}
-}
-
-func TestCommandStaysAsIsWithoutADemotableUser(t *testing.T) {
-	// Not started through sudo: there is no other identity to drop to.
-	u := User{HomeDir: "/home/operator"}
-
-	cmd := u.CommandContext(context.Background(), "/bin/echo", "hi")
-
-	if cmd.SysProcAttr != nil {
-		t.Errorf("SysProcAttr = %+v, want none", cmd.SysProcAttr)
-	}
-	if len(cmd.Args) != 2 || cmd.Args[1] != "hi" {
-		t.Errorf("Args = %v, want the arguments preserved", cmd.Args)
-	}
-}
-
-func TestCommandIsRunnable(t *testing.T) {
-	u := User{HomeDir: t.TempDir()}
-
-	out, err := u.CommandContext(context.Background(), "/bin/echo", "hello").Output()
-	if err != nil {
-		t.Fatalf("Output: %v", err)
-	}
-
-	if strings.TrimSpace(string(out)) != "hello" {
-		t.Errorf("out = %q, want %q", out, "hello")
-	}
-}
-
 // chownCall is one recorded handover.
 type chownCall struct {
 	path     string
 	uid, gid int
 }
 
-// recordingChown makes every handover succeed and remembers what it was asked.
-// A real one can only ever be made to the identity the test process already
-// has, which proves nothing about whether the right one was chosen — and asking
-// for any other fails, unless the suite happens to run under sudo, in which
-// case it succeeds instead. Neither outcome is a test.
 func recordingChown(t *testing.T, calls *[]chownCall) {
 	t.Helper()
 
@@ -257,28 +203,6 @@ func TestCurrentReadsTheProcessEnvironment(t *testing.T) {
 
 	if got.HomeDir != "/home/operator" {
 		t.Errorf("HomeDir = %q, want %q", got.HomeDir, "/home/operator")
-	}
-}
-
-func TestCommandStopsWithItsContext(t *testing.T) {
-	// A notification that never returns must not leak a process for the life of
-	// the TUI.
-	u := User{HomeDir: t.TempDir()}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if err := u.CommandContext(ctx, "/bin/sleep", "5").Run(); err == nil {
-		t.Fatal("the command ran to completion with a cancelled context, want an error")
-	}
-}
-
-func TestCommandContextStillDemotes(t *testing.T) {
-	u := User{Username: "operator", UID: 1000, GID: 1000, HomeDir: "/home/operator", Demotable: true}
-
-	cmd := u.CommandContext(context.Background(), "/usr/bin/osascript", "-e", "beep")
-
-	if cmd.SysProcAttr == nil || cmd.SysProcAttr.Credential == nil {
-		t.Fatal("no credential set, want the command demoted")
 	}
 }
 

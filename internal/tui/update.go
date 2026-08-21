@@ -7,7 +7,6 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
-	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/rate"
@@ -114,17 +113,6 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if m.notifier != nil && m.lastHealth != nil {
-		transitions := notify.Diff(m.lastHealth, msg.view.Health())
-		if len(transitions) > 0 {
-			n := m.notifier
-			cmd = func() tea.Msg {
-				n.Notify(context.Background(), transitions)
-				return nil
-			}
-		}
-	}
-
 	if m.feed != nil {
 		f, published := m.feed, msg.view
 		cmd = tea.Batch(cmd, func() tea.Msg {
@@ -136,7 +124,6 @@ func (m Model) onView(msg viewMsg) (tea.Model, tea.Cmd) {
 	m.noteIgnored(msg.view.Ignored)
 
 	m.view = msg.view
-	m.lastHealth = msg.view.Health()
 	m.lastRefresh = msg.view.Taken
 	if m.cursor >= len(m.view.Rows) {
 		m.cursor = max(0, len(m.view.Rows)-1)

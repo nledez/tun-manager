@@ -16,7 +16,6 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
 	"ledez.net/tun-manager/internal/format"
-	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/rate"
@@ -89,8 +88,7 @@ type Feed interface {
 
 // Model is the TUI state.
 type Model struct {
-	app      *app.App
-	notifier *notify.Notifier
+	app *app.App
 	// feed publishes each view for whoever is watching from outside. Nil when
 	// the feed is switched off, which is the ordinary case.
 	feed     Feed
@@ -134,7 +132,6 @@ type Model struct {
 	quitting  bool
 	err       error
 
-	lastHealth  map[string]wg.Health
 	lastRefresh time.Time
 
 	// now is the clock the interface reads. Two things on screen depend on it,
@@ -151,10 +148,9 @@ func (m Model) clock() time.Time {
 }
 
 // New builds the initial model.
-func New(a *app.App, n *notify.Notifier) Model {
+func New(a *app.App) Model {
 	return Model{
 		app:      a,
-		notifier: n,
 		pings:    map[string]probe.Result{},
 		selected: map[string]bool{},
 		inFlight: map[string]string{},

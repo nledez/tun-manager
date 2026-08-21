@@ -97,7 +97,7 @@ func frameRow(name, group string, health wg.Health, rx, tx int64, handshake time
 // frameModel is a fully populated interface at a fixed instant.
 func frameModel(t *testing.T, width, height int) Model {
 	t.Helper()
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = width, height
 	m.now = func() time.Time { return frameTaken.Add(48 * time.Second) }
 
@@ -179,7 +179,7 @@ func TestGoldenNarrowTerminal(t *testing.T) {
 }
 
 func TestGoldenEmptyTable(t *testing.T) {
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 	m.now = func() time.Time { return frameTaken }
 
@@ -375,12 +375,12 @@ func TestNothingFromAFileCanDriveTheTerminal(t *testing.T) {
 	// reads that a process running as the user can rewrite; the endpoint comes
 	// from a .conf. Both are printed to a terminal, which runs what it is
 	// handed.
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 	m.now = func() time.Time { return frameTaken }
 
 	row := frameRow("alpha", profile.GroupNeeded, wg.Down, 0, 0, 0)
-	row.Tunnel.Endpoint = "moc.elpmaxe‮:51820"
+	row.Tunnel.Endpoint = "moc.elpmaxe\u202e:51820"
 	next, _ := m.Update(viewMsg{view: app.View{
 		Context: netctx.Context{Name: "office\x1b[2J\x1b[Hgone"},
 		Taken:   frameTaken,
@@ -389,7 +389,7 @@ func TestNothingFromAFileCanDriveTheTerminal(t *testing.T) {
 	m = next.(Model)
 
 	screen := m.View()
-	for _, bad := range []string{"\x1b[2J", "‮"} {
+	for _, bad := range []string{"\x1b[2J", "\u202e"} {
 		if strings.Contains(screen, bad) {
 			t.Errorf("the screen carries %q", bad)
 		}
@@ -403,7 +403,7 @@ func TestNothingFromAFileCanDriveTheTerminal(t *testing.T) {
 func TestALogLineCannotRepaintTheScreen(t *testing.T) {
 	// A log line carries the output of wg-quick, which runs as root and whose
 	// output nobody here wrote.
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 	m.now = func() time.Time { return frameTaken }
 	m.showLogs = true

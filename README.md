@@ -63,7 +63,8 @@ prompt for one. Two consequences are handled explicitly:
 
 - `sudo` rewrites `HOME` to `/var/root`, so the configuration file is resolved
   through `SUDO_USER` instead;
-- root has no GUI session, so notifications are posted back as the pre-sudo user.
+- root has no GUI session, so nothing here posts a notification: `Tun Manager.app`
+  does that, from a session that is already the right one.
 
 Running as root is the reason the configuration is in two files rather than one:
 what root executes, binds and removes is read from `/private/wireguard/config`,
@@ -463,8 +464,8 @@ have got to first.
 
 A name is letters, digits, `-` and `_`, starting with a letter or a digit.
 Anything else is refused, rather than escaped: the name becomes a file name, the
-argument `wg-quick` is run with, the `<name>.name` that matches a configuration
-to a live interface, and the text of a notification. The same rule is applied
+argument `wg-quick` is run with, and the `<name>.name` that matches a
+configuration to a live interface. The same rule is applied
 when the directory is read, so a `.conf` dropped in by hand is skipped with a
 line in the log pane naming it — one odd file should not take away every other
 tunnel you have.
@@ -587,8 +588,8 @@ because it looks like a backup.
 ## Configuration
 
 `~/.config/tun-manager/config.yaml` says how the program should behave: how
-often to refresh, whether to notify, which tunnel belongs to which group on
-which network. It says nothing about what runs as root.
+often to refresh, which tunnel belongs to which group on which network. It says
+nothing about what runs as root.
 
 **Where the `.conf` files live is not a setting.** They are read from
 `/private/wireguard/config`, always. There is no key for it, and the flag that
@@ -678,24 +679,23 @@ and most of what this shows is somewhere traffic goes. It is for display only:
 the name sent back to the publisher to watch or probe a tunnel is always the
 name it knows.
 
-## Notification without `Tun Manager.app`
+## Notifications
 
-Notifications go through `/usr/bin/osascript`, and through nothing else. There
-is no command to try one with: `sudo tun-manager notify` existed for that and is
-gone, along with everything it probed. `Tun Manager.app` has **Test
-Notification** in its About panel, which posts one and says so when the system
-has been told not to show any.
+`Tun Manager.app` raises them, and nothing else does. A tunnel going up or down
+becomes a banner while the application is running; **About → Test Notification**
+posts one so you can see whether they arrive at all, and says so when macOS has
+been told not to show any.
 
-The path is absolute and is never looked up in `PATH`. `sudo` on macOS does not
-reset `PATH` — there is no `secure_path` in the sudoers it ships — so anything
-this program looked up by name would be a name chosen by whoever typed `sudo`,
-started by a process running as root. That is also why `terminal-notifier` is no
-longer used: it was preferred when installed, which put the choice of what root
-reaches for in the hands of a `PATH` entry, and all it bought was a thumbnail.
+`tun-manager` itself posts none, and that is deliberate. It runs as root and root
+has no GUI session, so the only way for it to reach yours was to start a process
+under your identity — `osascript`, demoted through `SUDO_USER`, with a script
+composed for an interpreter. That is a lot of machinery, and a lot of surface,
+for a banner that the application can raise from a session it already belongs to.
+It also meant two notifications for the same event whenever both were running,
+with neither aware of the other.
 
-The icon on the left of a notification is not ours to set in any case: since
-macOS 11 it is the icon of the `.app` bundle that sent it, so it shows whichever
-tool did the sending.
+The `notify:` key is gone with it. A configuration still carrying it is refused
+by name, saying where notifications went, rather than quietly not applying.
 
 ## License
 

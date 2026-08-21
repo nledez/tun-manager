@@ -3,8 +3,6 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/format"
 	"ledez.net/tun-manager/internal/netctx"
-	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
 	"ledez.net/tun-manager/internal/rate"
@@ -31,7 +28,7 @@ func row(name, group string, health wg.Health) app.Row {
 }
 
 func loadedModel(rows ...app.Row) Model {
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 	next, _ := m.Update(viewMsg{view: app.View{
 		Context: netctx.Context{Name: "office", Interface: "en0", Address: "198.51.100.42"},
@@ -786,7 +783,7 @@ func TestHeaderReportsProbing(t *testing.T) {
 }
 
 func TestHeaderReportsTheFirstLoad(t *testing.T) {
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 
 	if !strings.Contains(m.View(), "loading") {
@@ -795,98 +792,20 @@ func TestHeaderReportsTheFirstLoad(t *testing.T) {
 }
 
 func TestAModelWithoutAnApplicationUsesTheDefaultInterval(t *testing.T) {
-	m := New(nil, nil)
+	m := New(nil)
 
 	if got := m.refreshInterval(); got != profile.DefaultRefresh {
 		t.Errorf("refreshInterval = %v, want %v", got, profile.DefaultRefresh)
 	}
 }
 
-func TestNarrowTerminalsStillRenderARule(t *testing.T) {
-	m := loadedModel(threeRows...)
-	m.width = 5
-
-	if m.View() == "" {
-		t.Error("View is empty on a narrow terminal")
-	}
-}
-
-// notifierTo builds a notifier whose command records its arguments, so a test
-// can see what the update loop would have posted.
-func notifierTo(t *testing.T) (*notify.Notifier, func() []string) {
-	t.Helper()
-	dir := t.TempDir()
-	log := filepath.Join(dir, "calls")
-	binary := filepath.Join(dir, "osascript")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + log + "\n"
-	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
-		t.Fatalf("write %s: %v", binary, err)
-	}
-	read := func() []string {
-		data, err := os.ReadFile(log)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			t.Fatalf("read %s: %v", log, err)
-		}
-		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	}
-	return &notify.Notifier{Enabled: true, Binary: binary}, read
-}
-
 func viewOf(rows ...app.Row) app.View {
 	return app.View{Rows: rows, Taken: time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)}
 }
 
-func TestAStateChangeIsNotified(t *testing.T) {
-	notifier, recorded := notifierTo(t)
-	m := New(nil, notifier)
-	m.width, m.height = 120, 30
-
-	// First refresh: nothing to compare against, so nothing is posted.
-	next, cmd := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Up))})
-	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("the first refresh produced a command, want silence with no previous state")
-	}
-
-	// Second refresh: alpha went down.
-	_, cmd = m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
-	if cmd == nil {
-		t.Fatal("no command for a tunnel going down, want a notification")
-	}
-	cmd()
-
-	got := recorded()
-	if len(got) != 2 {
-		t.Fatalf("recorded %v, want one call of two arguments", got)
-	}
-	if !strings.Contains(got[1], "alpha down") {
-		t.Errorf("script = %q, want it to describe alpha going down", got[1])
-	}
-}
-
-func TestAnUnchangedStateIsNotNotified(t *testing.T) {
-	notifier, recorded := notifierTo(t)
-	m := New(nil, notifier)
-
-	rows := viewOf(row("alpha", profile.GroupNeeded, wg.Up))
-	next, _ := m.Update(viewMsg{view: rows})
-	m = next.(Model)
-	_, cmd := m.Update(viewMsg{view: rows})
-
-	if cmd != nil {
-		t.Error("a command was produced for an unchanged state")
-	}
-	if got := recorded(); len(got) != 0 {
-		t.Errorf("recorded %v, want nothing", got)
-	}
-}
-
 func TestNKeyStartsOneStepPerTunnelOfTheNeededGroup(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	m.width, m.height = 120, 30
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Down),
@@ -985,9 +904,9 @@ func TestAFailedOperationIsRenderedInTheLogPane(t *testing.T) {
 }
 
 func TestCommandsOfAModelWithoutAnApplicationAreHarmless(t *testing.T) {
-	// New(nil, nil) is how the pure Update tests build a model. The commands it
+	// New(nil) is how the pure Update tests build a model. The commands it
 	// returns must not dereference the application that is not there.
-	m := New(nil, nil)
+	m := New(nil)
 
 	if msg, ok := m.refresh()().(viewMsg); !ok || msg.err != nil {
 		t.Errorf("refresh returned %#v, want an empty viewMsg", msg)
@@ -1081,9 +1000,9 @@ func TestStartingWorkStartsTheHeartbeat(t *testing.T) {
 }
 
 func TestAModelWithoutAnApplicationPlansNothing(t *testing.T) {
-	// New(nil, nil) is how the pure Update tests build a model; asking it for a
+	// New(nil) is how the pure Update tests build a model; asking it for a
 	// group must yield no steps rather than dereference the application.
-	m := New(nil, nil)
+	m := New(nil)
 
 	if got := m.groupMembers(profile.GroupNeeded); got != nil {
 		t.Errorf("groupMembers = %v, want none", got)
@@ -1183,7 +1102,7 @@ func TestAToggleAnnouncesWhatEachTunnelWillDo(t *testing.T) {
 	// The batch is planned from the table, so what a row will do is known
 	// before the work starts rather than after it reports.
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Up),
 		row("bravo", profile.GroupNeeded, wg.Down),
@@ -1206,7 +1125,7 @@ func TestAToggleAnnouncesWhatEachTunnelWillDo(t *testing.T) {
 
 func TestAGroupBatchAnnouncesTheSameActionThroughout(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Down),
 		row("bravo", profile.GroupNeeded, wg.Down),
@@ -1345,7 +1264,7 @@ func TestAnotherTunnelCanBeActedOnWhileOneRuns(t *testing.T) {
 	// Tunnels no longer wait for each other, so neither should the person
 	// driving them: enter on a second row while a first one is still starting.
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Down),
 		row("bravo", profile.GroupNeeded, wg.Down),
@@ -1369,7 +1288,7 @@ func TestATunnelAlreadyRunningIsNotStartedTwice(t *testing.T) {
 	// Two wg-quick runs on the same tunnel is the one overlap that is never
 	// wanted.
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
 	m = next.(Model)
 	next, _ = m.Update(started("alpha", app.ActionUp))
@@ -1385,7 +1304,7 @@ func TestATunnelAlreadyRunningIsNotStartedTwice(t *testing.T) {
 
 func TestABatchSkipsTheTunnelsAlreadyRunning(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Down),
 		row("bravo", profile.GroupNeeded, wg.Down),
@@ -1507,7 +1426,7 @@ func TestEachTunnelKeepsItsOwnHistory(t *testing.T) {
 	// Moving the cursor changes which graph is drawn, not what has been
 	// recorded: coming back to a tunnel finds its history where it was.
 	a := testApp(t, &fakeRunner{}, alphaKey)
-	m := New(a, nil)
+	m := New(a)
 	m.width, m.height = 120, 40
 	next, _ := m.Update(viewMsg{view: viewOf(
 		row("alpha", profile.GroupNeeded, wg.Up),
@@ -1600,7 +1519,7 @@ func TestTheGraphFollowsTheCursor(t *testing.T) {
 }
 
 func TestSamplingATunnelWithoutAnApplicationIsHarmless(t *testing.T) {
-	m := New(nil, nil)
+	m := New(nil)
 	m.showGraph = true
 
 	if msg, ok := m.sample()().(sampleMsg); !ok || msg.tunnel != "" {
@@ -1610,7 +1529,7 @@ func TestSamplingATunnelWithoutAnApplicationIsHarmless(t *testing.T) {
 
 func TestSamplingReadsTheCountersOfTheTunnelUnderTheCursor(t *testing.T) {
 	a := testApp(t, &fakeRunner{}, alphaKey)
-	m := New(a, nil)
+	m := New(a)
 	live := row("alpha", profile.GroupNeeded, wg.Up)
 	live.Tunnel.PeerPublicKey = alphaKey
 	next, _ := m.Update(viewMsg{view: viewOf(live)})
@@ -1636,7 +1555,7 @@ func TestSamplingATunnelThatIsDownReportsItWithoutAReading(t *testing.T) {
 	// The pane stays on the tunnel rather than blanking, but a tunnel with no
 	// counters must not be recorded as a reading of zero.
 	a := testApp(t, &fakeRunner{})
-	m := New(a, nil)
+	m := New(a)
 	next, _ := m.Update(viewMsg{view: viewOf(row("alpha", profile.GroupNeeded, wg.Down))})
 	m = next.(Model)
 	m.showGraph = true
@@ -1684,7 +1603,7 @@ func TestATickArrivingAfterTheGraphClosedIsDropped(t *testing.T) {
 }
 
 func TestTheGraphOfAnEmptyTableSaysThereIsNothingToDraw(t *testing.T) {
-	m := New(nil, nil)
+	m := New(nil)
 	m.width, m.height = 120, 30
 	m.showGraph = true
 
@@ -1692,3 +1611,15 @@ func TestTheGraphOfAnEmptyTableSaysThereIsNothingToDraw(t *testing.T) {
 		t.Errorf("the graph pane says nothing with no rows:\n%s", m.View())
 	}
 }
+
+func TestNarrowTerminalsStillRenderARule(t *testing.T) {
+	m := loadedModel(threeRows...)
+	m.width = 5
+
+	if m.View() == "" {
+		t.Error("View is empty on a narrow terminal")
+	}
+}
+
+// notifierTo builds a notifier whose command records its arguments, so a test
+// can see what the update loop would have posted.

@@ -21,7 +21,6 @@ import (
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/cli"
 	"ledez.net/tun-manager/internal/feed"
-	"ledez.net/tun-manager/internal/notify"
 	"ledez.net/tun-manager/internal/privdrop"
 	"ledez.net/tun-manager/internal/probe"
 	"ledez.net/tun-manager/internal/profile"
@@ -174,10 +173,8 @@ type env struct {
 	privilegedPath string
 	// build opens the WireGuard control socket and assembles the application.
 	build func() (*app.App, error)
-	// notifier is optional; without one the TUI posts no notification.
-	notifier *notify.Notifier
 	// interactive runs the TUI. It is a field so tests never start one.
-	interactive func(context.Context, *app.App, *notify.Notifier, *feed.Server, []string) error
+	interactive func(context.Context, *app.App, *feed.Server, []string) error
 
 	// flags are the overrides parsed off the command line, before the command.
 	flags overrides
@@ -538,8 +535,8 @@ func (e *env) assemble(cfg *profile.Config, priv *profile.Privileged, reader wg.
 	}
 }
 
-func runTUI(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, problems []string) error {
-	return tui.Run(ctx, a, n, f, problems)
+func runTUI(ctx context.Context, a *app.App, f *feed.Server, problems []string) error {
+	return tui.Run(ctx, a, f, problems)
 }
 
 // runInitPrivileged lays out the root-only half of the configuration.
@@ -691,14 +688,11 @@ func (e *env) runTUI() error {
 		return err
 	}
 
-	notifier := e.notifier
+	// The feed's socket is handed to whoever ran sudo, so the TUI needs to know
+	// who that is even though nothing else here does any more.
 	var owner privdrop.User
 	if _, u, cfgErr := e.config(); cfgErr == nil {
 		owner = u
-		if notifier == nil {
-			n := notify.New(u, a.Config.Notify)
-			notifier = &n
-		}
 	}
 
 	ctx, stop := signalled()
@@ -714,7 +708,7 @@ func (e *env) runTUI() error {
 			<-served
 		}()
 	}
-	return e.interactive(ctx, a, notifier, f, problems)
+	return e.interactive(ctx, a, f, problems)
 }
 
 // startFeed opens the status socket, or returns nil and the reason it could not.

@@ -33,15 +33,6 @@
 # How often the TUI refreshes on its own.
 refresh_interval: 5m
 
-# macOS notifications when a tunnel goes up or down, posted through osascript as
-# the pre-sudo user because root has no GUI session to talk to.
-#
-# Off here, because the menu bar application raises its own — from a signed
-# bundle, so they carry the application's icon rather than the terminal's, and
-# without demoting anything. Leave this on if you do not run it, or you will get
-# none from anywhere.
-notify: false
-
 # Recognisable networks. The first rule whose CIDR matches an address on one of
 # its interfaces wins; when none matches, the context is "default".
 contexts:

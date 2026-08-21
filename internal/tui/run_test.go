@@ -128,7 +128,7 @@ func waitFor(t *testing.T, tm *teatest.TestModel, substrings ...string) {
 
 func TestProgramRendersTheTunnelTable(t *testing.T) {
 	a := testApp(t, &fakeRunner{}, alphaKey)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 
 	waitFor(t, tm, "alpha", "bravo")
 
@@ -138,7 +138,7 @@ func TestProgramRendersTheTunnelTable(t *testing.T) {
 
 func TestProgramShowsTheLiveStateOfEachTunnel(t *testing.T) {
 	a := testApp(t, &fakeRunner{}, alphaKey)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 
 	waitFor(t, tm, "● up", "○ down")
 
@@ -149,7 +149,7 @@ func TestProgramShowsTheLiveStateOfEachTunnel(t *testing.T) {
 func TestPressingSStopsEverythingWhenATunnelIsUp(t *testing.T) {
 	runner := &fakeRunner{}
 	a := testApp(t, runner, alphaKey)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	// The log pane is where operation outcomes are shown; open it first.
@@ -168,7 +168,7 @@ func TestPressingSStopsEverythingWhenATunnelIsUp(t *testing.T) {
 func TestPressingSStartsTheNeededGroupWhenEverythingIsDown(t *testing.T) {
 	runner := &fakeRunner{}
 	a := testApp(t, runner)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
@@ -185,7 +185,7 @@ func TestPressingSStartsTheNeededGroupWhenEverythingIsDown(t *testing.T) {
 
 func TestPressingPFillsThePingColumn(t *testing.T) {
 	a := testApp(t, &fakeRunner{}, alphaKey)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
@@ -199,7 +199,7 @@ func TestPressingPFillsThePingColumn(t *testing.T) {
 func TestPressingEnterTogglesTheRowUnderTheCursor(t *testing.T) {
 	runner := &fakeRunner{}
 	a := testApp(t, runner, alphaKey)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
@@ -220,7 +220,7 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, a, nil, nil, nil, WithoutTerminal())
+		done <- Run(ctx, a, nil, nil, WithoutTerminal())
 	}()
 
 	cancel()
@@ -234,7 +234,7 @@ func TestRunReturnsWhenTheContextIsCancelled(t *testing.T) {
 func TestAFeedIsWiredIntoTheModel(t *testing.T) {
 	f := &feed.Server{Path: filepath.Join(t.TempDir(), "f.sock")}
 
-	m := newModel(nil, nil, f, nil)
+	m := newModel(nil, f, nil)
 
 	if m.feed == nil {
 		t.Error("feed = nil, want the server the composition root passed")
@@ -247,7 +247,7 @@ func TestAFeedIsWiredIntoTheModel(t *testing.T) {
 func TestAnInterfaceBuiltWithoutAFeedHoldsNoFeed(t *testing.T) {
 	// A nil *feed.Server assigned to the interface would leave a non-nil
 	// interface holding a nil pointer, and the first publish would panic.
-	m := newModel(nil, nil, nil, nil)
+	m := newModel(nil, nil, nil)
 
 	if m.feed != nil {
 		t.Errorf("feed = %#v, want nothing", m.feed)
@@ -266,7 +266,7 @@ func TestTheTableRefreshesOnItsOwn(t *testing.T) {
 	a.Config.RefreshInterval = 20 * time.Millisecond
 	reader := a.Reader.(*fakeReader)
 
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -288,7 +288,7 @@ func TestATunnelWhoseConfigVanishedFailsWhenItRuns(t *testing.T) {
 	// that is no longer where the table says it is.
 	runner := failingRunner{err: errors.New("exit status 1"), output: "wg-quick: `/gone.conf' does not exist"}
 	a := testApp(t, runner)
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
@@ -317,7 +317,7 @@ func TestRunReportsAFailureThatIsNotACancellation(t *testing.T) {
 	a := testApp(t, &fakeRunner{})
 	a.Reader = nil
 
-	err := Run(context.Background(), a, nil, nil, nil, WithoutTerminal())
+	err := Run(context.Background(), a, nil, nil, WithoutTerminal())
 
 	if err == nil {
 		t.Fatal("Run returned nil after the program crashed, want the failure reported")
@@ -353,7 +353,7 @@ func TestABatchReportsEachTunnelWhileTheNextIsStillRunning(t *testing.T) {
 	// many seconds with no way to tell it apart from a crash.
 	runner := newGatedRunner()
 	a := testApp(t, runner, alphaKey, bravoKey) // both up, so `s` takes both down
-	tm := teatest.NewTestModel(t, New(a, nil), teatest.WithInitialTermSize(120, 30))
+	tm := teatest.NewTestModel(t, New(a), teatest.WithInitialTermSize(120, 30))
 	waitFor(t, tm, "alpha")
 
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
@@ -382,7 +382,7 @@ func TestAProblemFromBeforeTheScreenExistedIsShownInTheLog(t *testing.T) {
 	// "status feed unavailable: ..." was printed to the terminal a moment
 	// before the alternate screen covered it, so nobody ever read it. It
 	// belongs in the pane, in red, with the pane open.
-	m := newModel(&app.App{}, nil, nil, []string{"status feed unavailable: it is 0777"})
+	m := newModel(&app.App{}, nil, []string{"status feed unavailable: it is 0777"})
 
 	if !m.showLogs {
 		t.Error("the log pane is closed, so the problem is one keystroke away from being invisible")
@@ -401,7 +401,7 @@ func TestAProblemFromBeforeTheScreenExistedIsShownInTheLog(t *testing.T) {
 func TestWithNoProblemTheLogPaneStaysShut(t *testing.T) {
 	// The pane is a third of the screen. Opening it when there is nothing to
 	// read would cost the table its rows on every run.
-	m := newModel(&app.App{}, nil, nil, nil)
+	m := newModel(&app.App{}, nil, nil)
 
 	if m.showLogs {
 		t.Error("the log pane opened with nothing in it")

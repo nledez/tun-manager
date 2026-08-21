@@ -8,7 +8,6 @@ import (
 
 	"ledez.net/tun-manager/internal/app"
 	"ledez.net/tun-manager/internal/feed"
-	"ledez.net/tun-manager/internal/notify"
 )
 
 // Option tweaks how the program is started.
@@ -28,8 +27,8 @@ func WithoutTerminal() Option {
 // It is separate from Run so the wiring can be asserted directly. Reaching it
 // through a running program means racing the event loop, which is how a test
 // ends up proving only that nothing panicked.
-func newModel(a *app.App, n *notify.Notifier, f *feed.Server, problems []string) Model {
-	m := New(a, n)
+func newModel(a *app.App, f *feed.Server, problems []string) Model {
+	m := New(a)
 	// Whatever went wrong before the screen existed. Printed on the way in, it
 	// would be swallowed by the alternate screen a millisecond later, which is
 	// how "the status feed is unavailable" became something nobody ever read.
@@ -54,13 +53,13 @@ func newModel(a *app.App, n *notify.Notifier, f *feed.Server, problems []string)
 // on. They open the log pane and are shown in red, because the alternative -
 // writing them to the terminal a moment before the alternate screen covers it -
 // is the same as not saying them at all.
-func Run(ctx context.Context, a *app.App, n *notify.Notifier, f *feed.Server, problems []string, opts ...Option) error {
+func Run(ctx context.Context, a *app.App, f *feed.Server, problems []string, opts ...Option) error {
 	programOpts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	for _, o := range opts {
 		o(&programOpts)
 	}
 
-	m := newModel(a, n, f, problems)
+	m := newModel(a, f, problems)
 
 	_, err := tea.NewProgram(m, programOpts...).Run()
 	if ctx.Err() != nil {

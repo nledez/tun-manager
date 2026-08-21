@@ -170,9 +170,9 @@ func TestDisplayRemovesWhatWouldReorderTheText(t *testing.T) {
 	// U+202E draws "moc.elpmaxe" as "example.com". Most of what this program
 	// shows is somewhere traffic goes, so a value that can be drawn as another
 	// address is the one worth caring about.
-	got := Display("evil.example‮/gro.tsurt")
+	got := Display("evil.example\u202e/gro.tsurt")
 
-	if strings.ContainsRune(got, '‮') {
+	if strings.ContainsRune(got, '\u202e') {
 		t.Errorf("Display kept the override: %q", got)
 	}
 	if !strings.HasPrefix(got, "evil.example") {

@@ -61,7 +61,6 @@ type Config struct {
 	// only be tested as root is a package nobody tests.
 	ConfigDir       string              `yaml:"-"`
 	RefreshInterval time.Duration       `yaml:"refresh_interval"`
-	Notify          bool                `yaml:"notify"`
 	Contexts        []netctx.Rule       `yaml:"contexts"`
 	Groups          map[string][]string `yaml:"groups"`
 	Overrides       []Override          `yaml:"overrides"`
@@ -79,7 +78,6 @@ func Default() *Config {
 	return &Config{
 		ConfigDir:       ConfigDir,
 		RefreshInterval: DefaultRefresh,
-		Notify:          true,
 		Groups:          map[string][]string{},
 	}
 }
@@ -157,6 +155,11 @@ var movedKeys = map[string]string{
 	"run_dir":     movedToRoot("run_dir", "it names the directory tun-manager believes the live state is in"),
 	"feed":        movedToRoot("feed", "it decides whether root binds a socket at all"),
 	"feed_socket": movedToRoot("feed_socket", "it names a path root unlinks before binding it"),
+	"notify": "notify is no longer a setting. tun-manager posts no notifications " +
+		"itself: doing so meant a program running as root starting a GUI process " +
+		"under somebody else's identity, for a banner. Tun Manager.app posts them, " +
+		"from a session that is already the right one - it has a Test Notification " +
+		"button in its About panel. Remove the key.",
 }
 
 // movedToRoot writes the sentence somebody upgrading will read. One shape for
