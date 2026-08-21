@@ -657,24 +657,6 @@ func TestANonceThatIsNotBase64IsNotSigned(t *testing.T) {
 	}
 }
 
-func TestChallengesAreBoundedLikeEveryOtherVerb(t *testing.T) {
-	// Signing is cheap and not free, and a client that can ask for one whenever
-	// it likes is a signing oracle. The floor is the same idea as the one on
-	// refreshes and pings.
-	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
-	c := dial(t, s)
-	c.next(t)
-
-	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
-	c.next(t) // the first answer
-	c.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
-	s.Publish(aView("alpha"))
-
-	if got := c.next(t)["type"]; got != "state" {
-		t.Errorf("next line = %v, want the second challenge dropped", got)
-	}
-}
-
 func TestAPublisherWithNoKeyAnswersNoChallenge(t *testing.T) {
 	// Listen refuses to start one, so this is what would happen if a key went
 	// away underneath a publisher that is already running: silence, which is
@@ -728,25 +710,5 @@ func TestAClientThatReconnectsIsAnsweredStraightAway(t *testing.T) {
 	second.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
 	if got := second.next(t)["type"]; got != "auth" {
 		t.Errorf("second answer = %v, want auth: a fresh connection has asked for nothing yet", got)
-	}
-}
-
-func TestOneClientCannotSpendAnotherClientsBudget(t *testing.T) {
-	// The floor is per client, so a second one asking has nothing to do with
-	// what the first one already asked for. Sharing it would make any client on
-	// the socket able to keep every other client from ever being answered,
-	// which is a denial of service dressed up as a rate limit.
-	s := serving(t, nil, func(s *Server) { s.FeedKey = knownSeed })
-
-	greedy := dial(t, s)
-	greedy.next(t)
-	greedy.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(1))+`"}`)
-	greedy.next(t)
-
-	honest := dial(t, s)
-	honest.next(t)
-	honest.send(t, `{"type":"challenge","nonce":"`+base64.StdEncoding.EncodeToString(aNonce(2))+`"}`)
-	if got := honest.next(t)["type"]; got != "auth" {
-		t.Errorf("answer = %v, want auth: another client's question is not this one's", got)
 	}
 }

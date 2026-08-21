@@ -12,8 +12,33 @@ import Foundation
 /// then a signature over whatever nonce it is challenged with — and it signs
 /// with CryptoKit, so a client that believes it has been through the real thing.
 final class LocalPublisher: @unchecked Sendable {
+    /// What this publisher does when challenged. Each case is somebody's idea
+    /// of how to be taken for tun-manager.
+    enum Behaviour: Sendable, Equatable {
+        /// Signs what it was asked, for the socket it is listening on.
+        case honest
+        /// Answers every challenge with one pair it captured earlier, which is
+        /// what a recording of a genuine session gives somebody.
+        case replaying(nonce: String, signature: String)
+        /// Signs the challenge for a different socket path: what a relay gets
+        /// back when it forwards the question to the real publisher.
+        case relaying(path: String)
+        /// Says hello and never answers anything.
+        case silent
+    }
+
     let path: String
     let key: String
+    /// Changed between connections by a test that wants the same socket to
+    /// start misbehaving, which is what taking one over looks like from here.
+    var behaviour: Behaviour {
+        get { state.lock(); defer { state.unlock() }; return manner }
+        set { state.lock(); manner = newValue; state.unlock() }
+    }
+    /// Sent right after the hello, before any answer, so a test can ask what
+    /// happened to it. Attackers send their view early for the same reason the
+    /// real one does: it is the first thing a menu would draw.
+    let sayingFirst: String?
 
     private let listener: Int32
     private let identity = Curve25519.Signing.PrivateKey()
@@ -21,7 +46,19 @@ final class LocalPublisher: @unchecked Sendable {
     private var connections = 0
     /// Set by stop(), which is the only reason to give up on the listener.
     private var stopped = false
+    private var manner: Behaviour = .honest
+    /// The last answer this publisher gave, which is what somebody recording
+    /// the socket would have.
+    private var answered: (nonce: String, signature: String)?
     private var live: [Int32] = []
+
+    /// The last (nonce, signature) pair sent, for a test that wants to replay
+    /// one.
+    var lastAuth: (nonce: String, signature: String)? {
+        state.lock()
+        defer { state.unlock() }
+        return answered
+    }
 
     /// How many clients have been accepted, which is what a reconnect adds one
     /// to.
@@ -31,7 +68,12 @@ final class LocalPublisher: @unchecked Sendable {
         return connections
     }
 
-    init(version: String = "v0.6.0") throws {
+    init(
+        version: String = "v0.6.0", behaviour: Behaviour = .honest, schema: Int = 2,
+        sayingFirst: String? = nil
+    ) throws {
+        self.manner = behaviour
+        self.sayingFirst = sayingFirst
         // Once, for the process. SO_NOSIGPIPE covers the descriptors this
         // publisher owns, but a suite running its tests in parallel has several
         // of these opening and closing at once, and a SIGPIPE anywhere in it
@@ -66,7 +108,7 @@ final class LocalPublisher: @unchecked Sendable {
         // and blocking work handed to the pool while the rest of the suite is
         // running in parallel is how a queue runs out of threads and this
         // publisher stops answering the door.
-        Thread.detachNewThread { [self] in serve(version: version) }
+        Thread.detachNewThread { [self] in serve(version: version, schema: schema) }
     }
 
     /// Shuts every descriptor down without closing any of them.
@@ -88,7 +130,7 @@ final class LocalPublisher: @unchecked Sendable {
         unlink(path)
     }
 
-    private func serve(version: String) {
+    private func serve(version: String, schema: Int) {
         while true {
             let accepted = Darwin.accept(listener, nil, nil)
             guard accepted >= 0 else {
@@ -118,11 +160,13 @@ final class LocalPublisher: @unchecked Sendable {
             connections += 1
             live.append(accepted)
             state.unlock()
-            Thread.detachNewThread { [self] in talk(on: accepted, version: version) }
+            Thread.detachNewThread { [self] in
+                talk(on: accepted, version: version, schema: schema)
+            }
         }
     }
 
-    private func talk(on descriptor: Int32, version: String) {
+    private func talk(on descriptor: Int32, version: String, schema: Int) {
         // Closed here and nowhere else, by the one thread that reads it - and
         // forgotten first. A number left on that list after it has been closed
         // is a number the process hands to the next socket() call, and stop()
@@ -134,8 +178,15 @@ final class LocalPublisher: @unchecked Sendable {
             state.unlock()
             Darwin.close(descriptor)
         }
-        let hello = #"{"type":"hello","schema":2,"version":"\#(version)","pubkey":"\#(key)"}"# + "\n"
+        let hello =
+            #"{"type":"hello","schema":\#(schema),"version":"\#(version)","pubkey":"\#(key)"}"#
+            + "\n"
         write(descriptor, hello)
+        if let sayingFirst {
+            // Before it has said who it is, which is when everything an
+            // impostor sends arrives.
+            write(descriptor, sayingFirst + "\n")
+        }
 
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
@@ -160,15 +211,27 @@ final class LocalPublisher: @unchecked Sendable {
         else {
             return
         }
-        let message = PublisherProof.signedMessage(
-            schema: 2, version: version, path: path, nonce: nonce)
-        // try!: signing a message with a key made three lines up. A failure here
-        // would be CryptoKit having stopped working, not this program.
-        let signature = try! identity.signature(for: message)
-        write(
-            descriptor,
-            #"{"type":"auth","nonce":"\#(encoded)","signature":"\#(signature.base64EncodedString())"}"#
-                + "\n")
+        let manner = behaviour
+        switch manner {
+        case .silent:
+            return
+        case .replaying(let nonce, let signature):
+            write(descriptor, #"{"type":"auth","nonce":"\#(nonce)","signature":"\#(signature)"}"# + "\n")
+        case .honest, .relaying:
+            let signedPath = if case .relaying(let elsewhere) = manner { elsewhere } else { path }
+            let message = PublisherProof.signedMessage(
+                schema: 2, version: version, path: signedPath, nonce: nonce)
+            // try!: signing a message with a key made three lines up. A failure
+            // here would be CryptoKit having stopped working, not this program.
+            let signature = try! identity.signature(for: message)
+            let encodedSignature = signature.base64EncodedString()
+            state.lock()
+            answered = (nonce: encoded, signature: encodedSignature)
+            state.unlock()
+            write(
+                descriptor,
+                #"{"type":"auth","nonce":"\#(encoded)","signature":"\#(encodedSignature)"}"# + "\n")
+        }
     }
 
     private func write(_ descriptor: Int32, _ text: String) {
