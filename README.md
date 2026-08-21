@@ -65,6 +65,13 @@ prompt for one. Two consequences are handled explicitly:
   through `SUDO_USER` instead;
 - root has no GUI session, so notifications are posted back as the pre-sudo user.
 
+Running as root is the reason the configuration is in two files rather than one:
+what root executes, binds and removes is read from `/private/wireguard/config`,
+which only root can write, and never from the file under your home directory.
+[SECURITY.md](SECURITY.md) says who the attacker is taken to be, where that line
+is drawn, what is deliberately left on the wrong side of it, and how to report a
+problem privately.
+
 ## Install
 
 Download the archive for your machine from the

@@ -197,3 +197,14 @@ A tunnel is matched to its interface through `/var/run/wireguard/<name>.name`,
 never by peer public key alone: two configs reaching the same server through
 different endpoints share a key, and matching on it reports both as up when only
 one is.
+
+## Before adding a configuration key
+
+Answer it in the change itself, not in your head: **does root use this value to
+touch the filesystem or start a process?** If yes - a path, a directory, a
+command, a socket, anything ending in an `exec`, an `open`, a `bind` or an
+`unlink` - it goes in `/private/wireguard/config/tun-manager.yaml`, which only
+root can write, and nowhere else. If no, it goes in the user's file.
+
+"It is only a name, the code joins it to a fixed directory" is the answer that
+opens the hole: `..` is a name. [SECURITY.md](SECURITY.md) has the reasoning.
