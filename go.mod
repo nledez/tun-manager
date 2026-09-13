@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260816001655-68d539dca504
 	github.com/muesli/termenv v0.16.0
 	github.com/prometheus-community/pro-bing v0.9.1
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	gopkg.in/yaml.v3 v3.0.1
 )
